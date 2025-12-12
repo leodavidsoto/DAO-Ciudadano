@@ -3,9 +3,9 @@
   command = "npm run build"
   publish = "build"
 
-# Environment variables (set these in Netlify dashboard)
+# Environment variables
 [build.environment]
-  REACT_APP_API_URL = "https://your-backend-url.onrender.com"
+  REACT_APP_BACKEND_URL = "https://dao-ciudadana-api.onrender.com"
   REACT_APP_SBT_CONTRACT_SEPOLIA = "0x813fd379F715107b2451553d97f29408d8185f0e"
 
 # SPA routing - redirect all routes to index.html
@@ -22,3 +22,4 @@
     X-XSS-Protection = "1; mode=block"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+
