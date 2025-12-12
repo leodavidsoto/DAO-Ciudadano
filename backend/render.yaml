@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: dao-ciudadana-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: MONGO_URL
+        sync: false
+      - key: DB_NAME
+        value: dao_ciudadana
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: https://regal-dieffenbachia-6e9194.netlify.app
+      - key: SBT_CONTRACT_ADDRESS
+        value: 0x813fd379F715107b2451553d97f29408d8185f0e
+      - key: DEBUG
+        value: false
