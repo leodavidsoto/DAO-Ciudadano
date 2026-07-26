@@ -36,6 +36,21 @@ class Database:
             raise RuntimeError("Database not initialized. Call connect() first.")
         return cls.db
 
+    @classmethod
+    async def ensure_indexes(cls):
+        """Create the indexes the application relies on (idempotent).
+
+        The unique index on members.wallet_address is what actually prevents
+        two memberships for the same wallet under concurrency (ROADMAP 1.11).
+        """
+        try:
+            await cls.get_db()["members"].create_index("wallet_address", unique=True)
+            await cls.get_db()["members"].create_index("token_id")
+        except Exception as e:
+            # A pre-existing duplicate in the collection blocks unique index
+            # creation; keep the app bootable and surface it in the logs.
+            logger.warning(f"Could not create members indexes: {e}")
+
 
 # Collections helpers
 def get_collection(name: str):

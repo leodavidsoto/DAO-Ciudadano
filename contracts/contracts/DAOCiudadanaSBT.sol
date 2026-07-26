@@ -112,17 +112,20 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
         }
         
         uint256 tokenId = ++_nextTokenId;
-        
-        _safeMint(to, tokenId);
-        _setTokenURI(tokenId, uri);
-        
+
+        // Effects before interaction: _safeMint calls onERC721Received on
+        // contract receivers, which could observe (or reenter through)
+        // half-updated membership state if these writes came after it.
         _memberTokens[to] = tokenId;
         _identityHashes[tokenId] = identityHash;
         _assuranceLevels[tokenId] = assuranceLevel;
         _usedIdentityHashes[identityHash] = true;
-        
+
+        _safeMint(to, tokenId);
+        _setTokenURI(tokenId, uri);
+
         emit MembershipMinted(to, tokenId, assuranceLevel, block.timestamp);
-        
+
         return tokenId;
     }
     

@@ -85,12 +85,20 @@ Objetivo: cerrar C-1, C-2 y C-6. Al terminar, un SBT existe de verdad y solo lo 
 | 1.8 | **Corregir la ABI del frontend** | Regenerarla desde `artifacts/` en el build en lugar de mantenerla a mano. | El evento `MembershipMinted` se parsea correctamente y `tokenId` no es `null` |
 | 1.9 | **Cablear `useSBTContract`** | O se usa en el flujo, o se elimina. No dejar código muerto que sugiera una capacidad inexistente. | Sin hooks huérfanos |
 | 1.10 | **Umbral de liveness** | Definir el mínimo (sugerido 0.75), rechazar por debajo, registrar el score. Sin API key configurada, **fallar** en vez de devolver 0.85. | Un score bajo bloquea el avance del onboarding |
-| 1.11 | **Índice único** en `members.wallet_address` y en el hash de identidad | migración MongoDB | Imposible crear dos membresías para la misma wallet |
+| 1.11 | **Índice único** en `members.wallet_address` (✅ hecho: `Database.ensure_indexes()`) y en el hash de identidad (pendiente, depende de D-2) | migración MongoDB | Imposible crear dos membresías para la misma wallet |
 | 1.12 | Reemplazar `token_id = count + 1` por el `tokenId` devuelto por el contrato | `membership.py:32` | El ID off-chain siempre coincide con el on-chain |
 
 ---
 
 ## Fase 2 — Tests y CI (1–2 semanas)
+
+> ✅ **Completada** (julio 2026). 2.1: suite de `contracts/test/` (29 tests, incluye la
+> regresión del orden checks-effects-interactions en `mintMembership`). 2.2: suite de
+> `backend/tests/` con `pytest` + `mongomock` (46 tests, sin red ni Mongo real). 2.3:
+> `backend_test.py` y `test_result.md` eliminados. 2.4: `.github/workflows/ci.yml` corre
+> backend, contratos, slither y build del frontend en cada PR. 2.5: `slither --fail-medium
+> --exclude-dependencies` en verde. 2.6: `requirements.txt` con versiones exactas.
+> La cobertura formal (≥90 %/≥70 %) queda por medir e imponer en CI.
 
 Objetivo: cerrar C-5 y hacer que las fases siguientes no rompan lo anterior.
 
@@ -119,7 +127,7 @@ Objetivo: cerrar C-3, A-4, A-5, A-9 y M-10.
 | 3.6 | **Tesorería real**: leer balances de un Safe multisig vía API o RPC; precio de ETH desde un oráculo o API de precios, no hardcodeado | Ningún número de tesorería es una constante en el código |
 | 3.7 | **Enrutado y montaje de la UI de gobernanza**: añadir `react-router-dom` en `App.js` con rutas `/`, `/governance`, `/treasury`, `/profile` | Los cuatro componentes huérfanos son alcanzables |
 | 3.8 | Mover el rate limiter y el antifraude a Redis | Los límites sobreviven a reinicios y funcionan con varias instancias |
-| 3.9 | Eliminar `time.sleep()` del middleware; usar `asyncio.sleep` o abandonar la ralentización progresiva | Sin bloqueo del event loop bajo carga |
+| 3.9 | ✅ **Hecho (julio 2026)** — el middleware usa `asyncio.sleep`; el event loop ya no se bloquea | Sin bloqueo del event loop bajo carga |
 
 ---
 
@@ -132,7 +140,7 @@ Objetivo: cerrar C-4 en su raíz, A-3 y A-8. Los tiempos dependen de organismos 
 | 4.1 | **Integración real de ClaveÚnica** (OIDC): solicitar acceso al sandbox de la División de Gobierno Digital, implementar el flujo `authorization_code` + PKCE, validar `id_token`, mapear `RUN` del claim | El trámite administrativo es el camino crítico: iniciarlo en la Fase 0, no aquí |
 | 4.2 | **Lectura NFC real de la cédula**: implementar PACE (no BAC) sobre ISO-DEP; capturar CAN o MRZ por OCR; verificar la firma del SOD contra la CSCA chilena | Es la tarea de mayor dificultad técnica del proyecto. Evaluar SDK comercial vs implementación propia |
 | 4.3 | Corregir el bundling de `crypto` en React Native: `resolver.extraNodeModules` en `metro.config.js` apuntando a `react-native-quick-crypto` | Prerrequisito de 4.2 |
-| 4.4 | **Alinear la app móvil con la API**: corregir los cinco contratos rotos de `apiService.ts` y registrar la pantalla `Wallet` | Sin esto la app no completa ningún flujo |
+| 4.4 | ✅ **Hecho (julio 2026)** — los cinco contratos de `apiService.ts` alineados con el backend, pantalla `Wallet` creada y registrada (consulta de membresía), URL base apuntando a entorno de desarrollo (el backend de producción sigue suspendido, M-15) | Sin esto la app no completa ningún flujo |
 | 4.5 | Liveness con proveedor especializado (iProov, Onfido, FaceTec) en lugar de un LLM de visión general | Un LLM no es un sistema de detección de vida certificado; no resiste ataques de presentación |
 
 ---

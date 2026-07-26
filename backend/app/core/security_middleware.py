@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from collections import defaultdict
 from datetime import datetime, timedelta
+import asyncio
 import time
 import hashlib
 import secrets
@@ -59,10 +60,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 }
             )
         
-        # Progressive slowdown for failed attempts
+        # Progressive slowdown for failed attempts.
+        # Must be asyncio.sleep: time.sleep here would block the event loop
+        # for every concurrent request, not just the abusive client.
         if self.failed_attempts[client_ip] > 5:
             delay = min(self.failed_attempts[client_ip] * 0.5, 30)  # Max 30 seconds
-            time.sleep(delay)
+            await asyncio.sleep(delay)
         
         # Record request
         self.requests[key].append(now)

@@ -13,7 +13,7 @@ from PIL import Image
 
 from ..models import (
     ClaveUnicaRequest, ClaveUnicaResponse,
-    NFCResponse, LivenessResponse, IdentityEvent
+    NFCRequest, NFCResponse, LivenessResponse, IdentityEvent
 )
 from ..core.security import generate_short_hash
 from ..core.database import identity_events_collection
@@ -67,18 +67,21 @@ async def authenticate_clave_unica(request: ClaveUnicaRequest):
 
 
 @router.post("/nfc", response_model=NFCResponse)
-async def authenticate_nfc():
+async def authenticate_nfc(request: Optional[NFCRequest] = None):
     """
     Authenticate using NFC chip in Chilean ID card
-    
-    Reads cryptographic data from the chip to verify document authenticity.
-    Currently uses mock authentication for development.
+
+    DEMO MODE: no cryptographic verification of the chip happens yet
+    (real PACE reading is ROADMAP task 4.2). If the client sends the chip
+    serial it captured, it is used as-is; otherwise a demo serial is generated.
     """
     try:
         await mock_delay(0.16)
-        
-        # Mock successful NFC reading
-        chip_serial = f"NFC-CL-CH-{uuid.uuid4().hex[:8].upper()}"
+
+        if request and request.chip_serial:
+            chip_serial = request.chip_serial
+        else:
+            chip_serial = f"NFC-CL-CH-{uuid.uuid4().hex[:8].upper()}"
         doc_hash = f"0x{generate_short_hash('nfc_doc_' + chip_serial)}"
         
         # Store identity event

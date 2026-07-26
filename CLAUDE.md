@@ -101,13 +101,14 @@ Detalle completo con criterios de aceptación en `docs/ROADMAP.md`.
 ```bash
 # backend
 cd backend && pip install -r requirements.txt && uvicorn main:app --reload --port 8000
+pytest                                    # suite con mongomock, no requiere MongoDB real
 
-# frontend
-cd frontend && yarn install && yarn start
+# frontend (el lockfile es package-lock.json: usar npm, no yarn)
+cd frontend && npm ci && npm start
 
 # contratos
-cd contracts && npm install && npx hardhat compile
-npx hardhat test                          # no hay tests todavía — escribirlos es la tarea 2.1
+cd contracts && npm ci && npx hardhat compile
+npx hardhat test                          # suite de la tarea 2.1
 npx hardhat run scripts/deploy.js --network sepolia
 ```
 

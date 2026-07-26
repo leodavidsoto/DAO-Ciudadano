@@ -46,7 +46,8 @@ async def lifespan(app: FastAPI):
     mongo_url = os.environ.get('MONGO_URL', settings.MONGO_URL)
     db_name = os.environ.get('DB_NAME', settings.DB_NAME)
     Database.connect(mongo_url, db_name)
-    
+    await Database.ensure_indexes()
+
     yield
     
     # Shutdown

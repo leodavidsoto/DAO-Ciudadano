@@ -13,6 +13,7 @@ import { StatusBar } from 'react-native';
 import HomeScreen from './src/screens/HomeScreen';
 import ScanScreen from './src/screens/ScanScreen';
 import SuccessScreen from './src/screens/SuccessScreen';
+import WalletScreen from './src/screens/WalletScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -66,6 +67,11 @@ function App(): React.JSX.Element {
             name="Success"
             component={SuccessScreen}
             options={{ title: 'VERIFICADO' }}
+          />
+          <Stack.Screen
+            name="Wallet"
+            component={WalletScreen}
+            options={{ title: 'MEMBRESÍA' }}
           />
         </Stack.Navigator>
       </NavigationContainer>
