@@ -2,7 +2,7 @@
 from .schemas import (
     StatusCheck, StatusCheckCreate,
     ClaveUnicaRequest, ClaveUnicaResponse,
-    NFCResponse, LivenessResponse, IdentityEvent,
+    NFCRequest, NFCResponse, LivenessResponse, IdentityEvent,
     WalletConnectResponse,
     MintSBTRequest, MintSBTResponse, Member,
     DashboardStats,

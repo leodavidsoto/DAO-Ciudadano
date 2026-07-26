@@ -1,14 +1,20 @@
 """
 Blockchain Service
 Handles Web3 operations, wallet connections, and SBT minting
+
+DEMO MODE: no transaction is sent on-chain yet. Real minting is ROADMAP
+task 1.5 and is blocked on architecture decisions D-1/D-2 (see docs/ROADMAP.md).
+Until then this service only registers members in MongoDB and returns
+tx_hash=None — it never fabricates a transaction hash.
 """
 from typing import Optional, Tuple
 import logging
-import uuid
 from datetime import datetime, timezone
 
+from pymongo.errors import DuplicateKeyError
+
 from ..core.database import members_collection
-from ..core.config import settings
+from ..core.security_middleware import verify_eth_address
 from ..models import Member
 
 logger = logging.getLogger(__name__)
@@ -16,35 +22,7 @@ logger = logging.getLogger(__name__)
 
 class BlockchainService:
     """Service for blockchain and Web3 operations"""
-    
-    # Contract configuration (testnet values)
-    CONTRACT_ADDRESS = "0x" + "0" * 40  # Replace with actual contract
-    CHAIN_ID = 11155111  # Sepolia testnet
-    
-    @staticmethod
-    async def connect_wallet(address: str) -> Tuple[bool, Optional[str], Optional[str]]:
-        """
-        Validate and register wallet connection
-        Returns: (success, validated_address, error)
-        """
-        if not address or len(address) != 42 or not address.startswith("0x"):
-            return (False, None, "Dirección de wallet inválida")
-        
-        try:
-            # Validate checksum address format
-            addr_lower = address.lower()
-            
-            # Check if already registered
-            existing = await members_collection().find_one({"wallet_address": addr_lower})
-            if existing:
-                logger.info(f"Wallet already registered: {addr_lower}")
-            
-            return (True, addr_lower, None)
-            
-        except Exception as e:
-            logger.error(f"Wallet connection error: {e}")
-            return (False, None, str(e))
-    
+
     @staticmethod
     async def mint_sbt(
         wallet_address: str,
@@ -52,46 +30,51 @@ class BlockchainService:
         doc_hash: str
     ) -> Tuple[bool, Optional[int], Optional[str], Optional[str]]:
         """
-        Mint a Soulbound Token for the citizen
+        Register a membership (off-chain demo of the future SBT mint)
         Returns: (success, token_id, tx_hash, error)
+
+        tx_hash is always None until real on-chain minting lands (task 1.5).
         """
-        if not wallet_address or not wallet_address.startswith("0x"):
-            return (False, None, None, "Wallet address inválida")
-        
+        if not verify_eth_address(wallet_address):
+            return (False, None, None, "Dirección de wallet inválida")
+
         if not doc_hash:
             return (False, None, None, "Document hash requerido")
-        
+
         try:
-            # Check if already minted
-            existing = await members_collection().find_one({
-                "wallet_address": wallet_address.lower()
-            })
-            
+            address = wallet_address.lower()
+
+            existing = await members_collection().find_one({"wallet_address": address})
             if existing:
                 return (
-                    False, None, None, 
+                    False, None, None,
                     f"Ya existe un SBT para esta wallet (Token #{existing.get('token_id')})"
                 )
-            
-            # Generate mock token (in production, this would call the smart contract)
-            # TODO: Integrate with real Web3 contract interaction
-            token_id = abs(hash(wallet_address + doc_hash)) % 1000000
-            tx_hash = f"0x{uuid.uuid4().hex}{uuid.uuid4().hex[:24]}"
-            
-            # Store member
+
+            # Sequential id over the highest existing one: survives revocations
+            # without colliding (count+1 does not). Replaced by the on-chain
+            # tokenId when task 1.5 lands.
+            last = await members_collection().find_one(sort=[("token_id", -1)])
+            token_id = (last["token_id"] + 1) if last else 1
+
             member = Member(
-                wallet_address=wallet_address.lower(),
+                wallet_address=address,
                 token_id=token_id,
                 doc_hash=doc_hash,
                 assurance_level=assurance_level
             )
-            
-            await members_collection().insert_one(member.model_dump())
-            
-            logger.info(f"SBT minted: Token #{token_id} for {wallet_address}")
-            
-            return (True, token_id, tx_hash, None)
-            
+
+            try:
+                await members_collection().insert_one(member.model_dump())
+            except DuplicateKeyError:
+                # Unique index on wallet_address closed the race between the
+                # duplicate check above and this insert.
+                return (False, None, None, "Ya existe un SBT para esta wallet")
+
+            logger.info(f"Membership registered (off-chain demo): Token #{token_id} for {address}")
+
+            return (True, token_id, None, None)
+
         except Exception as e:
             logger.error(f"SBT minting error: {e}")
             return (False, None, None, str(e))

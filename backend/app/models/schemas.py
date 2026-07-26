@@ -41,6 +41,14 @@ class ClaveUnicaResponse(BaseModel):
     error: Optional[str] = None
 
 
+class NFCRequest(BaseModel):
+    """Optional payload: real chip serial captured by the mobile app.
+
+    When absent (web demo flow), the backend generates a demo serial.
+    """
+    chip_serial: Optional[str] = Field(default=None, max_length=64)
+
+
 class NFCResponse(BaseModel):
     ok: bool
     chip_serial: Optional[str] = None

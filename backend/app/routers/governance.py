@@ -181,34 +181,26 @@ async def get_proposals(status: Optional[str] = None, limit: int = 20):
     """Get all proposals, optionally filtered by status"""
     try:
         now = datetime.now(timezone.utc)
-        
-        # Update expired proposals
-        await proposals_collection().update_many(
-            {
-                "status": "active",
-                "ends_at": {"$lt": now}
-            },
-            [
-                {
-                    "$set": {
-                        "status": {
-                            "$cond": {
-                                "if": {"$gte": ["$total_votes", "$quorum_required"]},
-                                "then": {
-                                    "$cond": {
-                                        "if": {"$gt": ["$votes_for", "$votes_against"]},
-                                        "then": "passed",
-                                        "else": "rejected"
-                                    }
-                                },
-                                "else": "expired"
-                            }
-                        }
-                    }
-                }
-            ]
-        )
-        
+
+        # Resolve proposals whose voting period ended
+        expired_cursor = proposals_collection().find({
+            "status": "active",
+            "ends_at": {"$lt": now}
+        })
+        async for proposal in expired_cursor:
+            if proposal.get("total_votes", 0) >= proposal.get("quorum_required", 10):
+                new_status = (
+                    "passed"
+                    if proposal.get("votes_for", 0) > proposal.get("votes_against", 0)
+                    else "rejected"
+                )
+            else:
+                new_status = "expired"
+            await proposals_collection().update_one(
+                {"id": proposal["id"], "status": "active"},
+                {"$set": {"status": new_status}}
+            )
+
         # Build query
         query = {}
         if status:

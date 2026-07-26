@@ -64,13 +64,12 @@ def generate_unique_id() -> str:
 
 
 def generate_mock_address() -> str:
-    """Generate mock wallet address for development"""
+    """Generate mock wallet address for development.
+
+    NOTE: scheduled for removal in ROADMAP task 1.7 together with
+    POST /api/wallet/connect (MetaMask already handles connection client-side).
+    """
     return f"0x{uuid.uuid4().hex[:8].upper()}...C1TY"
-
-
-def generate_mock_tx_hash() -> str:
-    """Generate mock transaction hash for development"""
-    return f"0xM1NT{uuid.uuid4().hex[:8].upper()}"
 
 
 # Global rate limiter instance

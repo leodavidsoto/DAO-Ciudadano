@@ -179,11 +179,17 @@ const MintStep = () => {
                         <SuccessDisplay>
                             <div className="flex flex-wrap justify-center gap-2 mt-2">
                                 <Badge className="cyber-badge success">
-                                    NFT GENERADO
+                                    REGISTRO CREADO
                                 </Badge>
-                                <Badge className="cyber-badge">
-                                    TX: {mint.tx_hash?.slice(0, 12)}...
-                                </Badge>
+                                {mint.tx_hash ? (
+                                    <Badge className="cyber-badge">
+                                        TX: {mint.tx_hash.slice(0, 12)}...
+                                    </Badge>
+                                ) : (
+                                    <Badge className="cyber-badge">
+                                        SIN TX ON-CHAIN (DEMO)
+                                    </Badge>
+                                )}
                             </div>
                         </SuccessDisplay>
                     </div>
