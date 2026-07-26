@@ -5,7 +5,7 @@ import React from 'react';
 import { Shield, QrCode } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
-import { CyberPanel, CyberLoader, SuccessDisplay } from './CyberUI';
+import { CyberPanel, CyberLoader, SuccessDisplay, DemoBadge } from './CyberUI';
 import { useOnboarding } from '@/context';
 
 const ClaveUnicaStep = () => {
@@ -17,6 +17,7 @@ const ClaveUnicaStep = () => {
             description="Estableciendo conexión segura con servidor gubernamental..."
             icon={<QrCode className="h-8 w-8" />}
         >
+            <DemoBadge label="MODO DEMO — ClaveÚnica aún no integra el OAuth gubernamental real" />
             <div className="flex flex-col items-center gap-6">
                 {!loading && !clave.subject_id && (
                     <Button onClick={authenticateClaveUnica} className="cyber-button">

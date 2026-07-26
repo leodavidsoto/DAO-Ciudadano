@@ -94,11 +94,15 @@ app.add_middleware(
 # Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error", "error": str(exc)}
-    )
+    # Log the full detail server-side (with a correlation id), but never leak
+    # internal error strings (paths, drivers, queries) to the client.
+    import uuid
+    error_id = uuid.uuid4().hex[:12]
+    logger.error(f"Unhandled exception [{error_id}]: {exc}", exc_info=True)
+    body = {"detail": "Internal server error", "error_id": error_id}
+    if settings.DEBUG:
+        body["error"] = str(exc)  # Only in local/debug mode
+    return JSONResponse(status_code=500, content=body)
 
 
 # Root endpoint

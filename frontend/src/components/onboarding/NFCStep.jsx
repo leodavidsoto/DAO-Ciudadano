@@ -6,7 +6,7 @@ import React, { useEffect, useState } from 'react';
 import { Radio, Activity, AlertTriangle, Smartphone, CheckCircle, XCircle } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
-import { CyberPanel, CyberLoader, SuccessDisplay } from './CyberUI';
+import { CyberPanel, CyberLoader, SuccessDisplay, DemoBadge } from './CyberUI';
 import { useOnboarding } from '@/context';
 import useNFC from '@/hooks/useNFC';
 
@@ -64,6 +64,7 @@ const NFCStep = () => {
             description="Validando autenticidad del chip de identificación"
             icon={<Radio className="h-8 w-8" />}
         >
+            <DemoBadge label="MODO DEMO — la lectura del chip aún no está integrada en backend" />
             <div className="flex flex-col items-center gap-6">
 
                 {/* Not supported warning */}

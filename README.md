@@ -7,6 +7,13 @@
 ![React](https://img.shields.io/badge/React-19-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110-teal)
 
+> ⚠️ **Estado actual (julio 2026): prototipo funcional con verificación simulada.**
+> Los flujos de identidad (ClaveÚnica, NFC, liveness) y el minteo del SBT están
+> en **modo demo** — el token todavía **no** se acuña on-chain (`totalSupply()` en
+> Sepolia = 0) y la API aún no exige autenticación. Antes de exponerlo a usuarios
+> reales, revisa el estado y el plan en [`docs/`](./docs):
+> [AUDIT](./docs/AUDIT.md) · [ROADMAP](./docs/ROADMAP.md) · [HANDOFF](./docs/HANDOFF.md).
+
 ## 🎯 Descripción
 
 DAO Ciudadana es una plataforma que permite a ciudadanos chilenos verificar su identidad y obtener un **Soulbound Token (SBT)** que representa su membresía en una organización autónoma descentralizada (DAO). El sistema soporta múltiples métodos de verificación:
@@ -60,7 +67,7 @@ DAO-Ciudadano/
 │   │   └── App.js          # Main entry
 │   └── package.json
 │
-└── contracts/              # (Future) Smart contracts
+└── contracts/              # Smart contracts (Hardhat) — SBT desplegado en Sepolia
 ```
 
 ## 🔌 API Endpoints
@@ -88,10 +95,11 @@ DAO-Ciudadano/
 - **Radix UI** - Componentes accesibles
 - **Axios** - Cliente HTTP
 
-### Blockchain (Futuro)
-- **Solidity** - Smart contracts
-- **ethers.js** - Interacción Web3
-- **Polygon** - Red L2
+### Blockchain
+- **Solidity 0.8.20 + OpenZeppelin 5** - Contrato SBT `DAOCiudadanaSBT` (soulbound, pausable, revocable)
+- **ethers.js** - Interacción Web3 (integración MetaMask real en el frontend)
+- **Red actual:** Sepolia testnet · **Objetivo:** Polygon
+- ⚠️ El minteo on-chain aún no está cableado desde el backend (ver ROADMAP Fase 1.5)
 
 ## 🎨 Tema Cyberpunk
 
@@ -103,11 +111,14 @@ La UI utiliza un tema cyberpunk con:
 
 ## 🔒 Seguridad
 
-- ✅ Solo hashes criptográficos on-chain
-- ✅ SBT no transferible
-- ✅ Datos PII nunca expuestos
-- ✅ Rate limiting implementado
-- ✅ CORS configurado
+Estado real de los controles (ver [AUDIT](./docs/AUDIT.md) para el detalle):
+
+- ✅ **SBT no transferible** — soulbound aplicado en `_update` del contrato
+- ✅ **CORS configurable** — sin comodín por defecto
+- ✅ **Rate limiting** presente (en memoria de proceso; pendiente moverlo a Redis)
+- ⚠️ **Autenticación** — aún no implementada en la API (ROADMAP Fase 1)
+- ⚠️ **PII** — hoy se almacena sin cifrar; el hash de RUT no lleva sal (ROADMAP Fase 1.3/1.4)
+- ⚠️ **Hashes on-chain** — todavía no se escribe nada en la cadena
 
 ## 🧪 Testing
 
@@ -121,4 +132,4 @@ cd frontend && yarn test
 
 ## 📄 Licencia
 
-MIT © 2024 DAO Ciudadana
+MIT © 2024–2026 DAO Ciudadana

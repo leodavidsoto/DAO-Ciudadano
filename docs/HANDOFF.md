@@ -72,7 +72,7 @@ DAO-Ciudadano/
 
 ## Cómo levantar el proyecto
 
-No hay `.env.example` en el repositorio (tarea 0.1 del roadmap). Estas son las variables que el código lee:
+Desde la Fase 0 hay `.env.example` en `backend/`, `frontend/` y `contracts/`. Cópialos a `.env`. Referencia de variables:
 
 **`backend/.env`**
 ```
@@ -115,7 +115,7 @@ cd contracts && npm install && npx hardhat compile
 
 Cosas que te van a costar tiempo si no las sabes de antemano:
 
-1. **`backend/server.py` no se usa.** Es una app FastAPI completa y duplicada de una versión anterior. `main.py` es el punto de entrada real. No la edites por error: bórrala.
+1. **`backend/server.py` ya fue eliminado** en la Fase 0 (era una app FastAPI legacy duplicada). `main.py` es el único punto de entrada.
 
 2. **Hay dos implementaciones de minteo que no se hablan.** `routers/membership.py` tiene la lógica inline (sin verificación de duplicados) y es la que se ejecuta. `services/blockchain_service.py` tiene una versión mejor (con verificación) que **nadie llama**. Al arreglar el minteo, unifica en el servicio.
 
@@ -131,7 +131,7 @@ Cosas que te van a costar tiempo si no las sabes de antemano:
 
 8. **La pantalla `Wallet` de la app móvil no existe** pero dos pantallas navegan hacia ella. Crash garantizado.
 
-9. **`ensure_sample_transactions()` escribe datos falsos en la base de producción** cada vez que se consulta la tesorería y la colección está vacía. Bórrala antes que nada.
+9. ~~`ensure_sample_transactions()` escribe datos falsos~~ — **eliminado en Fase 0.** La tesorería ahora reporta `configured: false` en vez de datos mock.
 
 10. **El rate limiter llama a `time.sleep()` dentro de un middleware async.** Congela el event loop para todas las peticiones concurrentes, no solo la del atacante.
 

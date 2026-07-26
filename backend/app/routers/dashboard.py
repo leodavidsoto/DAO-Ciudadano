@@ -31,14 +31,14 @@ async def get_dashboard_stats():
         })
         
         return DashboardStats(
-            total_members=max(total_members, 1432),  # Show at least demo number
-            recent_joins=max(recent_joins, 32),
+            total_members=total_members,
+            recent_joins=recent_joins,
             your_token_id=None
         )
         
     except Exception as e:
         logger.error(f"Error getting dashboard stats: {e}")
-        return DashboardStats(total_members=1432, recent_joins=32)
+        return DashboardStats(total_members=0, recent_joins=0)
 
 
 @router.get("/activity")

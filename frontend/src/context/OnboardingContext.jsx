@@ -38,7 +38,8 @@ export const OnboardingProvider = ({ children }) => {
     const [selfie, setSelfie] = useState({});
     const [wallet, setWallet] = useState({});
     const [mint, setMint] = useState({});
-    const [stats, setStats] = useState({ total_members: 1432, recent_joins: 32 });
+    // Real figures only: null until the API responds (never seed fake numbers)
+    const [stats, setStats] = useState({ total_members: null, recent_joins: null });
 
     // Progress calculation
     const progress = useMemo(() => {

@@ -14,14 +14,15 @@ class Settings(BaseSettings):
     # App
     APP_NAME: str = "DAO Ciudadana API"
     APP_VERSION: str = "1.0.0"
-    DEBUG: bool = True  # Enable docs for now
+    # Safe default: production-off. Enable locally with DEBUG=true (exposes /docs).
+    DEBUG: bool = os.environ.get('DEBUG', 'false').lower() == 'true'
     
     # Database - with fallback
     MONGO_URL: str = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
     DB_NAME: str = os.environ.get('DB_NAME', 'dao_ciudadana')
     
-    # CORS - Allow all for now to debug
-    CORS_ORIGINS: str = os.environ.get('CORS_ORIGINS', '*')
+    # CORS - must be set explicitly in production. Empty default = no cross-origin allowed.
+    CORS_ORIGINS: str = os.environ.get('CORS_ORIGINS', '')
     
     # Security
     SECRET_KEY: str = os.environ.get('SECRET_KEY', 'dev-secret-key')
@@ -36,9 +37,11 @@ class Settings(BaseSettings):
     
     @property
     def cors_origins_list(self) -> List[str]:
+        if not self.CORS_ORIGINS:
+            return []
         if self.CORS_ORIGINS == "*":
             return ["*"]
-        return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
     
     class Config:
         env_file = ".env"

@@ -43,6 +43,14 @@ Hoy es 100 % off-chain en MongoDB: las propuestas, los votos y la tesorería viv
 
 ## Fase 0 — Higiene y verdad (1 semana)
 
+> ✅ **Completada** en la rama `fase-0-higiene-y-verdad` (julio 2026). Resumen de lo hecho:
+> cifras infladas del dashboard eliminadas · tesorería mock y `ensure_sample_transactions`
+> retiradas · `participation_rate`/`runway_months` ahora reales o `null` · `server.py`,
+> `.gitconfig` y `.emergent/` borrados · `artifacts/` y `cache/` fuera del control de versiones ·
+> `DEBUG`/`CORS_ORIGINS` con defaults seguros · handler global sin fuga de `str(exc)` ·
+> `.env.example` en los tres módulos · pasos simulados marcados con badge "MODO DEMO" · README honesto.
+
+
 Objetivo: que el repositorio sea levantable y que la UI deje de afirmar cosas falsas. Sin esta fase, cualquier otro trabajo se construye sobre una base engañosa.
 
 | # | Tarea | Archivos | Criterio de aceptación |

@@ -34,7 +34,6 @@ curl -s -X POST https://ethereum-sepolia-rpc.publicnode.com \
 | Ruta | Qué es | Advertencia |
 |---|---|---|
 | `backend/main.py` | Punto de entrada real | — |
-| `backend/server.py` | App legacy duplicada | **No usar. Borrar.** |
 | `backend/app/services/` | Lógica de negocio | `auth_service` y `blockchain_service` contienen mocks |
 | `backend/app/routers/membership.py` | Minteo | Duplica lógica del servicio, sin validar duplicados |
 | `frontend/src/context/OnboardingContext.jsx` | Estado del flujo completo | Usa los mocks del backend, no los hooks Web3 reales |
@@ -112,4 +111,4 @@ npx hardhat test                          # no hay tests todavía — escribirlo
 npx hardhat run scripts/deploy.js --network sepolia
 ```
 
-No hay `.env.example` en el repositorio (tarea 0.1). Las variables requeridas están documentadas en `docs/HANDOFF.md`.
+Desde la Fase 0 hay `.env.example` en `backend/`, `frontend/` y `contracts/`. Variables documentadas en `docs/HANDOFF.md`.

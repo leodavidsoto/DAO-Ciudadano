@@ -5,6 +5,13 @@
 **Alcance:** backend FastAPI, contrato `DAOCiudadanaSBT.sol`, frontend React, app móvil React Native, despliegue.
 **Método:** lectura completa del código, verificación on-chain contra Sepolia vía RPC público, sondeo del backend en producción.
 
+> 📌 **Nota:** este informe describe el commit `f2902ca`. Varios hallazgos de higiene
+> (M-5, M-6, M-7, M-8, M-12, M-13, B-1, B-2, B-3, B-4) y de datos inventados (A-9 parcial:
+> las cifras fabricadas se eliminaron — incluida la siembra de 1432/32 en el estado inicial de
+> `frontend/src/context/OnboardingContext.jsx` —; las fuentes reales de tesorería llegan en
+> Fase 3.6) fueron abordados en la **Fase 0** (rama `fase-0-higiene-y-verdad`). C-5 (tests del
+> contrato) se cerró con la suite de `contracts/test/`. Los críticos C-1…C-4 y C-6 siguen abiertos.
+
 ---
 
 ## Resumen ejecutivo

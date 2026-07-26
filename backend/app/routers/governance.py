@@ -16,7 +16,8 @@ from ..core.database import (
     proposals_collection,
     votes_collection,
     delegations_collection,
-    treasury_transactions_collection
+    treasury_transactions_collection,
+    members_collection
 )
 from ..core.security_middleware import (
     fraud_detector,
@@ -294,12 +295,21 @@ async def get_governance_stats():
         result = await proposals_collection().aggregate(pipeline).to_list(1)
         total_votes = result[0]["total"] if result else 0
         
+        # Participation rate = unique voters / active members.
+        # Returns None when there are no members yet (avoids a fabricated figure).
+        distinct_voters = await votes_collection().distinct("voter_address")
+        total_members = await members_collection().count_documents({"status": "active"})
+        participation_rate = (
+            round(len(distinct_voters) / total_members, 4)
+            if total_members > 0 else None
+        )
+        
         return {
             "total_proposals": total,
             "active_proposals": active,
             "passed_proposals": passed,
             "total_votes_cast": total_votes,
-            "participation_rate": 0.75  # TODO: Calculate from members
+            "participation_rate": participation_rate
         }
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
@@ -308,7 +318,7 @@ async def get_governance_stats():
             "active_proposals": 0,
             "passed_proposals": 0,
             "total_votes_cast": 0,
-            "participation_rate": 0
+            "participation_rate": None
         }
 
 
@@ -416,94 +426,50 @@ class TreasuryTransaction(BaseModel):
     timestamp: datetime
 
 
-# Treasury balance (would be read from blockchain in production)
-TREASURY_BALANCE = {
-    "ETH": 12.5,
-    "USDC": 25000.0,
-    "DAI": 15000.0
-}
-
-
-async def ensure_sample_transactions():
-    """Ensure sample treasury transactions exist"""
-    count = await treasury_transactions_collection().count_documents({})
-    if count == 0:
-        now = datetime.now(timezone.utc)
-        samples = [
-            {
-                "id": "tx001",
-                "type": "income",
-                "amount": 5.0,
-                "currency": "ETH",
-                "description": "Donación fundacional",
-                "category": "donations",
-                "timestamp": now - timedelta(days=30)
-            },
-            {
-                "id": "tx002",
-                "type": "expense",
-                "amount": 1.5,
-                "currency": "ETH",
-                "description": "Desarrollo smart contracts",
-                "category": "development",
-                "proposal_id": "prop001",
-                "timestamp": now - timedelta(days=15)
-            },
-            {
-                "id": "tx003",
-                "type": "income",
-                "amount": 10000.0,
-                "currency": "USDC",
-                "description": "Grant Ethereum Foundation",
-                "category": "grants",
-                "timestamp": now - timedelta(days=7)
-            }
-        ]
-        await treasury_transactions_collection().insert_many(samples)
+# NOTE: On-chain balance reading is not wired yet (see ROADMAP Fase 3.6).
+# Until a real Safe multisig / RPC source is connected, treasury balances
+# are reported as unconfigured instead of fabricated values.
 
 
 @router.get("/treasury")
 async def get_treasury():
-    """Get treasury overview"""
-    await ensure_sample_transactions()
-    
+    """Get treasury overview.
+
+    Balances are read from real sources only. While no on-chain source is
+    configured, `balances` is null and `configured` is false — never mock data.
+    """
     tx_count = await treasury_transactions_collection().count_documents({})
-    
-    total_eth_value = (
-        TREASURY_BALANCE["ETH"] + 
-        TREASURY_BALANCE["USDC"] / 2000 +  # Mock ETH price
-        TREASURY_BALANCE["DAI"] / 2000
-    )
-    
+
     return {
-        "balances": TREASURY_BALANCE,
-        "total_eth_value": round(total_eth_value, 4),
-        "total_usd_value": round(total_eth_value * 2000, 2),
+        "configured": False,
+        "balances": None,
+        "total_eth_value": None,
+        "total_usd_value": None,
         "transaction_count": tx_count
     }
 
 
 @router.get("/treasury/transactions")
 async def get_treasury_transactions(limit: int = 20, category: Optional[str] = None):
-    """Get treasury transaction history"""
-    await ensure_sample_transactions()
-    
+    """Get treasury transaction history (real records only)."""
     query = {}
     if category:
         query["category"] = category
-    
+
     cursor = treasury_transactions_collection().find(query).sort("timestamp", -1).limit(limit)
     transactions = await cursor.to_list(length=limit)
-    
+
     return transactions
 
 
 @router.get("/treasury/analytics")
 async def get_treasury_analytics():
-    """Get treasury analytics"""
-    await ensure_sample_transactions()
-    
-    # Aggregation pipeline
+    """Get treasury analytics computed from real recorded transactions.
+
+    Runway is null until a real balance source is configured (it cannot be
+    computed without a current balance).
+    """
+    # Aggregate income/expenses from actual stored transactions
     pipeline = [
         {
             "$group": {
@@ -512,12 +478,12 @@ async def get_treasury_analytics():
             }
         }
     ]
-    
+
     result = await treasury_transactions_collection().aggregate(pipeline).to_list(10)
-    
+
     income = next((r["total"] for r in result if r["_id"] == "income"), 0)
     expenses = next((r["total"] for r in result if r["_id"] == "expense"), 0)
-    
+
     # Category breakdown
     category_pipeline = [
         {
@@ -528,19 +494,19 @@ async def get_treasury_analytics():
         }
     ]
     cat_result = await treasury_transactions_collection().aggregate(category_pipeline).to_list(50)
-    
+
     categories = {}
     for r in cat_result:
         cat = r["_id"]["category"]
-        t = r["_id"]["type"]
+        tx_type = r["_id"]["type"]
         if cat not in categories:
             categories[cat] = {"income": 0, "expense": 0}
-        categories[cat][t] = r["total"]
-    
+        categories[cat][tx_type] = r["total"]
+
     return {
         "total_income": income,
         "total_expenses": expenses,
         "net_flow": income - expenses,
         "by_category": categories,
-        "runway_months": 18  # TODO: Calculate from actual data
+        "runway_months": None  # Requires a configured on-chain balance source
     }

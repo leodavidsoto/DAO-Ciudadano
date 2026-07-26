@@ -7,7 +7,7 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Badge } from '../ui/badge';
-import { CyberPanel, CyberLoader } from './CyberUI';
+import { CyberPanel, CyberLoader, DemoBadge } from './CyberUI';
 import { useOnboarding } from '@/context';
 
 const LivenessStep = () => {
@@ -19,6 +19,7 @@ const LivenessStep = () => {
             description="Sistema de detección de vida avanzado. Procesamiento local seguro."
             icon={<ScanFace className="h-8 w-8" />}
         >
+            <DemoBadge label="MODO DEMO — detección de vida simulada sin proveedor real" />
             <div className="space-y-6">
                 <div>
                     <Label className="cyber-label">SUBIR IMAGEN BIOMÉTRICA</Label>

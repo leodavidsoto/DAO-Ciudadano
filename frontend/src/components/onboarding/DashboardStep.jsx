@@ -23,10 +23,14 @@ const DashboardStep = () => {
                     <div className="text-center">
                         <Users className="w-8 h-8 mx-auto text-cyan-400 mb-3 icon-bounce" />
                         <div className="cyber-stat-number text-3xl">
-                            <AnimatedCounter
-                                target={stats.total_members}
-                                duration={2000}
-                            />
+                            {typeof stats.total_members === 'number' ? (
+                                <AnimatedCounter
+                                    target={stats.total_members}
+                                    duration={2000}
+                                />
+                            ) : (
+                                <span>—</span>
+                            )}
                         </div>
                         <div className="cyber-stat-label">MIEMBROS ACTIVOS</div>
                     </div>
@@ -37,11 +41,15 @@ const DashboardStep = () => {
                     <div className="text-center">
                         <TrendingUp className="w-8 h-8 mx-auto text-green-400 mb-3 icon-bounce" />
                         <div className="cyber-stat-number text-3xl text-green-400">
-                            <AnimatedCounter
-                                target={stats.recent_joins}
-                                duration={1500}
-                                prefix="+"
-                            />
+                            {typeof stats.recent_joins === 'number' ? (
+                                <AnimatedCounter
+                                    target={stats.recent_joins}
+                                    duration={1500}
+                                    prefix="+"
+                                />
+                            ) : (
+                                <span>—</span>
+                            )}
                         </div>
                         <div className="cyber-stat-label">NUEVOS (30D)</div>
                     </div>

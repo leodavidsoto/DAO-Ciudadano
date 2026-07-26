@@ -81,3 +81,10 @@ android-sdk/ -e
 # Environment files
 *.env
 *.env.*
+# ...pero SÍ versionar las plantillas de ejemplo (sin secretos)
+!.env.example
+!**/.env.example
+
+# Hardhat build output (regenerable con `npx hardhat compile`)
+contracts/artifacts/
+contracts/cache/

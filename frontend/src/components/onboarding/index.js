@@ -1,5 +1,5 @@
 // Onboarding components exports
-export { CyberStep, CyberPanel, CyberLoader, ProgressBar, ErrorDisplay, SuccessDisplay } from './CyberUI';
+export { CyberStep, CyberPanel, CyberLoader, ProgressBar, ErrorDisplay, SuccessDisplay, DemoBadge } from './CyberUI';
 export { default as MethodSelector } from './MethodSelector';
 export { default as ClaveUnicaStep } from './ClaveUnicaStep';
 export { default as RegistrationStep } from './RegistrationStep';

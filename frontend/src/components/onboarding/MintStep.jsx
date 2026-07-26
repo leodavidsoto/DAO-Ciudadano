@@ -5,7 +5,7 @@ import React, { useState, useEffect } from 'react';
 import { Cpu, Zap, Sparkles } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
-import { CyberPanel, CyberLoader, SuccessDisplay } from './CyberUI';
+import { CyberPanel, CyberLoader, SuccessDisplay, DemoBadge } from './CyberUI';
 import { HolographicCard } from '@/components/effects';
 import { useOnboarding } from '@/context';
 
@@ -139,6 +139,7 @@ const MintStep = () => {
             description="Minteando Soulbound Token • Contrato inteligente ejecutándose"
             icon={<Cpu className="h-8 w-8" />}
         >
+            <DemoBadge label="MODO DEMO — el SBT aún no se mintea on-chain (registro solo en base de datos)" />
             <Confetti show={showConfetti} />
 
             <div className="flex flex-col items-center gap-6">

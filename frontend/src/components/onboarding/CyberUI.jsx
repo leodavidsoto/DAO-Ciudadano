@@ -3,7 +3,7 @@
  * Reusable cyberpunk-styled components
  */
 import React from 'react';
-import { CheckCircle2, Terminal, Loader2 } from 'lucide-react';
+import { CheckCircle2, Terminal, Loader2, AlertTriangle } from 'lucide-react';
 import { Card, CardContent } from '../ui/card';
 
 // Cyberpunk Step Indicator
@@ -83,3 +83,18 @@ export const SuccessDisplay = ({ children }) => (
         {children}
     </div>
 );
+
+// Demo Mode Badge — marca visiblemente los pasos cuya verificación aún es simulada.
+// Retirar cada uso cuando el flujo real correspondiente entre en producción (ver ROADMAP Fase 1/4).
+export const DemoBadge = ({ label = "MODO DEMO — verificación simulada" }) => (
+    <div
+        className="flex items-center gap-2 mb-6 px-3 py-2 rounded-md border border-yellow-500/40 bg-yellow-500/10"
+        role="status"
+    >
+        <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0" />
+        <span className="text-yellow-300 text-xs font-mono tracking-wide">
+            {label}
+        </span>
+    </div>
+);
+
