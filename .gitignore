@@ -88,3 +88,7 @@ android-sdk/ -e
 # Hardhat build output (regenerable con `npx hardhat compile`)
 contracts/artifacts/
 contracts/cache/
+
+# Salida de solidity-coverage (regenerable con `npx hardhat coverage`)
+contracts/coverage/
+contracts/coverage.json
