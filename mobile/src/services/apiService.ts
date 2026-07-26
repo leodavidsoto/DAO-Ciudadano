@@ -1,10 +1,12 @@
 /**
  * API Service - Connect to DAO Ciudadana Backend
+ *
+ * Request/response shapes mirror backend/app/models/schemas.py and the
+ * routers under backend/app/routers/ — keep both sides in sync.
  */
 
 import axios, { AxiosInstance } from 'axios';
-
-const API_BASE_URL = 'https://dao-ciudadana-api.onrender.com/api';
+import { API_BASE_URL } from '../config';
 
 class ApiService {
     private client: AxiosInstance;
@@ -19,7 +21,7 @@ class ApiService {
             },
         });
 
-        // Add auth interceptor
+        // Bearer token support, ready for when the backend emits JWT (ROADMAP 1.1)
         this.client.interceptors.request.use((config) => {
             if (this.token) {
                 config.headers.Authorization = `Bearer ${this.token}`;
@@ -33,55 +35,52 @@ class ApiService {
     }
 
     // Auth endpoints
+
+    /** POST /auth/register — expects rut, email, nombre, apellido */
     async register(data: {
         rut: string;
-        firstName: string;
-        lastName: string;
+        nombre: string;
+        apellido: string;
         email: string;
     }) {
         const response = await this.client.post('/auth/register', data);
         return response.data;
     }
 
-    async login(rut: string, password?: string) {
-        const response = await this.client.post('/auth/login', { rut, password });
-        if (response.data.token) {
-            this.setToken(response.data.token);
-        }
+    /** POST /auth/login — RUT + email (no password/JWT yet, ROADMAP 1.1) */
+    async login(rut: string, email: string) {
+        const response = await this.client.post('/auth/login', { rut, email });
         return response.data;
     }
 
-    // NFC verification
-    async verifyNFC(data: {
-        serialNumber: string;
-        documentHash: string;
-        rut?: string;
-    }) {
-        const response = await this.client.post('/auth/nfc', data);
-        return response.data;
-    }
-
-    // Wallet endpoints
-    async connectWallet(address: string, chainId: number) {
-        const response = await this.client.post('/wallet/connect', {
-            address,
-            chainId,
-        });
+    /** POST /auth/nfc — sends the chip serial read from the card (demo backend) */
+    async verifyNFC(chipSerial?: string) {
+        const response = await this.client.post(
+            '/auth/nfc',
+            chipSerial ? { chip_serial: chipSerial } : {},
+        );
         return response.data;
     }
 
     // Membership endpoints
+
+    /** POST /membership/mint — off-chain demo registration, tx_hash is null */
     async mintSBT(data: {
-        address: string;
-        identityHash: string;
+        walletAddress: string;
+        docHash: string;
         assuranceLevel: string;
     }) {
-        const response = await this.client.post('/membership/mint', data);
+        const response = await this.client.post('/membership/mint', {
+            wallet_address: data.walletAddress,
+            doc_hash: data.docHash,
+            assurance_level: data.assuranceLevel,
+        });
         return response.data;
     }
 
+    /** GET /membership/member/{address} — { found, member? } */
     async getMembershipStatus(address: string) {
-        const response = await this.client.get(`/membership/status/${address}`);
+        const response = await this.client.get(`/membership/member/${address}`);
         return response.data;
     }
 
