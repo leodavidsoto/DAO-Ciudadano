@@ -1,45 +1,38 @@
-# DAO Ciudadana Backend - Dependencies
-# All versions pinned for reproducible builds (ROADMAP task 2.6)
+# DAO Ciudadana — Backend (PRODUCCIÓN)
+#
+# Se mantiene mínimo a propósito: Render free corre con 512 MB de RAM y arranque
+# en frío tras inactividad. Cada wheel innecesaria cuesta tiempo de build y
+# latencia de arranque.
+#
+# Para desarrollo y CI usa requirements-dev.txt (incluye este archivo).
+# Versiones fijadas para builds reproducibles (tarea 2.6 del ROADMAP).
 
-# === Core Framework ===
+# === Framework ===
 fastapi==0.140.0
+starlette==1.3.1           # usado directamente: BaseHTTPMiddleware en security_middleware.py
+uvicorn[standard]==0.51.0
+
+# === Validación y configuración ===
 pydantic==2.13.4
 pydantic-settings==2.14.2
-uvicorn[standard]==0.51.0
-starlette==1.3.1
-
-# === Database ===
-motor==3.6.0
-pymongo==4.9.2
-
-# === Security ===
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-PyJWT==2.10.1
-cryptography==44.0.0
-bcrypt==4.2.1
-
-# === HTTP & Async ===
-httpx==0.28.1
-aiohttp==3.11.11
-anyio==4.7.0
-
-# === Validation & Utils ===
-email-validator==2.2.0
-python-multipart==0.0.20
 python-dotenv==1.0.1
 
-# === AI/ML (Optional) ===
-openai==1.58.1
-pillow==11.0.0
+# === Base de datos ===
+motor==3.6.0
+pymongo==4.9.2             # motor 3.6 exige >=4.9,<4.10; además se importa directamente
 
-# === Development & Testing ===
-pytest==8.3.4
-pytest-asyncio==0.24.0
-mongomock-motor==0.0.36
-black==24.10.0
-flake8==7.1.1
-mypy==1.14.0
+# === Formularios / archivos ===
+# NO aparece en ningún import, pero FastAPI lo exige para UploadFile/File(...)
+# en /api/auth/liveness. Quitarlo rompe ese endpoint en runtime.
+python-multipart==0.0.20
 
-# === Monitoring ===
-prometheus-client==0.21.1
+# === Procesamiento de imágenes ===
+pillow==11.0.0             # validación de imágenes en el flujo de liveness
+
+# NOTA — retiradas por no estar importadas en ningún módulo (verificado sobre
+# el árbol de imports completo tras el PR #1):
+#   openai, aiohttp, prometheus-client, python-jose, PyJWT, passlib, bcrypt,
+#   cryptography, email-validator, anyio.
+# httpx pasó a requirements-dev.txt: solo lo usa tests/conftest.py.
+# Las de autenticación vuelven en la tarea 1.1 del ROADMAP, cuando exista
+# código que efectivamente emita y valide un JWT.

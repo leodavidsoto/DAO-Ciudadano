@@ -1,19 +1,41 @@
+# Render Blueprint — DAO Ciudadana API
+#
+# Despliegue: Render → New → Blueprint → conectar el repositorio.
+# MONGO_URL es la única variable con `sync: false`: hay que definirla a mano en
+# el dashboard, precisamente para que la cadena de conexión no viva en el repo.
 services:
   - type: web
     name: dao-ciudadana-api
     runtime: python
+    plan: free
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
+      # Python 3.11 — misma versión que usa el CI
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+      # Cadena de conexión de MongoDB Atlas. Definir en el dashboard.
       - key: MONGO_URL
         sync: false
+
       - key: DB_NAME
         value: dao_ciudadana
+
+      # Generada por Render, nunca commiteada
       - key: SECRET_KEY
         generateValue: true
+
+      # Dominio EXACTO del frontend, separado por comas. Nunca "*".
+      # Actualizar si cambia la URL de Netlify.
       - key: CORS_ORIGINS
         value: https://regal-dieffenbachia-6e9194.netlify.app
-      - key: SBT_CONTRACT_ADDRESS
-        value: 0x813fd379F715107b2451553d97f29408d8185f0e
+
+      # false en producción: true expone /docs y /redoc
       - key: DEBUG
-        value: false
+        value: "false"
+
+      - key: SBT_CONTRACT_ADDRESS
+        value: "0x813fd379F715107b2451553d97f29408d8185f0e"

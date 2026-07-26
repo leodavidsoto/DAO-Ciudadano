@@ -4,6 +4,10 @@
   publish = "build"
 
 # Environment variables
+# IMPORTANTE: REACT_APP_BACKEND_URL cambia si se recrea el servicio en Render.
+# Al actualizarla aquí hay que actualizar también CORS_ORIGINS en el backend
+# con este mismo dominio de Netlify, o el navegador bloqueará las peticiones.
+# Ver backend/DEPLOY.md, paso 3.
 [build.environment]
   REACT_APP_BACKEND_URL = "https://dao-ciudadana-api.onrender.com"
   REACT_APP_SBT_CONTRACT_SEPOLIA = "0x813fd379F715107b2451553d97f29408d8185f0e"
