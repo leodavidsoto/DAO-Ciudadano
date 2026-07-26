@@ -11,6 +11,16 @@
 > `frontend/src/context/OnboardingContext.jsx` —; las fuentes reales de tesorería llegan en
 > Fase 3.6) fueron abordados en la **Fase 0** (rama `fase-0-higiene-y-verdad`). C-5 (tests del
 > contrato) se cerró con la suite de `contracts/test/`. Los críticos C-1…C-4 y C-6 siguen abiertos.
+>
+> 📌 **Nota (segunda pasada, 26-07-2026):** la Fase 2 quedó completa — tests de backend con
+> `pytest` + `mongomock` (2.2), `backend_test.py` y `test_result.md` eliminados (2.3 / M-14),
+> CI en GitHub Actions con backend, contratos, slither y build del frontend (2.4, 2.5), y
+> `requirements.txt` con versiones fijadas (2.6). Además: M-1 corregido (`asyncio.sleep`),
+> M-4 corregido (el router de membership delega en `BlockchainService`, con validación de
+> duplicados e índice único en `members.wallet_address` — cierra también la carrera de M-3),
+> A-6 y A-7 corregidos (contratos de `apiService.ts` alineados y pantalla `Wallet` creada),
+> y el mint dejó de fabricar `tx_hash`: devuelve `null` hasta que exista minteo real (1.5).
+> Ver «Hallazgos nuevos» al final.
 
 ---
 
@@ -229,3 +239,13 @@ Vale la pena registrarlo, porque define qué conservar:
 - **La UI tiene un nivel de acabado alto** y una identidad visual coherente.
 
 El proyecto no necesita reescribirse. Necesita que lo simulado se vuelva real y que se le ponga una capa de autenticación.
+
+---
+
+## Hallazgos nuevos (segunda pasada, 26-07-2026)
+
+| ID | Hallazgo | Ubicación | Severidad | Estado |
+|---|---|---|---|---|
+| N-1 | `Platform.OS` usado sin importar `Platform` → crash en runtime al renderizar la pantalla de éxito | `mobile/src/screens/SuccessScreen.tsx:187` | Alta (móvil) | ✅ Corregido |
+| N-2 | Violación de checks-effects-interactions en `mintMembership`: `_memberTokens`, `_identityHashes` y `_usedIdentityHashes` se escribían **después** de `_safeMint`, cuyo callback `onERC721Received` permite a un receptor contrato observar estado de membresía a medio actualizar (slither `reentrancy-no-eth`) | `contracts/contracts/DAOCiudadanaSBT.sol:116-122` | Media | ✅ Corregido (efectos antes de la interacción + test con `ReceiverProbe`). Nota: el contrato **desplegado** en Sepolia aún tiene el orden antiguo; se corrige con el redeploy ya previsto en 1.6 |
+| N-3 | `FraudDetector.check_delegation_chain` recorre el mapa `delegate → [delegators]` en la dirección equivocada: un ciclo real `a→b` + `b→a` no se detecta (solo funciona el límite de delegadores). El módulo sigue sin cablearse a los endpoints (A-4) | `backend/app/core/security_middleware.py:241-253` | Media | Abierto — corregir junto con la activación del antifraude (tarea 3.4) |
