@@ -383,4 +383,24 @@ describe("DAOCiudadanaSBT", function () {
             expect(await sbt.totalSupply()).to.equal(1);
         });
     });
+
+    describe("Checks-effects-interactions in mintMembership", function () {
+        it("membership state is fully written before the receiver callback runs", async function () {
+            // slither reentrancy-no-eth: _safeMint invokes onERC721Received on
+            // contract receivers. The receiver must already see consistent
+            // membership state during that callback.
+            const { sbt } = await loadFixture(deployFixture);
+
+            const Probe = await ethers.getContractFactory("ReceiverProbe");
+            const probe = await Probe.deploy();
+            await probe.waitForDeployment();
+
+            await sbt.mintMembership(
+                await probe.getAddress(), IDENTITY_HASH, ASSURANCE_AL2, TOKEN_URI
+            );
+
+            expect(await probe.sawMembershipDuringCallback()).to.equal(true);
+            expect(await probe.tokenIdDuringCallback()).to.equal(1n);
+        });
+    });
 });
