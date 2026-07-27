@@ -46,6 +46,10 @@ curl https://<tu-servicio>.onrender.com/health
 ```
 
 > **Arranque en frío:** en el plan gratuito Render suspende el servicio tras ~15 min sin tráfico. La primera petición después de eso tarda 30–60 s. No es un fallo del despliegue.
+>
+> Los clientes ya lo contemplan: sus timeouts son de 90 s (`frontend/src/lib/api.js`, `mobile/src/services/apiService.ts`) y el frontend hace un *warm-up* contra `/health` al montar la app, para que el servicio despierte mientras el usuario lee la primera pantalla.
+>
+> El proceso tampoco espera a MongoDB para empezar a servir: los índices se construyen en segundo plano (`Database.schedule_index_creation`). A cambio, mientras falte un índice único requerido las escrituras se rechazan — `/health` reporta ese estado en `integrity`.
 
 ---
 
@@ -130,7 +134,9 @@ Con `DEBUG=true` la documentación interactiva queda en `http://localhost:8000/d
 - **`requirements.txt`** — solo producción. Se mantuvo mínimo a propósito: en 512 MB de RAM y con arranque en frío, cada wheel innecesaria cuesta tiempo de build y latencia.
 - **`requirements-dev.txt`** — incluye lo anterior más `pytest`, `mongomock` y linters. Es lo que instala el CI.
 
-Se retiraron dependencias que ningún módulo importaba: `openai`, `aiohttp`, `httpx`, `prometheus-client`, `python-jose`, `PyJWT`, `passlib`, `bcrypt`, `cryptography`, `email-validator` y `anyio`. Las de autenticación vuelven en la tarea 1.1 del roadmap, cuando exista código que efectivamente emita un JWT.
+Se retiraron dependencias que ningún módulo importaba: `openai`, `aiohttp`, `prometheus-client`, `python-jose`, `PyJWT`, `passlib`, `bcrypt`, `cryptography`, `email-validator` y `anyio`. Las de autenticación vuelven en la tarea 1.1 del roadmap, cuando exista código que efectivamente emita un JWT.
+
+`httpx` **no** se retiró: pasó a `requirements-dev.txt` porque `tests/conftest.py` sí la importa. Quitarla de ahí rompe la suite.
 
 Dos que **no** se pueden quitar pese a no aparecer en ningún `import`:
 
