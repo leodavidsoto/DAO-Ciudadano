@@ -2,7 +2,7 @@
  * Wallet Connection Step - Real MetaMask Integration
  */
 import React, { useState, useEffect } from 'react';
-import { Wallet, Globe, AlertCircle, ExternalLink, RefreshCw, Loader2 } from 'lucide-react';
+import { Wallet, Globe, AlertCircle, ExternalLink, RefreshCw, Loader2, ArrowRight } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { CyberPanel, CyberLoader, SuccessDisplay } from './CyberUI';
@@ -15,15 +15,35 @@ const WalletStep = () => {
         connect,
         address,
         balance,
+        chainId,
         networkInfo,
         shortAddress,
         isConnecting,
         error,
         isMetaMaskInstalled,
-        isConnected
+        isConnected,
+        switchNetwork
     } = useWallet();
 
     const [isChecking, setIsChecking] = useState(true);
+
+    // Chain the SBT contract is deployed on (see frontend/src/contracts/SBTContract.js)
+    const REQUIRED_CHAIN_ID = 11155111; // Sepolia
+    const isWrongNetwork = isConnected && chainId != null && Number(chainId) !== REQUIRED_CHAIN_ID;
+
+    const goToMint = () => {
+        setWallet({ address, chainId });
+        setStep('mint');
+    };
+
+    // MetaMask may already be authorized for this site, in which case useWallet
+    // reconnects on mount and handleConnect never runs. Without this effect the
+    // flow renders "WALLET CONECTADA" and stops there forever.
+    useEffect(() => {
+        if (!isConnected || !address) return;
+        if (onboardingWallet.address === address) return;
+        setWallet({ address, chainId });
+    }, [isConnected, address, chainId, onboardingWallet.address, setWallet]);
 
     // Give time for MetaMask detection
     useEffect(() => {
@@ -156,6 +176,29 @@ const WalletStep = () => {
                                 Balance: {parseFloat(balance).toFixed(4)} ETH
                             </p>
                         )}
+
+                        {isWrongNetwork && (
+                            <div className="mt-4 p-3 rounded-lg border border-yellow-500/40 bg-yellow-500/10 text-left">
+                                <p className="text-yellow-300 text-xs font-mono mb-2">
+                                    El contrato SBT vive en Sepolia. Cambia de red para continuar.
+                                </p>
+                                <Button
+                                    onClick={() => switchNetwork(REQUIRED_CHAIN_ID)}
+                                    className="cyber-button w-full"
+                                >
+                                    CAMBIAR A SEPOLIA
+                                </Button>
+                            </div>
+                        )}
+
+                        <Button
+                            onClick={goToMint}
+                            disabled={isWrongNetwork}
+                            className="cyber-button-premium mt-5 w-full group"
+                        >
+                            CONTINUAR
+                            <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+                        </Button>
                     </SuccessDisplay>
                 )}
             </div>
