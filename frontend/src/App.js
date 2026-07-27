@@ -1,27 +1,53 @@
 /**
  * DAO Ciudadana - Main Application Entry
- * 
- * Professional modular React application with premium UI
+ *
+ * Routes:
+ *   /            onboarding flow (identity verification + SBT)
+ *   /dashboard   citizen governance dashboard
  */
 import React from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { OnboardingProvider } from "./context";
 import { OnboardingPage } from "./pages";
+import {
+  DashboardLayout,
+  OverviewSection,
+  ProposalsSection,
+  ElectionsSection,
+  DelegationSection,
+  TreasurySection,
+} from "./pages/DashboardPage";
 import "./App.css";
 import "./styles/premium.css";
 
-/**
- * Main App Component
- * 
- * Wraps the application with necessary providers and renders the main page.
- * Future: Add React Router here for multiple pages (governance, profile, etc.)
- */
 const App = () => {
   return (
-    <OnboardingProvider>
+    <BrowserRouter>
       <div className="App">
-        <OnboardingPage />
+        <Routes>
+          {/* Onboarding keeps its own provider: the dashboard does not need
+              the onboarding state machine and should not re-mount it. */}
+          <Route
+            path="/"
+            element={
+              <OnboardingProvider>
+                <OnboardingPage />
+              </OnboardingProvider>
+            }
+          />
+
+          <Route path="/dashboard" element={<DashboardLayout />}>
+            <Route index element={<OverviewSection />} />
+            <Route path="propuestas" element={<ProposalsSection />} />
+            <Route path="elecciones" element={<ElectionsSection />} />
+            <Route path="delegacion" element={<DelegationSection />} />
+            <Route path="tesoreria" element={<TreasurySection />} />
+          </Route>
+
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </div>
-    </OnboardingProvider>
+    </BrowserRouter>
   );
 };
 

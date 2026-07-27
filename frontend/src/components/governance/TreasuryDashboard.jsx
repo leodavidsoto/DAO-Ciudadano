@@ -61,6 +61,11 @@ const TreasuryDashboard = () => {
         );
     }
 
+    // The backend reports `configured: false` with null balances until a real
+    // on-chain source is wired (ROADMAP 3.6). Never render 0 as if it were a
+    // real balance: an empty treasury and an unconfigured one are different things.
+    const isConfigured = treasury?.configured === true && treasury?.balances != null;
+
     return (
         <div className="treasury-dashboard space-y-6">
             {/* Header */}
@@ -84,16 +89,29 @@ const TreasuryDashboard = () => {
                 <div className="glass-dark p-6 rounded-xl border border-cyan-500/20">
                     <div className="flex items-center justify-between mb-4">
                         <DollarSign className="w-8 h-8 text-cyan-400" />
-                        <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
-                            Activo
+                        <Badge className={isConfigured
+                            ? "bg-green-500/20 text-green-400 border-green-500/30"
+                            : "bg-gray-500/20 text-gray-400 border-gray-500/30"}>
+                            {isConfigured ? 'Activo' : 'Sin configurar'}
                         </Badge>
                     </div>
-                    <div className="text-3xl font-bold text-white mb-1">
-                        {formatCurrency(treasury?.total_usd_value || 0)}
-                    </div>
-                    <div className="text-sm text-gray-400">
-                        ≈ {treasury?.total_eth_value || 0} ETH
-                    </div>
+                    {isConfigured ? (
+                        <>
+                            <div className="text-3xl font-bold text-white mb-1">
+                                {formatCurrency(treasury.total_usd_value)}
+                            </div>
+                            <div className="text-sm text-gray-400">
+                                ≈ {treasury.total_eth_value} ETH
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="text-3xl font-bold text-gray-500 mb-1">—</div>
+                            <div className="text-sm text-gray-400">
+                                Sin fuente de saldos conectada
+                            </div>
+                        </>
+                    )}
                 </div>
 
                 {/* Individual Balances */}
@@ -141,7 +159,9 @@ const TreasuryDashboard = () => {
                         <div>
                             <div className="text-sm text-gray-400">Runway</div>
                             <div className="text-xl font-bold text-purple-400">
-                                {analytics.runway_months} meses
+                                {analytics.runway_months != null
+                                    ? `${analytics.runway_months} meses`
+                                    : '—'}
                             </div>
                         </div>
                     </div>

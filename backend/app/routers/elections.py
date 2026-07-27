@@ -55,10 +55,18 @@ MAX_TERM_MONTHS = 48
 class ElectionCreate(BaseModel):
     title: str
     description: str
+    creator_address: str
     seats: int = Field(default=1, ge=1, le=MAX_SEATS)
     nominations_days: int = Field(default=7, ge=1, le=MAX_PHASE_DAYS)
     voting_days: int = Field(default=7, ge=1, le=MAX_PHASE_DAYS)
     term_months: int = Field(default=12, ge=1, le=MAX_TERM_MONTHS)
+
+    @field_validator('creator_address')
+    @classmethod
+    def validate_creator_address(cls, v):
+        if not verify_eth_address(v):
+            raise ValueError('Invalid Ethereum address format')
+        return v.lower()
 
     @field_validator('title')
     @classmethod
@@ -219,9 +227,13 @@ async def _to_election_response(election: dict) -> ElectionResponse:
 @router.post("/elections", response_model=ElectionResponse)
 async def create_election(request: ElectionCreate):
     """Open a representative election (nominations start immediately)."""
+    # Same gate as proposals: opening an election is a governance action,
+    # not something any address on the internet should be able to do.
+    await ensure_active_member(request.creator_address, "convocar elecciones")
     now = datetime.now(timezone.utc)
     election = {
         "id": str(uuid.uuid4())[:8],
+        "creator_address": request.creator_address,
         "title": request.title,
         "description": request.description,
         "seats": request.seats,

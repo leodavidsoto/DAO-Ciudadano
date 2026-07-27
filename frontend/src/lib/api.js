@@ -124,4 +124,41 @@ export const governanceAPI = {
     getStats: () => api.get('/governance/stats'),
 };
 
+// === Elections API ===
+export const electionsAPI = {
+    list: (status = null) =>
+        api.get(`/governance/elections${status ? `?status=${status}` : ''}`),
+    get: (id) => api.get(`/governance/elections/${id}`),
+    create: ({ title, description, seats, nominationsDays, votingDays, termMonths, creatorAddress }) =>
+        api.post('/governance/elections', {
+            title,
+            description,
+            seats,
+            nominations_days: nominationsDays,
+            voting_days: votingDays,
+            term_months: termMonths,
+            creator_address: creatorAddress,
+        }),
+
+    // Candidacies
+    listCandidacies: (electionId) =>
+        api.get(`/governance/elections/${electionId}/candidacies`),
+    runForOffice: (electionId, candidateAddress, statement) =>
+        api.post(`/governance/elections/${electionId}/candidacies`, {
+            candidate_address: candidateAddress,
+            statement,
+        }),
+
+    // Voting
+    vote: (electionId, voterAddress, candidateAddress) =>
+        api.post(`/governance/elections/${electionId}/vote`, {
+            voter_address: voterAddress,
+            candidate_address: candidateAddress,
+        }),
+    results: (electionId) => api.get(`/governance/elections/${electionId}/results`),
+
+    // Elected representatives with an active term
+    representatives: () => api.get('/governance/representatives'),
+};
+
 export default api;

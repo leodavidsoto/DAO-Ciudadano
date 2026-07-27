@@ -2,13 +2,16 @@
  * Dashboard Step with Premium Effects
  */
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Activity, Globe, Vote, Terminal, Users, TrendingUp, Hash } from 'lucide-react';
 import { Button } from '../ui/button';
 import { CyberPanel } from './CyberUI';
 import { useOnboarding } from '@/context';
 import { AnimatedCounter } from '@/components/effects';
+import { SBT_CONTRACT_ADDRESSES } from '@/contracts/SBTContract';
 
 const DashboardStep = () => {
+    const navigate = useNavigate();
     const { stats, mint } = useOnboarding();
 
     return (
@@ -74,11 +77,23 @@ const DashboardStep = () => {
             </div>
 
             <div className="grid md:grid-cols-2 gap-4">
-                <Button variant="outline" className="cyber-button-premium hover-glow">
+                <Button
+                    variant="outline"
+                    className="cyber-button-premium hover-glow"
+                    onClick={() => window.open(
+                        `https://sepolia.etherscan.io/address/${SBT_CONTRACT_ADDRESSES[11155111]}`,
+                        '_blank',
+                        'noopener,noreferrer'
+                    )}
+                >
                     <Globe className="w-4 h-4 mr-2" />
                     EXPLORAR BLOCKCHAIN
                 </Button>
-                <Button variant="outline" className="cyber-button-premium hover-glow">
+                <Button
+                    variant="outline"
+                    className="cyber-button-premium hover-glow"
+                    onClick={() => navigate('/dashboard/propuestas')}
+                >
                     <Vote className="w-4 h-4 mr-2" />
                     VER PROPUESTAS
                 </Button>

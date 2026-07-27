@@ -31,7 +31,8 @@ async def _mint_member(client, address):
 
 async def _create_election(client, title="Elección de prueba",
                            description="Elegimos representantes para el próximo período.",
-                           seats=1, nominations_days=7, voting_days=7, term_months=12):
+                           seats=1, nominations_days=7, voting_days=7, term_months=12,
+                           creator_address=ADDR_A):
     return await client.post("/api/governance/elections", json={
         "title": title,
         "description": description,
@@ -39,6 +40,7 @@ async def _create_election(client, title="Elección de prueba",
         "nominations_days": nominations_days,
         "voting_days": voting_days,
         "term_months": term_months,
+        "creator_address": creator_address,
     })
 
 
@@ -79,6 +81,7 @@ async def _close_election(election_id):
 # === Creation and listing ===
 
 async def test_create_election(client):
+    await _mint_member(client, ADDR_A)
     response = await _create_election(client, seats=3)
     assert response.status_code == 200
     data = response.json()
@@ -90,6 +93,13 @@ async def test_create_election(client):
     listing = (await client.get("/api/governance/elections")).json()
     assert len(listing) == 1
     assert listing[0]["id"] == data["id"]
+
+
+async def test_create_election_rejects_non_member(client):
+    """Opening an election is a governance action, not open to any address."""
+    response = await _create_election(client, creator_address=NON_MEMBER)
+    assert response.status_code == 403
+    assert "miembros activos" in response.json()["detail"]
 
 
 async def test_create_election_rejects_invalid_seats(client):
@@ -105,6 +115,7 @@ async def test_get_missing_election_returns_404(client):
 # === Candidacies ===
 
 async def test_candidacy_rejects_non_member(client):
+    await _mint_member(client, ADDR_A)
     election_id = (await _create_election(client)).json()["id"]
     response = await _nominate(client, election_id, NON_MEMBER)
     assert response.status_code == 403
