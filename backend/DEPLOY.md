@@ -71,10 +71,27 @@ Después, **redesplegar el frontend** (Netlify no relee `netlify.toml` sin un nu
 | `CORS_ORIGINS` | sí | Dominio del frontend, separado por comas. **No usar `*`** |
 | `SECRET_KEY` | sí | Generada por Render (`generateValue: true`) |
 | `DEBUG` | no | `false` en producción (`true` expone `/docs` y devuelve detalle de errores) |
+| `CORS_ORIGIN_REGEX` | no | Regex para orígenes dinámicos (previews de Netlify). Ver abajo |
 | `SBT_CONTRACT_ADDRESS` | no | `0x813fd379F715107b2451553d97f29408d8185f0e` |
 | `EMERGENT_LLM_KEY` | no | Solo para el análisis de liveness real |
 
 Detalle completo en [`.env.example`](./.env.example).
+
+### Previews de Netlify y CORS
+
+Cada deploy de Netlify recibe su propio subdominio (`<id>--tu-sitio.netlify.app`),
+distinto en cada build. Si entras por esa URL en lugar de la de producción, el
+navegador bloquea todas las peticiones: ese origen no está en `CORS_ORIGINS`.
+
+En vez de ir añadiendo URLs a mano, define `CORS_ORIGIN_REGEX`:
+
+```
+^https://([a-z0-9-]+--)?TU-SITIO\.netlify\.app$
+```
+
+Acepta el dominio de producción y cualquier preview, y solo eso. El ancla `$`
+final es lo que impide que `tu-sitio.netlify.app.dominio-atacante.com` pase el
+filtro — no la quites.
 
 **Defaults seguros:** si `CORS_ORIGINS` no está definida, la lista de orígenes permitidos queda vacía (deny-all) en lugar de `*`. Si `DEBUG` no está definida, vale `false`. Un despliegue sin configurar falla de forma visible, no de forma insegura.
 

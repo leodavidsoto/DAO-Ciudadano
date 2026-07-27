@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     
     # CORS - must be set explicitly in production. Empty default = no cross-origin allowed.
     CORS_ORIGINS: str = os.environ.get('CORS_ORIGINS', '')
+    # Optional regex for dynamic origins (e.g. Netlify deploy previews, whose
+    # subdomain changes on every build). Scope it to your own domain; never '.*'.
+    CORS_ORIGIN_REGEX: str = os.environ.get('CORS_ORIGIN_REGEX', '')
     
     # Security
     SECRET_KEY: str = os.environ.get('SECRET_KEY', 'dev-secret-key')
