@@ -72,7 +72,7 @@ curl -s -X POST https://ethereum-sepolia-rpc.publicnode.com \
 # Backend
 cd backend && pip install -r requirements-dev.txt
 uvicorn main:app --reload --port 8000
-pytest -q                                   # 72 tests
+pytest -q                                   # 79 tests
 
 # Frontend
 cd frontend && npm install --legacy-peer-deps

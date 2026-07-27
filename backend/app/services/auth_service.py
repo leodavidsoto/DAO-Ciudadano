@@ -10,6 +10,7 @@ from PIL import Image
 import io
 
 from ..core.security import generate_short_hash
+from ..core.errors import report
 from ..core.database import identity_events_collection
 from ..core.config import settings
 from ..models import IdentityEvent
@@ -47,7 +48,7 @@ class AuthService:
             
         except Exception as e:
             logger.error(f"ClaveÚnica verification error: {e}")
-            return (False, None, None, str(e))
+            return (False, None, None, report(e, "auth_service"))
     
     @staticmethod
     async def verify_nfc() -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
@@ -74,7 +75,7 @@ class AuthService:
             
         except Exception as e:
             logger.error(f"NFC verification error: {e}")
-            return (False, None, None, str(e))
+            return (False, None, None, report(e, "auth_service"))
     
     @staticmethod
     async def analyze_liveness(image_data: bytes) -> Tuple[bool, Optional[float], Optional[str], Optional[str]]:
@@ -95,15 +96,20 @@ class AuthService:
         try:
             base64_image = base64.b64encode(image_data).decode('utf-8')
             
+            # Fail CLOSED (audit finding N-9): without a provider there is no
+            # liveness evidence, and inventing a passing score would fabricate
+            # identity evidence out of a configuration error.
             api_key = settings.EMERGENT_LLM_KEY
             if not api_key:
-                # Mock response when no API key
-                logger.warning("No EMERGENT_LLM_KEY configured, using mock liveness")
-                score = 0.85
-                analysis = "Mock liveness: imagen parece ser genuina (API key no configurada)"
-            else:
-                # Real LLM analysis
-                score, analysis = await AuthService._analyze_with_llm(base64_image, api_key)
+                logger.error("EMERGENT_LLM_KEY not configured: liveness cannot run")
+                return (False, None, None, "La verificación de vida no está disponible.")
+
+            score, analysis = await AuthService._analyze_with_llm(base64_image, api_key)
+            if score is None:
+                return (False, None, None, "No se pudo completar la verificación de vida.")
+            if score < settings.LIVENESS_MIN_SCORE:
+                logger.info(f"Liveness rejected: {score} < {settings.LIVENESS_MIN_SCORE}")
+                return (False, score, analysis, "No pudimos confirmar que sea una persona real en vivo.")
             
             # Store identity event
             event = IdentityEvent(
@@ -118,7 +124,7 @@ class AuthService:
             
         except Exception as e:
             logger.error(f"Liveness analysis error: {e}")
-            return (False, None, None, f"Error en análisis: {str(e)}")
+            return (False, None, None, report(e, "analyze_liveness"))
     
     @staticmethod
     async def _analyze_with_llm(base64_image: str, api_key: str) -> Tuple[float, str]:
@@ -159,11 +165,12 @@ class AuthService:
             return (score, analysis)
             
         except ImportError:
-            logger.warning("emergentintegrations not available")
-            return (0.85, "Mock liveness: biblioteca no disponible")
+            # No provider installed → no evidence. Never a passing score.
+            logger.error("emergentintegrations not installed: liveness cannot run")
+            return (None, None)
         except Exception as e:
-            logger.error(f"LLM error: {e}")
-            return (0.5, f"Error en análisis: {str(e)}")
+            logger.error(f"Liveness provider error: {e}", exc_info=True)
+            return (None, None)
 
 
 # Singleton instance

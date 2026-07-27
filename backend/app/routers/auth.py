@@ -16,6 +16,7 @@ from ..models import (
     NFCRequest, NFCResponse, LivenessResponse, IdentityEvent
 )
 from ..core.security import generate_short_hash
+from ..core.errors import report
 from ..core.database import identity_events_collection
 from ..core.config import settings
 
@@ -63,7 +64,7 @@ async def authenticate_clave_unica(request: ClaveUnicaRequest):
         
     except Exception as e:
         logger.error(f"Error in ClaveÚnica auth: {e}")
-        return ClaveUnicaResponse(ok=False, error=str(e))
+        return ClaveUnicaResponse(ok=False, error=report(e, "clave_unica"))
 
 
 @router.post("/nfc", response_model=NFCResponse)
@@ -101,7 +102,7 @@ async def authenticate_nfc(request: Optional[NFCRequest] = None):
         
     except Exception as e:
         logger.error(f"Error in NFC auth: {e}")
-        return NFCResponse(ok=False, error=str(e))
+        return NFCResponse(ok=False, error=report(e, "nfc"))
 
 
 @router.post("/liveness", response_model=LivenessResponse)
@@ -130,69 +131,76 @@ async def analyze_liveness(file: UploadFile = File(...)):
         # Convert to base64 for LLM
         base64_image = base64.b64encode(contents).decode('utf-8')
         
-        # Check for API key
+        # Fail CLOSED: a liveness check that passes when it cannot run is
+        # worse than no check at all — it manufactures identity evidence out
+        # of a configuration error (audit finding N-9 / A-3).
         api_key = settings.EMERGENT_LLM_KEY
         if not api_key:
-            # Return mock response if no API key
-            logger.warning("No EMERGENT_LLM_KEY configured, using mock liveness")
-            score = 0.85
-            analysis = "Mock liveness detection: imagen parece ser genuina (API key no configurada)"
-        else:
-            # Real LLM analysis
-            try:
-                from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+            logger.error("EMERGENT_LLM_KEY not configured: liveness cannot run")
+            return LivenessResponse(
+                ok=False,
+                error="La verificación de vida no está disponible en este momento.",
+            )
+        # Real liveness analysis via the vision provider
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+            
+            chat = LlmChat(
+                api_key=api_key,
+                session_id=f"liveness_{uuid.uuid4()}",
+                system_message="""Eres un experto en detección de vida (liveness detection). 
+                Analiza esta imagen y determina si muestra una persona real en vivo o si es una foto/video/deepfake.
                 
-                chat = LlmChat(
-                    api_key=api_key,
-                    session_id=f"liveness_{uuid.uuid4()}",
-                    system_message="""Eres un experto en detección de vida (liveness detection). 
-                    Analiza esta imagen y determina si muestra una persona real en vivo o si es una foto/video/deepfake.
+                Evalúa:
+                1. Naturalidad de la pose y expresión
+                2. Calidad de la imagen (¿parece tomada en vivo?)
+                3. Signos de vida como micro-movimientos o inconsistencias de deepfake
+                4. Contexto y fondo
+                
+                Responde con un score de 0.0 a 1.0 donde:
+                - 0.0-0.3: Definitivamente no es una persona real
+                - 0.4-0.6: Dudoso, posible foto o video
+                - 0.7-0.9: Probablemente una persona real
+                - 0.9-1.0: Definitivamente una persona real en vivo
+                
+                Formato: "SCORE: 0.85 | ANÁLISIS: [tu análisis detallado]" """
+            ).with_model("openai", "gpt-4o")
+            
+            image_content = ImageContent(image_base64=base64_image)
+            user_message = UserMessage(
+                text="Analiza esta imagen para detección de vida (liveness detection). ¿Es una persona real tomándose un selfie ahora mismo?",
+                file_contents=[image_content]
+            )
+            
+            response = await chat.send_message(user_message)
+            
+            # Parse response
+            score = 0.5
+            analysis = response
+            
+            if "SCORE:" in response:
+                try:
+                    score_part = response.split("SCORE:")[1].split("|")[0].strip()
+                    score = float(score_part)
+                    if "|" in response:
+                        analysis = response.split("|", 1)[1].replace("ANÁLISIS:", "").strip()
+                except:
+                    pass
                     
-                    Evalúa:
-                    1. Naturalidad de la pose y expresión
-                    2. Calidad de la imagen (¿parece tomada en vivo?)
-                    3. Signos de vida como micro-movimientos o inconsistencias de deepfake
-                    4. Contexto y fondo
-                    
-                    Responde con un score de 0.0 a 1.0 donde:
-                    - 0.0-0.3: Definitivamente no es una persona real
-                    - 0.4-0.6: Dudoso, posible foto o video
-                    - 0.7-0.9: Probablemente una persona real
-                    - 0.9-1.0: Definitivamente una persona real en vivo
-                    
-                    Formato: "SCORE: 0.85 | ANÁLISIS: [tu análisis detallado]" """
-                ).with_model("openai", "gpt-4o")
-                
-                image_content = ImageContent(image_base64=base64_image)
-                user_message = UserMessage(
-                    text="Analiza esta imagen para detección de vida (liveness detection). ¿Es una persona real tomándose un selfie ahora mismo?",
-                    file_contents=[image_content]
-                )
-                
-                response = await chat.send_message(user_message)
-                
-                # Parse response
-                score = 0.5
-                analysis = response
-                
-                if "SCORE:" in response:
-                    try:
-                        score_part = response.split("SCORE:")[1].split("|")[0].strip()
-                        score = float(score_part)
-                        if "|" in response:
-                            analysis = response.split("|", 1)[1].replace("ANÁLISIS:", "").strip()
-                    except:
-                        pass
-                        
-            except ImportError:
-                logger.warning("emergentintegrations not available, using mock")
-                score = 0.85
-                analysis = "Mock liveness: biblioteca no disponible"
-            except Exception as e:
-                logger.error(f"LLM error: {e}")
-                score = 0.5
-                analysis = f"Error en análisis: {str(e)}"
-        
+        except ImportError:
+            logger.error("emergentintegrations not installed: liveness cannot run")
+            return LivenessResponse(
+                ok=False,
+                error="La verificación de vida no está disponible en este momento.",
+            )
+        except Exception as e:
+            # Never downgrade a provider failure into a passing score.
+            logger.error(f"Liveness provider error: {e}", exc_info=True)
+            return LivenessResponse(
+                ok=False,
+                error="No se pudo completar la verificación de vida. Intenta de nuevo.",
+            )
+    
         # Store identity event
         event = IdentityEvent(
             user_id=generate_short_hash(base64_image[:100]),
@@ -202,6 +210,21 @@ async def analyze_liveness(file: UploadFile = File(...)):
         )
         await identity_events_collection().insert_one(event.model_dump())
         
+        # Threshold enforcement (ROADMAP 1.10): a low score must block the
+        # flow, not merely be reported. The frontend advanced on ok=True
+        # regardless of the score before this.
+        if score < settings.LIVENESS_MIN_SCORE:
+            logger.info(f"Liveness rejected: score {score} < {settings.LIVENESS_MIN_SCORE}")
+            return LivenessResponse(
+                ok=False,
+                score=score,
+                analysis=analysis,
+                error=(
+                    "No pudimos confirmar que sea una persona real en vivo. "
+                    "Repite la captura con buena luz y mirando a la cámara."
+                ),
+            )
+
         return LivenessResponse(
             ok=True,
             score=score,
@@ -210,7 +233,7 @@ async def analyze_liveness(file: UploadFile = File(...)):
         
     except Exception as e:
         logger.error(f"Error in liveness detection: {e}")
-        return LivenessResponse(ok=False, error=f"Error en análisis: {str(e)}")
+        return LivenessResponse(ok=False, error=report(e, "liveness"))
 
 
 # === RUT + Email Authentication (Simple registration while awaiting ClaveÚnica sandbox) ===
@@ -335,7 +358,7 @@ async def register_user(request: UserRegisterRequest):
         
     except Exception as e:
         logger.error(f"Error in registration: {e}")
-        return UserResponse(ok=False, error=str(e))
+        return UserResponse(ok=False, error=report(e, "user_auth"))
 
 
 @router.post("/login", response_model=UserResponse)
@@ -386,5 +409,5 @@ async def login_user(request: UserLoginRequest):
         
     except Exception as e:
         logger.error(f"Error in login: {e}")
-        return UserResponse(ok=False, error=str(e))
+        return UserResponse(ok=False, error=report(e, "user_auth"))
 

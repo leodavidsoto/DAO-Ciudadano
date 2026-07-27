@@ -25,6 +25,8 @@ Design decisions (documented here on purpose):
 import calendar
 from datetime import datetime, timezone
 import logging
+
+from pymongo.errors import BulkWriteError
 from typing import Optional
 
 from ..core.database import (
@@ -145,16 +147,29 @@ class GovernanceService:
 
     @classmethod
     async def sync_election_status(cls, election: dict) -> dict:
-        """Persist the date-derived status; finalize results on close."""
+        """Persist the date-derived status; finalize results on close.
+
+        Called from read endpoints, so several requests can observe the same
+        transition at once. The close is CLAIMED atomically with
+        find_one_and_update filtered on the previous status: only the request
+        that actually flips the document runs finalize_election, so concurrent
+        readers cannot seat duplicate representatives (audit finding N-6).
+        """
         derived = cls.derive_election_status(election)
-        if derived != election.get("status"):
-            await elections_collection().update_one(
-                {"id": election["id"]},
-                {"$set": {"status": derived}}
-            )
-            election["status"] = derived
-            if derived == "closed":
-                await cls.finalize_election(election)
+        previous = election.get("status")
+        if derived == previous:
+            return election
+
+        claimed = await elections_collection().find_one_and_update(
+            {"id": election["id"], "status": previous},
+            {"$set": {"status": derived}},
+        )
+        election["status"] = derived
+
+        # `claimed` is None when another request won the transition; that
+        # request owns the finalization.
+        if claimed is not None and derived == "closed":
+            await cls.finalize_election(election)
         return election
 
     @classmethod
@@ -228,7 +243,24 @@ class GovernanceService:
             }
             for w in winners
         ]
-        await representatives_collection().insert_many(docs)
+        # Belt and braces on top of the atomic claim in sync_election_status:
+        # the unique index on (election_id, address) makes this idempotent even
+        # if two finalizations ever raced. ordered=False so one duplicate does
+        # not abort the remaining inserts.
+        try:
+            await representatives_collection().insert_many(docs, ordered=False)
+        except BulkWriteError as e:
+            non_duplicate = [
+                err for err in e.details.get("writeErrors", [])
+                if err.get("code") != 11000
+            ]
+            if non_duplicate:
+                raise
+            logger.info(
+                f"Election {election['id']} already finalized by a concurrent request"
+            )
+            return
+
         logger.info(
             f"Election {election['id']} finalized: {len(docs)} representative(s) seated"
         )

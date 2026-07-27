@@ -272,4 +272,39 @@ El proyecto no necesita reescribirse. Necesita que lo simulado se vuelva real y 
 |---|---|---|---|---|
 | N-1 | `Platform.OS` usado sin importar `Platform` → crash en runtime al renderizar la pantalla de éxito | `mobile/src/screens/SuccessScreen.tsx:187` | Alta (móvil) | ✅ Corregido |
 | N-2 | Violación de checks-effects-interactions en `mintMembership`: `_memberTokens`, `_identityHashes` y `_usedIdentityHashes` se escribían **después** de `_safeMint`, cuyo callback `onERC721Received` permite a un receptor contrato observar estado de membresía a medio actualizar (slither `reentrancy-no-eth`) | `contracts/contracts/DAOCiudadanaSBT.sol:116-122` | Media | ✅ Corregido (efectos antes de la interacción + test con `ReceiverProbe`). Nota: el contrato **desplegado** en Sepolia aún tiene el orden antiguo; se corrige con el redeploy ya previsto en 1.6 |
-| N-3 | `FraudDetector.check_delegation_chain` recorre el mapa `delegate → [delegators]` en la dirección equivocada: un ciclo real `a→b` + `b→a` no se detecta (solo funciona el límite de delegadores). El módulo sigue sin cablearse a los endpoints (A-4) | `backend/app/core/security_middleware.py:241-253` | Media | Abierto — corregir junto con la activación del antifraude (tarea 3.4) |
+| N-3 | `FraudDetector.check_delegation_chain` recorría el mapa `delegate → [delegators]` en la dirección equivocada: un ciclo real `a→b` + `b→a` no se detectaba | `backend/app/core/security_middleware.py:236-258` | Media | ✅ Corregido — el recorrido va ahora en la dirección del voto, y el antifraude quedó cableado a los endpoints (A-4) |
+
+---
+
+## Hallazgos nuevos (cuarta pasada, 27-07-2026) — integridad y concurrencia
+
+Reportados por una auditoría de actualización externa sobre `9959050`. Los seis se
+verificaron leyendo el código antes de aceptarlos: **todos eran reales**. Todos cerrados
+en la misma pasada.
+
+| ID | Hallazgo | Ubicación | Severidad | Estado |
+|---|---|---|---|---|
+| N-4 | **Colisión de `token_id` bajo concurrencia.** Dos altas simultáneas leen el mismo último ID y calculan el mismo siguiente. El índice de `token_id` no era único; el de wallet solo impide duplicar una misma dirección. `verify/{token_id}` podía devolver un miembro arbitrario. | `backend/app/services/blockchain_service.py`; `backend/app/core/database.py` | Alta (integridad) | ✅ Cerrado — índice único + reintento acotado que distingue colisión de ID (reintentable) de duplicado de wallet (terminal) |
+| N-5 | **Doble voto por operaciones no atómicas.** `find_one` → `insert_one` → `$inc` sin índice único `(proposal_id, voter_address)`. Dos peticiones concurrentes podían insertar y contabilizar dos votos; un fallo intermedio dejaba papeleta y contador divergentes. | `backend/app/routers/governance.py`; `backend/app/core/database.py` | Alta (gobernanza) | ✅ Cerrado — índice único + manejo de `DuplicateKeyError`. La papeleta se inserta antes del contador: un fallo deja un voto sin contar (recuperable) en vez de un contador fantasma |
+| N-6 | **Representantes duplicados al cerrar una elección.** `sync_election_status` se invoca desde endpoints de lectura; dos peticiones podían observar el cierre y ambas sentar ganadores. Sin índice único en `representatives` ni reclamo atómico. | `backend/app/services/governance_service.py`; `backend/app/core/database.py` | Alta (gobernanza) | ✅ Cerrado — transición reclamada con `find_one_and_update` filtrado por estado anterior; índice único `(election_id, address)`; `insert_many(ordered=False)` idempotente |
+| N-7 | **Creación de índices todo-o-nada.** Un fallo temprano saltaba al único `except`, omitía todos los índices posteriores y dejaba la app operativa solo con un warning. Las protecciones de candidaturas, votos electorales y delegaciones podían no existir. | `backend/app/core/database.py` | Media | ✅ Cerrado — cada índice se crea por separado; los de integridad obligatoria abortan el arranque en lugar de operar sin invariantes |
+| N-8 | **Fuga de excepciones internas.** Routers y servicios devolvían `str(e)` al cliente en autenticación, wallet y minteo: errores del driver pueden revelar cadenas de conexión, consultas y rutas. | `backend/app/routers/auth.py`, `wallet.py`; `backend/app/services/*.py` | Media (información) | ✅ Cerrado — `app/core/errors.py` registra con identificador de correlación y devuelve solo ese identificador |
+| N-9 | **Liveness que acepta al fallar.** Sin API key, o si fallaba el import del proveedor, devolvía `ok=true` con score fijo `0.85`, y no aplicaba umbral. Fabricaba evidencia de identidad a partir de un error de configuración. El mock estaba duplicado en router y servicio. | `backend/app/routers/auth.py`; `backend/app/services/auth_service.py` | Alta (identidad) | ✅ Cerrado — falla cerrado en ambos caminos y aplica `LIVENESS_MIN_SCORE` (0.75 por defecto). Cierra también **A-3** y la tarea **1.10** |
+
+### Cobertura
+
+`backend/tests/test_integrity.py` — 7 tests que verifican la existencia de los índices
+únicos, la unicidad de `token_id` bajo concurrencia real (`asyncio.gather`), el rechazo del
+doble voto, la coherencia entre papeletas y contadores, el fallo cerrado del liveness y la
+ausencia de fugas en los mensajes de error.
+
+**79 tests de backend en verde.** Se comprobó que los tests fallan al revertir el arreglo:
+quitar el `unique` del índice de `token_id` hace fallar `test_required_integrity_indexes_exist`.
+
+### Nota sobre la verificación externa
+
+Esa pasada no pudo reverificar Sepolia ni el backend desplegado (el proxy de su entorno
+devolvió 403). Ambos se comprobaron aquí el 27-07-2026: `totalSupply()` sigue en **0** y el
+backend en producción responde con datos reales (`total_members: 1`). El resumen ejecutivo
+de este informe todavía dice que el backend está suspendido; eso corresponde al estado del
+26-07 y **ya no es cierto**: el servicio fue redesplegado con MongoDB Atlas.

@@ -13,6 +13,8 @@ import uuid
 import logging
 import re
 
+from pymongo.errors import DuplicateKeyError
+
 from ..core.database import (
     proposals_collection,
     votes_collection,
@@ -314,8 +316,18 @@ async def cast_vote(request: VoteRequest = Depends(verified_voter)):
             "vote_hash": vote_hash,
             "timestamp": datetime.now(timezone.utc)
         }
-        await votes_collection().insert_one(vote_record)
-        
+        # The pre-check above is a friendlier error, not the guarantee: two
+        # concurrent requests can both pass it. The unique index on
+        # (proposal_id, voter_address) is what actually prevents the double
+        # vote, and it must be handled here (audit finding N-5). The ballot is
+        # inserted BEFORE the counter is incremented so a crash in between
+        # leaves a recorded ballot that was never counted — recoverable by
+        # recomputing from ballots — rather than a phantom count with no ballot.
+        try:
+            await votes_collection().insert_one(vote_record)
+        except DuplicateKeyError:
+            return VoteResponse(ok=False, error="Ya votaste en esta propuesta")
+
         # Update vote counts by the applied weight, not by 1
         update_field = f"votes_{request.vote}" if request.vote in ["for", "against", "abstain"] else "votes_abstain"
         await proposals_collection().update_one(

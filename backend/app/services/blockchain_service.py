@@ -14,10 +14,14 @@ from datetime import datetime, timezone
 from pymongo.errors import DuplicateKeyError
 
 from ..core.database import members_collection
+from ..core.errors import report
 from ..core.security_middleware import verify_eth_address
 from ..models import Member
 
 logger = logging.getLogger(__name__)
+
+# Retries for the token_id allocation race (audit finding N-4).
+MAX_TOKEN_ID_ATTEMPTS = 5
 
 
 class BlockchainService:
@@ -54,22 +58,44 @@ class BlockchainService:
             # Sequential id over the highest existing one: survives revocations
             # without colliding (count+1 does not). Replaced by the on-chain
             # tokenId when task 1.5 lands.
-            last = await members_collection().find_one(sort=[("token_id", -1)])
-            token_id = (last["token_id"] + 1) if last else 1
+            #
+            # Read-then-write is not atomic: two concurrent mints can compute
+            # the same next id (audit finding N-4). The unique index on
+            # token_id turns that into a DuplicateKeyError, which we retry.
+            # Retrying is safe because the wallet uniqueness check already
+            # passed and is itself protected by its own unique index.
+            member = None
+            for attempt in range(MAX_TOKEN_ID_ATTEMPTS):
+                last = await members_collection().find_one(sort=[("token_id", -1)])
+                token_id = (last["token_id"] + 1) if last else 1
 
-            member = Member(
-                wallet_address=address,
-                token_id=token_id,
-                doc_hash=doc_hash,
-                assurance_level=assurance_level
-            )
+                candidate = Member(
+                    wallet_address=address,
+                    token_id=token_id,
+                    doc_hash=doc_hash,
+                    assurance_level=assurance_level
+                )
 
-            try:
-                await members_collection().insert_one(member.model_dump())
-            except DuplicateKeyError:
-                # Unique index on wallet_address closed the race between the
-                # duplicate check above and this insert.
-                return (False, None, None, "Ya existe un SBT para esta wallet")
+                try:
+                    await members_collection().insert_one(candidate.model_dump())
+                    member = candidate
+                    break
+                except DuplicateKeyError as e:
+                    # Which unique index rejected it? wallet_address means the
+                    # membership already exists (terminal); token_id means we
+                    # lost the id race (retryable).
+                    if "wallet_address" in str(e):
+                        return (False, None, None, "Ya existe un SBT para esta wallet")
+                    logger.info(
+                        f"token_id {token_id} taken, retrying "
+                        f"({attempt + 1}/{MAX_TOKEN_ID_ATTEMPTS})"
+                    )
+
+            if member is None:
+                logger.error("Could not allocate a token_id after retries")
+                return (False, None, None, "No se pudo asignar un ID de token; reintenta")
+
+            token_id = member.token_id
 
             logger.info(f"Membership registered (off-chain demo): Token #{token_id} for {address}")
 
@@ -77,7 +103,7 @@ class BlockchainService:
 
         except Exception as e:
             logger.error(f"SBT minting error: {e}")
-            return (False, None, None, str(e))
+            return (False, None, None, report(e, "mint_sbt"))
     
     @staticmethod
     async def get_member_by_wallet(wallet_address: str) -> Optional[Member]:
@@ -145,7 +171,7 @@ class BlockchainService:
             
         except Exception as e:
             logger.error(f"Revocation error: {e}")
-            return (False, str(e))
+            return (False, report(e, "revoke_membership"))
 
 
 # Singleton instance

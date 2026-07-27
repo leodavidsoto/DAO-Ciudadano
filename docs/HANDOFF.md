@@ -8,7 +8,7 @@
 
 ## Lee esto primero
 
-Este proyecto **parece** más terminado de lo que está. La UI es pulida, hay 72 tests de backend, 29 de contrato, CI en verde y despliegue funcionando en producción. Eso puede llevarte a asumir que solo faltan detalles. No es así.
+Este proyecto **parece** más terminado de lo que está. La UI es pulida, hay 79 tests de backend, 29 de contrato, CI en verde y despliegue funcionando en producción. Eso puede llevarte a asumir que solo faltan detalles. No es así.
 
 Los tres hechos que tienes que interiorizar antes de tocar una línea:
 
@@ -75,7 +75,7 @@ DAO-Ciudadano/
 │   ├── render.yaml             blueprint (plan free, rootDir backend)
 │   ├── requirements.txt        SOLO producción — mínimo a propósito
 │   ├── requirements-dev.txt    producción + pytest/mongomock/linters
-│   ├── tests/                  72 tests con mongomock-motor
+│   ├── tests/                  79 tests con mongomock-motor
 │   └── app/
 │       ├── core/               config · database · security · middleware
 │       ├── models/schemas.py   modelos Pydantic
@@ -193,7 +193,6 @@ Cuando se tomen, déjalas escritas como ADR en `docs/`.
 
 **Trabajo desbloqueado que puedes tomar ya:**
 
-- **1.10** — umbral de liveness. Hoy cualquier score pasa, incluido 0.1.
 - **1.8** — generar la ABI desde `artifacts/` en el build.
 - **3.2 / 3.3** — votos firmados EIP-712 y nonce anti-replay. El campo `nonce` ya viaja en la petición y se ignora.
 - **3.6** — tesorería real desde un Safe multisig. El backend ya responde `configured: false` honestamente.

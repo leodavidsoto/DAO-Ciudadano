@@ -8,6 +8,7 @@ import asyncio
 
 from ..models import WalletConnectResponse
 from ..core.security import generate_mock_address
+from ..core.errors import report
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ async def connect_wallet():
         
     except Exception as e:
         logger.error(f"Error connecting wallet: {e}")
-        return WalletConnectResponse(ok=False, error=str(e))
+        return WalletConnectResponse(ok=False, error=report(e, "wallet_connect"))
 
 
 @router.get("/balance/{address}")

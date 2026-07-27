@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     SECRET_KEY: str = os.environ.get('SECRET_KEY', 'dev-secret-key')
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
+    # Liveness: minimum score to accept a capture as a live person.
+    # Below this the flow must stop (ROADMAP 1.10 / audit N-9).
+    LIVENESS_MIN_SCORE: float = float(os.environ.get('LIVENESS_MIN_SCORE', '0.75'))
+
     # External Services
     EMERGENT_LLM_KEY: Optional[str] = None
     

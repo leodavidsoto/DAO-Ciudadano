@@ -40,27 +40,48 @@ class Database:
     async def ensure_indexes(cls):
         """Create the indexes the application relies on (idempotent).
 
-        The unique index on members.wallet_address is what actually prevents
-        two memberships for the same wallet under concurrency (ROADMAP 1.11).
+        Each index is created independently: a failure on one must not skip
+        the rest (audit finding N-7). A pre-existing duplicate blocks unique
+        index creation, and the indexes below are the *only* thing preventing
+        double memberships, double votes and duplicated representatives under
+        concurrency — so the ones marked required abort startup instead of
+        letting the service run without its integrity invariants.
         """
-        try:
-            await cls.get_db()["members"].create_index("wallet_address", unique=True)
-            await cls.get_db()["members"].create_index("token_id")
-            # Elections: one candidacy and one vote per member per election.
-            # The unique indexes are what actually enforce this under
-            # concurrency; the router checks only produce friendlier errors.
-            await cls.get_db()["candidacies"].create_index(
-                [("election_id", 1), ("candidate_address", 1)], unique=True
+        # (collection, keys, unique, required)
+        # `required=True` means: without this index the data model can be
+        # corrupted silently, so refuse to start.
+        specs = [
+            ("members", "wallet_address", True, True),
+            ("members", "token_id", True, True),
+            ("votes", [("proposal_id", 1), ("voter_address", 1)], True, True),
+            ("candidacies", [("election_id", 1), ("candidate_address", 1)], True, True),
+            ("election_votes", [("election_id", 1), ("voter_address", 1)], True, True),
+            ("representatives", [("election_id", 1), ("address", 1)], True, True),
+            ("delegations", "delegator", True, True),
+            ("delegations", "delegate", False, False),
+            ("proposals", "id", True, False),
+            ("elections", "id", True, False),
+        ]
+
+        failed_required = []
+        for collection, keys, unique, required in specs:
+            try:
+                await cls.get_db()[collection].create_index(keys, unique=unique)
+            except Exception as e:
+                label = f"{collection}.{keys}"
+                if required:
+                    logger.error(f"Required index missing: {label} — {e}")
+                    failed_required.append(label)
+                else:
+                    logger.warning(f"Optional index not created: {label} — {e}")
+
+        if failed_required:
+            raise RuntimeError(
+                "No se pudieron crear índices de integridad obligatorios: "
+                + ", ".join(failed_required)
+                + ". Suele deberse a documentos duplicados preexistentes; "
+                "audítalos y elimínalos antes de arrancar."
             )
-            await cls.get_db()["election_votes"].create_index(
-                [("election_id", 1), ("voter_address", 1)], unique=True
-            )
-            await cls.get_db()["delegations"].create_index("delegator", unique=True)
-            await cls.get_db()["delegations"].create_index("delegate")
-        except Exception as e:
-            # A pre-existing duplicate in the collection blocks unique index
-            # creation; keep the app bootable and surface it in the logs.
-            logger.warning(f"Could not create members indexes: {e}")
 
 
 # Collections helpers
