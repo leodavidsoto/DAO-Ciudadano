@@ -175,7 +175,7 @@ Cosas que te van a costar tiempo si no las sabes de antemano:
 
 ## Decisiones pendientes — bloquean la Fase 1
 
-No son decisiones técnicas que un agente deba tomar solo: definen custodia de llaves privadas, qué se publica de forma permanente e irreversible sobre cada ciudadano, y qué garantías reales ofrece la DAO. Detalle completo en `ROADMAP.md`.
+No son decisiones técnicas que un agente deba tomar solo: definen custodia de llaves privadas, qué se publica de forma permanente e irreversible sobre cada ciudadano, y qué garantías reales ofrece la DAO. **Hay recomendaciones concretas con su riesgo residual en [`adr/0001-decisiones-fase-1.md`](./adr/0001-decisiones-fase-1.md)**, pendientes de aprobación.
 
 - **D-1 · ¿Quién mintea el SBT?** Backend custodial (lo que el contrato ya permite), usuario con voucher firmado EIP-712, o relayer con meta-transacciones. Las dos últimas exigen redesplegar el contrato.
 - **D-2 · ¿Qué se escribe on-chain como `identityHash`?** El esquema actual es reversible por fuerza bruta y no puede ir a un registro público inmutable.

@@ -7,6 +7,9 @@
 
 ## Decisiones de arquitectura que hay que tomar antes de escribir código
 
+> 📌 **Recomendaciones concretas en [`adr/0001-decisiones-fase-1.md`](./adr/0001-decisiones-fase-1.md)**,
+> con opciones, riesgo residual de cada una y qué desbloquea aprobarlas. Pendiente de decisión.
+
 Estas tres decisiones bloquean todo lo demás. No son opcionales y no tienen respuesta por defecto.
 
 ### D-1 · ¿Quién mintea el SBT?

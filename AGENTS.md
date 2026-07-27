@@ -99,7 +99,7 @@ Hay tres decisiones de arquitectura sin resolver que bloquean la Fase 1 (autenti
 - **D-2** ¿qué se escribe on-chain como `identityHash`? El esquema actual es reversible por fuerza bruta.
 - **D-3** ¿la gobernanza es on-chain o off-chain con firmas verificables?
 
-No son decisiones que un agente deba tomar solo: definen custodia de llaves privadas y qué se publica de forma permanente sobre cada ciudadano. Consúltalas con el dueño del proyecto y deja un ADR en `docs/`.
+No son decisiones que un agente deba tomar solo: definen custodia de llaves privadas y qué se publica de forma permanente sobre cada ciudadano. Las recomendaciones están en [`docs/adr/0001-decisiones-fase-1.md`](./docs/adr/0001-decisiones-fase-1.md), pendientes de aprobación.
 
 ---
 
