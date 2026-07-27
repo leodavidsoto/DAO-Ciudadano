@@ -10,7 +10,7 @@ import { useOnboarding } from '@/context';
 import { useWallet } from '@/hooks';
 
 const WalletStep = () => {
-    const { setWallet, setStep, wallet: onboardingWallet } = useOnboarding();
+    const { setWallet, setStep, setMint, wallet: onboardingWallet, fetchExistingMembership } = useOnboarding();
     const {
         connect,
         address,
@@ -26,6 +26,8 @@ const WalletStep = () => {
     } = useWallet();
 
     const [isChecking, setIsChecking] = useState(true);
+    const [existingToken, setExistingToken] = useState(null);
+    const [checkingMembership, setCheckingMembership] = useState(false);
 
     // Chain the SBT contract is deployed on (see frontend/src/contracts/SBTContract.js)
     const REQUIRED_CHAIN_ID = 11155111; // Sepolia
@@ -44,6 +46,25 @@ const WalletStep = () => {
         if (onboardingWallet.address === address) return;
         setWallet({ address, chainId });
     }, [isConnected, address, chainId, onboardingWallet.address, setWallet]);
+
+    // A wallet that already holds an SBT must not be sent to the mint step:
+    // the backend rejects duplicates and the user hits a dead end reading
+    // "Ya existe un SBT para esta wallet". Detect it here and offer to
+    // continue with the membership they already have.
+    useEffect(() => {
+        if (!isConnected || !address) return;
+        let alive = true;
+        setCheckingMembership(true);
+        fetchExistingMembership(address)
+            .then((member) => { if (alive) setExistingToken(member); })
+            .finally(() => { if (alive) setCheckingMembership(false); });
+        return () => { alive = false; };
+    }, [isConnected, address, fetchExistingMembership]);
+
+    const continueWithExisting = () => {
+        setMint({ ok: true, token_id: existingToken.token_id, tx_hash: existingToken.tx_hash || null });
+        setStep('success');
+    };
 
     // Give time for MetaMask detection
     useEffect(() => {
@@ -191,14 +212,35 @@ const WalletStep = () => {
                             </div>
                         )}
 
-                        <Button
-                            onClick={goToMint}
-                            disabled={isWrongNetwork}
-                            className="cyber-button-premium mt-5 w-full group"
-                        >
-                            CONTINUAR
-                            <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
-                        </Button>
+                        {checkingMembership && (
+                            <p className="text-xs text-gray-400 font-mono mt-4">
+                                Verificando membresía existente...
+                            </p>
+                        )}
+
+                        {!checkingMembership && existingToken && (
+                            <div className="mt-4 p-3 rounded-lg border border-green-500/40 bg-green-500/10 text-left">
+                                <p className="text-green-300 text-xs font-mono mb-2">
+                                    Esta wallet ya tiene membresía (Token #{existingToken.token_id}).
+                                    No hace falta mintear de nuevo.
+                                </p>
+                                <Button onClick={continueWithExisting} className="cyber-button-premium w-full group">
+                                    CONTINUAR CON MI MEMBRESÍA
+                                    <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+                                </Button>
+                            </div>
+                        )}
+
+                        {!checkingMembership && !existingToken && (
+                            <Button
+                                onClick={goToMint}
+                                disabled={isWrongNetwork}
+                                className="cyber-button-premium mt-5 w-full group"
+                            >
+                                CONTINUAR
+                                <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+                            </Button>
+                        )}
                     </SuccessDisplay>
                 )}
             </div>

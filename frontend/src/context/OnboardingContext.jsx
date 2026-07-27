@@ -126,6 +126,36 @@ export const OnboardingProvider = ({ children }) => {
         }
     }, []);
 
+    const loadStats = useCallback(async () => {
+        try {
+            const response = await dashboardAPI.getStats();
+            setStats(response.data);
+        } catch (err) {
+            console.error('Error loading stats:', err);
+        }
+    }, []);
+
+    /**
+     * Look up an existing membership for a wallet.
+     *
+     * Re-entering the flow with a wallet that already holds an SBT used to walk
+     * straight into the mint step and fail with "Ya existe un SBT para esta
+     * wallet": correct on the backend, useless to the user. Returns the member
+     * document when found so the caller can skip minting.
+     */
+    const fetchExistingMembership = useCallback(async (address) => {
+        if (!address) return null;
+        try {
+            const response = await membershipAPI.getByWallet(address);
+            return response.data?.found ? response.data.member : null;
+        } catch (err) {
+            // A lookup failure must not block onboarding: fall through to mint,
+            // where the backend still enforces uniqueness.
+            console.error('Error checking existing membership:', err);
+            return null;
+        }
+    }, []);
+
     const mintSBT = useCallback(async () => {
         if (!wallet.address) return;
 
@@ -143,23 +173,24 @@ export const OnboardingProvider = ({ children }) => {
                 await loadStats();
                 setStep('success');
             } else {
-                setError(response.data.error || 'Error minteando SBT');
+                // The wallet may already hold an SBT (backend rejects duplicates).
+                // Recover it and continue instead of dead-ending on the error.
+                const existing = await fetchExistingMembership(wallet.address);
+                if (existing) {
+                    setMint({ ok: true, token_id: existing.token_id, tx_hash: existing.tx_hash || null });
+                    await loadStats();
+                    setStep('success');
+                } else {
+                    setError(response.data.error || 'Error minteando SBT');
+                }
             }
         } catch (err) {
             setError('Error de conexión en mint');
         } finally {
             setLoading(false);
         }
-    }, [wallet.address, clave.assurance_level, nfc.doc_hash]);
+    }, [wallet.address, clave.assurance_level, nfc.doc_hash, fetchExistingMembership, loadStats]);
 
-    const loadStats = useCallback(async () => {
-        try {
-            const response = await dashboardAPI.getStats();
-            setStats(response.data);
-        } catch (err) {
-            console.error('Error loading stats:', err);
-        }
-    }, []);
 
     // File handling
     const handleFileSelect = useCallback((event) => {
@@ -216,6 +247,7 @@ export const OnboardingProvider = ({ children }) => {
         analyzeLiveness,
         connectWallet,
         mintSBT,
+        fetchExistingMembership,
         loadStats,
         reset,
     };
