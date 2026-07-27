@@ -46,6 +46,17 @@ class Database:
         try:
             await cls.get_db()["members"].create_index("wallet_address", unique=True)
             await cls.get_db()["members"].create_index("token_id")
+            # Elections: one candidacy and one vote per member per election.
+            # The unique indexes are what actually enforce this under
+            # concurrency; the router checks only produce friendlier errors.
+            await cls.get_db()["candidacies"].create_index(
+                [("election_id", 1), ("candidate_address", 1)], unique=True
+            )
+            await cls.get_db()["election_votes"].create_index(
+                [("election_id", 1), ("voter_address", 1)], unique=True
+            )
+            await cls.get_db()["delegations"].create_index("delegator", unique=True)
+            await cls.get_db()["delegations"].create_index("delegate")
         except Exception as e:
             # A pre-existing duplicate in the collection blocks unique index
             # creation; keep the app bootable and surface it in the logs.
@@ -89,4 +100,20 @@ def delegations_collection():
 
 def treasury_transactions_collection():
     return get_collection("treasury_transactions")
+
+
+def elections_collection():
+    return get_collection("elections")
+
+
+def candidacies_collection():
+    return get_collection("candidacies")
+
+
+def election_votes_collection():
+    return get_collection("election_votes")
+
+
+def representatives_collection():
+    return get_collection("representatives")
 

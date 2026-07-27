@@ -13,6 +13,7 @@ from mongomock_motor import AsyncMongoMockClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.database import Database  # noqa: E402
+from app.core.security_middleware import fraud_detector  # noqa: E402
 from main import app  # noqa: E402
 
 
@@ -39,6 +40,11 @@ async def client():
     Database.db = Database.client["test_dao_ciudadana"]
     await Database.ensure_indexes()
     _reset_rate_limiter(app)
+    # The fraud detector is a process-global singleton; clear its in-memory
+    # history so vote/delegation patterns from one test can't flag the next.
+    fraud_detector.vote_history.clear()
+    fraud_detector.delegation_chains.clear()
+    fraud_detector.delegated_to.clear()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:

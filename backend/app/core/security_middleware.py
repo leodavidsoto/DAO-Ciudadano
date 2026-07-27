@@ -207,6 +207,7 @@ class FraudDetector:
     def __init__(self):
         self.vote_history = defaultdict(list)  # address -> [(timestamp, proposal_id)]
         self.delegation_chains = defaultdict(list)  # delegate -> [delegators]
+        self.delegated_to = {}  # delegator -> delegate (each address delegates at most once)
     
     def check_rapid_voting(self, voter_address: str, proposal_id: str) -> tuple[bool, str]:
         """
@@ -232,27 +233,37 @@ class FraudDetector:
     
     def check_delegation_chain(self, delegator: str, delegate: str) -> tuple[bool, str]:
         """
-        Detect circular or excessively deep delegation chains
+        Detect circular or excessively deep delegation chains.
+
+        Walks the OUTGOING delegations starting from the proposed delegate
+        (delegator -> delegate direction — the direction a vote travels).
+        The previous implementation walked delegate -> delegators (backwards)
+        and never detected a real a->b + b->a cycle (audit finding N-3).
+
+        NOTE: state is in-process memory and empty after a restart (M-2);
+        the authoritative cycle check runs against MongoDB in
+        GovernanceService.find_delegation_cycle. This one adds the
+        chain-depth and delegator-count heuristics.
         """
         MAX_CHAIN_DEPTH = 3
         MAX_DELEGATORS = 10
         
-        # Check if this would create a cycle
-        chain = [delegator.lower()]
+        seen = {delegator.lower()}
         current = delegate.lower()
+        depth = 0
         
-        while current in self.delegation_chains:
-            if current in chain:
+        while True:
+            if current in seen:
                 return True, "Circular delegation detected"
-            chain.append(current)
-            if len(chain) > MAX_CHAIN_DEPTH:
+            seen.add(current)
+            depth += 1
+            if depth > MAX_CHAIN_DEPTH:
                 return True, f"Delegation chain too deep (max {MAX_CHAIN_DEPTH})"
-            # Get next in chain
-            delegators = self.delegation_chains[current]
-            if delegators:
-                current = delegators[0]
-            else:
+            # Follow where `current` has delegated its own vote, if anywhere
+            nxt = self.delegated_to.get(current)
+            if nxt is None:
                 break
+            current = nxt
         
         # Check max delegators
         if len(self.delegation_chains[delegate.lower()]) >= MAX_DELEGATORS:
@@ -261,8 +272,22 @@ class FraudDetector:
         return False, ""
     
     def record_delegation(self, delegator: str, delegate: str):
-        """Record a delegation for tracking"""
-        self.delegation_chains[delegate.lower()].append(delegator.lower())
+        """Record a delegation, replacing any previous one by the same delegator"""
+        delegator = delegator.lower()
+        delegate = delegate.lower()
+        previous = self.delegated_to.get(delegator)
+        if previous and delegator in self.delegation_chains[previous]:
+            self.delegation_chains[previous].remove(delegator)
+        self.delegated_to[delegator] = delegate
+        if delegator not in self.delegation_chains[delegate]:
+            self.delegation_chains[delegate].append(delegator)
+    
+    def remove_delegation(self, delegator: str):
+        """Forget a revoked delegation so stale edges don't flag false cycles"""
+        delegator = delegator.lower()
+        previous = self.delegated_to.pop(delegator, None)
+        if previous and delegator in self.delegation_chains[previous]:
+            self.delegation_chains[previous].remove(delegator)
 
 
 # Global fraud detector instance

@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     # External Services
     EMERGENT_LLM_KEY: Optional[str] = None
     
+    # Membership verification source for governance endpoints.
+    # "mongo": members collection is the source of truth (current state).
+    # "onchain": hasMembership() on the SBT contract (ROADMAP Fase 1.5,
+    # not implemented yet — selecting it fails loudly instead of simulating).
+    MEMBERSHIP_SOURCE: str = os.environ.get('MEMBERSHIP_SOURCE', 'mongo')
+    
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW_SECONDS: int = 60

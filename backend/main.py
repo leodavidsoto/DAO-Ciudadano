@@ -25,6 +25,7 @@ from app.core.security_middleware import (
 )
 from app.routers import auth_router, wallet_router, membership_router, dashboard_router
 from app.routers.governance import router as governance_router
+from app.routers.elections import router as elections_router
 
 
 # Configure logging
@@ -131,6 +132,7 @@ app.include_router(wallet_router, prefix="/api")
 app.include_router(membership_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(governance_router, prefix="/api")
+app.include_router(elections_router, prefix="/api")
 
 
 # Health check endpoint

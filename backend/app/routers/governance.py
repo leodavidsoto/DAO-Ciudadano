@@ -2,9 +2,10 @@
 Governance Router
 Handles proposals and voting endpoints for DAO
 Uses MongoDB for persistent storage
-Security: Anti-fraud validation enabled
+Security: membership gating (C-3), delegated vote weight (A-5) and
+anti-fraud checks (A-4) are enforced on every mutating endpoint.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime, timezone, timedelta
@@ -25,6 +26,8 @@ from ..core.security_middleware import (
     generate_nonce,
     hash_vote_data
 )
+from ..services.governance_service import governance_service
+from .deps import ensure_active_member
 
 logger = logging.getLogger(__name__)
 
@@ -139,13 +142,28 @@ class VoteResponse(BaseModel):
     message: Optional[str] = None
     error: Optional[str] = None
     vote_hash: Optional[str] = None  # For verification
+    weight: Optional[int] = None  # Voting power applied to this vote
+
+
+# === Membership dependencies (C-3) ===
+# FastAPI parses the body once; each dependency re-declares the request model
+# so the membership check runs before the endpoint body executes.
+
+async def verified_proposal_creator(request: ProposalCreate) -> ProposalCreate:
+    await ensure_active_member(request.creator_address, "crear propuestas")
+    return request
+
+
+async def verified_voter(request: VoteRequest) -> VoteRequest:
+    await ensure_active_member(request.voter_address, "votar")
+    return request
 
 
 # === Proposal Endpoints ===
 
 @router.post("/proposals", response_model=ProposalResponse)
-async def create_proposal(request: ProposalCreate):
-    """Create a new governance proposal"""
+async def create_proposal(request: ProposalCreate = Depends(verified_proposal_creator)):
+    """Create a new governance proposal (active members only)"""
     try:
         proposal_id = str(uuid.uuid4())[:8]
         now = datetime.now(timezone.utc)
@@ -171,9 +189,11 @@ async def create_proposal(request: ProposalCreate):
         logger.info(f"Proposal created: {proposal_id}")
         return ProposalResponse(**proposal)
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating proposal: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error al crear la propuesta")
 
 
 @router.get("/proposals", response_model=List[ProposalResponse])
@@ -214,7 +234,7 @@ async def get_proposals(status: Optional[str] = None, limit: int = 20):
         
     except Exception as e:
         logger.error(f"Error getting proposals: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error al listar propuestas")
 
 
 @router.get("/proposals/{proposal_id}", response_model=ProposalResponse)
@@ -227,8 +247,34 @@ async def get_proposal(proposal_id: str):
 
 
 @router.post("/vote", response_model=VoteResponse)
-async def cast_vote(request: VoteRequest):
-    """Cast a vote on a proposal"""
+async def cast_vote(request: VoteRequest = Depends(verified_voter)):
+    """Cast a vote on a proposal.
+
+    Weight = 1 (own vote) + active-member delegators (see GovernanceService).
+    An address that delegated its vote must revoke before voting directly.
+    """
+    # Anti-fraud: rapid-voting pattern check (A-4, wired per ROADMAP 3.4)
+    suspicious, reason = fraud_detector.check_rapid_voting(
+        request.voter_address, request.proposal_id
+    )
+    if suspicious:
+        logger.warning(f"Rapid voting blocked: {request.voter_address} ({reason})")
+        raise HTTPException(
+            status_code=429,
+            detail="Actividad de voto sospechosa: demasiados votos en poco tiempo. Intenta más tarde."
+        )
+
+    # Delegated vote cannot also be cast directly (it would double-count)
+    delegate = await governance_service.get_delegate_of(request.voter_address)
+    if delegate:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Has delegado tu voto a {delegate}. "
+                "Revoca la delegación para votar directamente."
+            ),
+        )
+
     try:
         # Get proposal
         proposal = await proposals_collection().find_one({"id": request.proposal_id})
@@ -247,31 +293,55 @@ async def cast_vote(request: VoteRequest):
         if existing_vote:
             return VoteResponse(ok=False, error="Already voted on this proposal")
         
+        # Voting power: own vote + delegations from active members (A-5)
+        weight = await governance_service.voting_power(request.voter_address)
+
+        # Integrity fingerprint of the ballot. NOTE: this is not replay
+        # protection (task 3.3) nor a signature (3.2) — it lets anyone
+        # recompute the hash of what was recorded.
+        nonce = request.nonce or generate_nonce()
+        vote_hash = hash_vote_data(
+            request.proposal_id, request.voter_address, request.vote, nonce
+        )
+
         # Record vote
         vote_record = {
             "proposal_id": request.proposal_id,
             "voter_address": request.voter_address,
             "vote": request.vote,
+            "weight": weight,
+            "nonce": nonce,
+            "vote_hash": vote_hash,
             "timestamp": datetime.now(timezone.utc)
         }
         await votes_collection().insert_one(vote_record)
         
-        # Update vote counts
+        # Update vote counts by the applied weight, not by 1
         update_field = f"votes_{request.vote}" if request.vote in ["for", "against", "abstain"] else "votes_abstain"
         await proposals_collection().update_one(
             {"id": request.proposal_id},
             {
-                "$inc": {update_field: 1, "total_votes": 1}
+                "$inc": {update_field: weight, "total_votes": weight}
             }
         )
         
-        logger.info(f"Vote cast: {request.voter_address} -> {request.vote} on {request.proposal_id}")
+        logger.info(
+            f"Vote cast: {request.voter_address} -> {request.vote} "
+            f"on {request.proposal_id} (weight {weight})"
+        )
         
-        return VoteResponse(ok=True, message=f"Vote recorded: {request.vote}")
+        return VoteResponse(
+            ok=True,
+            message=f"Voto registrado: {request.vote} (peso {weight})",
+            vote_hash=vote_hash,
+            weight=weight,
+        )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error casting vote: {e}")
-        return VoteResponse(ok=False, error=str(e))
+        return VoteResponse(ok=False, error="Error al registrar el voto")
 
 
 @router.get("/stats")
@@ -320,6 +390,15 @@ class DelegationRequest(BaseModel):
     delegator_address: str
     delegate_address: str
 
+    # Addresses were previously stored unvalidated and case-sensitive, which
+    # silently broke lookups (see AUDIT, hallazgo N-4). Same rules as votes.
+    @field_validator('delegator_address', 'delegate_address')
+    @classmethod
+    def validate_address(cls, v):
+        if not verify_eth_address(v):
+            raise ValueError('Invalid Ethereum address format')
+        return v.lower()
+
 
 class DelegationResponse(BaseModel):
     ok: bool
@@ -329,18 +408,66 @@ class DelegationResponse(BaseModel):
     error: Optional[str] = None
 
 
+async def verified_delegator(request: DelegationRequest) -> DelegationRequest:
+    await ensure_active_member(request.delegator_address, "delegar el voto")
+    return request
+
+
 @router.post("/delegate", response_model=DelegationResponse)
-async def delegate_vote(request: DelegationRequest):
-    """Delegate voting power to another address"""
+async def delegate_vote(request: DelegationRequest = Depends(verified_delegator)):
+    """Delegate voting power to another address (active members only)"""
     try:
         if request.delegator_address == request.delegate_address:
             return DelegationResponse(ok=False, error="No puedes delegarte a ti mismo")
-        
-        # Check for circular delegation
-        existing = await delegations_collection().find_one({"delegator": request.delegate_address})
-        if existing and existing.get("delegate") == request.delegator_address:
+
+        # The delegate must also be an active member: delegating to an address
+        # that cannot vote would silently discard the delegator's weight.
+        delegate_member = await members_collection().find_one({
+            "wallet_address": request.delegate_address,
+            "status": "active",
+        })
+        if not delegate_member:
+            return DelegationResponse(
+                ok=False,
+                error=(
+                    f"No puedes delegar en {request.delegate_address}: "
+                    "no es miembro activo de la DAO"
+                ),
+            )
+
+        # Authoritative cycle check against the stored delegation graph
+        # (catches a->b->c->a, not just the direct two-way cycle).
+        if await governance_service.find_delegation_cycle(
+            request.delegator_address, request.delegate_address
+        ):
             return DelegationResponse(ok=False, error="Delegación circular detectada")
-        
+
+        # Cap on received delegations, enforced against the database
+        delegator_count = await delegations_collection().count_documents({
+            "delegate": request.delegate_address,
+            "delegator": {"$ne": request.delegator_address},
+        })
+        if delegator_count >= MAX_DELEGATION_POWER:
+            return DelegationResponse(
+                ok=False,
+                error=f"El delegado ya alcanzó el máximo de {MAX_DELEGATION_POWER} delegaciones",
+            )
+
+        # Anti-fraud heuristics (A-4, wired per ROADMAP 3.4): chain depth and
+        # delegator count over the in-process history.
+        suspicious, reason = fraud_detector.check_delegation_chain(
+            request.delegator_address, request.delegate_address
+        )
+        if suspicious:
+            logger.warning(
+                f"Delegation blocked by fraud detector: "
+                f"{request.delegator_address} -> {request.delegate_address} ({reason})"
+            )
+            return DelegationResponse(
+                ok=False,
+                error="Delegación rechazada por el control antifraude: patrón de delegación sospechoso",
+            )
+
         # Upsert delegation
         await delegations_collection().update_one(
             {"delegator": request.delegator_address},
@@ -353,6 +480,9 @@ async def delegate_vote(request: DelegationRequest):
             },
             upsert=True
         )
+        fraud_detector.record_delegation(
+            request.delegator_address, request.delegate_address
+        )
         
         logger.info(f"Delegation: {request.delegator_address} -> {request.delegate_address}")
         
@@ -362,16 +492,19 @@ async def delegate_vote(request: DelegationRequest):
             delegate=request.delegate_address,
             message="Voto delegado exitosamente"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Delegation error: {e}")
-        return DelegationResponse(ok=False, error=str(e))
+        return DelegationResponse(ok=False, error="Error al delegar el voto")
 
 
 @router.delete("/delegate/{address}")
 async def revoke_delegation(address: str):
     """Revoke vote delegation"""
-    result = await delegations_collection().delete_one({"delegator": address})
+    result = await delegations_collection().delete_one({"delegator": address.lower()})
     if result.deleted_count > 0:
+        fraud_detector.remove_delegation(address)
         return {"ok": True, "message": "Delegación revocada"}
     return {"ok": False, "error": "No hay delegación activa"}
 
@@ -379,7 +512,7 @@ async def revoke_delegation(address: str):
 @router.get("/delegate/{address}")
 async def get_delegation(address: str):
     """Get current delegation for an address"""
-    delegation = await delegations_collection().find_one({"delegator": address})
+    delegation = await delegations_collection().find_one({"delegator": address.lower()})
     if delegation:
         return {
             "delegated": True,
@@ -390,15 +523,22 @@ async def get_delegation(address: str):
 
 @router.get("/delegations/{delegate_address}")
 async def get_delegators(delegate_address: str):
-    """Get all addresses that have delegated to this delegate"""
-    cursor = delegations_collection().find({"delegate": delegate_address})
+    """Get all addresses that have delegated to this delegate.
+
+    voting_power reflects the weight actually applied when voting:
+    only delegators that are active members count (plus the own vote).
+    """
+    address = delegate_address.lower()
+    cursor = delegations_collection().find({"delegate": address})
     delegations = await cursor.to_list(length=100)
     delegators = [d["delegator"] for d in delegations]
-    
+    active_delegators = await governance_service.get_active_delegators(address)
+
     return {
-        "delegate": delegate_address,
+        "delegate": address,
         "delegators": delegators,
-        "voting_power": len(delegators) + 1  # +1 for own vote
+        "active_delegators": active_delegators,
+        "voting_power": 1 + len(active_delegators)
     }
 
 
