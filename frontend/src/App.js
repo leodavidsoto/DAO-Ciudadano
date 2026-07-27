@@ -5,7 +5,7 @@
  *   /            onboarding flow (identity verification + SBT)
  *   /dashboard   citizen governance dashboard
  */
-import React from "react";
+import React, { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { OnboardingProvider } from "./context";
 import { OnboardingPage } from "./pages";
@@ -17,10 +17,17 @@ import {
   DelegationSection,
   TreasurySection,
 } from "./pages/DashboardPage";
+import { warmUpBackend } from "./lib/api";
 import "./App.css";
 import "./styles/premium.css";
 
 const App = () => {
+  // The API sleeps on the free tier. Start waking it as soon as the app
+  // mounts so the first real request does not pay the full boot time.
+  useEffect(() => {
+    warmUpBackend();
+  }, []);
+
   return (
     <BrowserRouter>
       <div className="App">

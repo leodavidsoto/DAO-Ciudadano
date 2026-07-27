@@ -29,7 +29,7 @@ from ..core.security_middleware import (
     hash_vote_data
 )
 from ..services.governance_service import governance_service
-from .deps import ensure_active_member
+from .deps import ensure_active_member, require_integrity_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +152,13 @@ class VoteResponse(BaseModel):
 # so the membership check runs before the endpoint body executes.
 
 async def verified_proposal_creator(request: ProposalCreate) -> ProposalCreate:
+    await require_integrity_indexes("propuesta")
     await ensure_active_member(request.creator_address, "crear propuestas")
     return request
 
 
 async def verified_voter(request: VoteRequest) -> VoteRequest:
+    await require_integrity_indexes("voto")
     await ensure_active_member(request.voter_address, "votar")
     return request
 
@@ -421,6 +423,7 @@ class DelegationResponse(BaseModel):
 
 
 async def verified_delegator(request: DelegationRequest) -> DelegationRequest:
+    await require_integrity_indexes("delegación")
     await ensure_active_member(request.delegator_address, "delegar el voto")
     return request
 

@@ -31,7 +31,7 @@ from ..core.database import (
 )
 from ..core.security_middleware import fraud_detector, verify_eth_address
 from ..services.governance_service import governance_service
-from .deps import ensure_active_member
+from .deps import ensure_active_member, require_integrity_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -181,11 +181,13 @@ class RepresentativeResponse(BaseModel):
 # === Membership dependencies (C-3) ===
 
 async def verified_candidate(request: CandidacyCreate) -> CandidacyCreate:
+    await require_integrity_indexes("candidatura")
     await ensure_active_member(request.candidate_address, "postularse a una elección")
     return request
 
 
 async def verified_election_voter(request: ElectionVoteRequest) -> ElectionVoteRequest:
+    await require_integrity_indexes("voto de elección")
     await ensure_active_member(request.voter_address, "votar en una elección")
     return request
 
@@ -229,6 +231,7 @@ async def create_election(request: ElectionCreate):
     """Open a representative election (nominations start immediately)."""
     # Same gate as proposals: opening an election is a governance action,
     # not something any address on the internet should be able to do.
+    await require_integrity_indexes("elección")
     await ensure_active_member(request.creator_address, "convocar elecciones")
     now = datetime.now(timezone.utc)
     election = {

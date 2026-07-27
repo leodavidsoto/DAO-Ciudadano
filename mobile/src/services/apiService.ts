@@ -13,9 +13,11 @@ class ApiService {
     private token: string | null = null;
 
     constructor() {
+        // Wide timeout on purpose: the API runs on a free tier that sleeps
+        // after 15 minutes idle and needs about a minute to wake up.
         this.client = axios.create({
             baseURL: API_BASE_URL,
-            timeout: 30000,
+            timeout: 90000,
             headers: {
                 'Content-Type': 'application/json',
             },

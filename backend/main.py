@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
     mongo_url = os.environ.get('MONGO_URL', settings.MONGO_URL)
     db_name = os.environ.get('DB_NAME', settings.DB_NAME)
     Database.connect(mongo_url, db_name)
-    await Database.ensure_indexes()
+    Database.schedule_index_creation()
 
     yield
     
@@ -139,8 +139,10 @@ app.include_router(elections_router, prefix="/api")
 @app.get("/health")
 async def health_check():
     """Health check endpoint for monitoring"""
+    integrity = Database.integrity_status()
     return {
-        "status": "healthy",
+        "status": "healthy" if integrity["ready"] else "degraded",
+        "integrity": integrity,
         "version": settings.APP_VERSION,
         "timestamp": __import__('datetime').datetime.now().isoformat()
     }

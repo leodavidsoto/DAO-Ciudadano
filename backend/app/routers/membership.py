@@ -9,6 +9,7 @@ import logging
 
 from ..models import MintSBTRequest, MintSBTResponse
 from ..services.blockchain_service import blockchain_service
+from .deps import require_integrity_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,10 @@ async def mint_sbt(request: MintSBTRequest):
     DEMO MODE: nothing is written on-chain yet (ROADMAP task 1.5, blocked on
     D-1/D-2), so tx_hash is null. Duplicate wallets are rejected.
     """
+    # Without the unique indexes on members, two concurrent mints can create
+    # duplicate memberships or collide on token_id (audit N-4).
+    await require_integrity_indexes("minteo")
+
     ok, token_id, tx_hash, error = await blockchain_service.mint_sbt(
         wallet_address=request.wallet_address,
         assurance_level=request.assurance_level,

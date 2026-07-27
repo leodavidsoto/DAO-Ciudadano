@@ -146,3 +146,58 @@ async def test_errors_do_not_leak_internals(client):
     detail = str(response.json())
     for leak in ("Traceback", "mongodb://", "mongomock", "motor", "pymongo"):
         assert leak not in detail, f"la respuesta filtra '{leak}'"
+
+
+# === Arranque no bloqueante vs garantías (reconciliación con el PR #2) ===
+
+async def test_writes_are_refused_while_indexes_are_missing(client):
+    """Startup does not block on index creation, so the guarantee moves here.
+
+    Without the unique indexes the router pre-checks are only friendly
+    messages that two concurrent requests can both pass, so writes must be
+    refused (503) rather than accepted unprotected.
+    """
+    original_ready = Database._indexes_ready
+    original_missing = list(Database._missing_required_indexes)
+    try:
+        Database._indexes_ready = False
+        Database._missing_required_indexes = ["members.wallet_address"]
+
+        response = await _mint(client, ADDR_A)
+        assert response.status_code == 503
+        assert "integridad" in response.json()["detail"].lower()
+    finally:
+        Database._indexes_ready = original_ready
+        Database._missing_required_indexes = original_missing
+
+
+async def test_reads_still_work_while_indexes_are_missing(client):
+    """Only writes are gated: a degraded service must stay readable."""
+    original_ready = Database._indexes_ready
+    try:
+        Database._indexes_ready = False
+        Database._missing_required_indexes = ["members.wallet_address"]
+
+        assert (await client.get("/api/dashboard/stats")).status_code == 200
+        assert (await client.get("/api/governance/proposals")).status_code == 200
+    finally:
+        Database._indexes_ready = original_ready
+        Database._missing_required_indexes = []
+
+
+async def test_health_reports_integrity_state(client):
+    """/health must distinguish healthy from degraded, not just say 'healthy'."""
+    healthy = (await client.get("/health")).json()
+    assert healthy["status"] == "healthy"
+    assert healthy["integrity"]["ready"] is True
+
+    original = Database._indexes_ready
+    try:
+        Database._indexes_ready = False
+        Database._missing_required_indexes = ["votes.compound"]
+        degraded = (await client.get("/health")).json()
+        assert degraded["status"] == "degraded"
+        assert "votes.compound" in degraded["integrity"]["missing_required_indexes"]
+    finally:
+        Database._indexes_ready = original
+        Database._missing_required_indexes = []

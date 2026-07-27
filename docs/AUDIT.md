@@ -308,3 +308,33 @@ devolvió 403). Ambos se comprobaron aquí el 27-07-2026: `totalSupply()` sigue 
 backend en producción responde con datos reales (`total_members: 1`). El resumen ejecutivo
 de este informe todavía dice que el backend está suspendido; eso corresponde al estado del
 26-07 y **ya no es cierto**: el servicio fue redesplegado con MongoDB Atlas.
+
+
+---
+
+## Reconciliación: arranque no bloqueante vs garantías de integridad (27-07-2026)
+
+El PR #2 proponía un arranque **no bloqueante** (no esperar a los índices) y el arreglo de
+**N-7** hacía lo contrario (abortar si falta un índice obligatorio). Parecían incompatibles,
+pero estaban mezclando dos fallos que sólo se parecen en el log:
+
+| Causa | Naturaleza | Tratamiento correcto |
+|---|---|---|
+| El clúster no responde (cold start de Atlas, corte de red) | Transitoria | Reintentar con backoff. Tumbar el servicio convierte un primer request lento en un despliegue fallido. |
+| Un documento ya viola la restricción (`DuplicateKeyError`, código 11000) | Permanente | Reintentar no lo arregla nunca. La colección queda sin proteger y hay que rechazar escrituras hasta limpiar los duplicados. |
+
+**Resolución adoptada:**
+
+- El arranque **no bloquea**: los índices se construyen en segundo plano con reintentos
+  (`INDEX_RETRY_DELAYS_S`), y `serverSelectionTimeoutMS` baja de 30 s a 8 s.
+- La garantía se traslada al punto de escritura: `require_integrity_indexes` devuelve **503**
+  mientras falte un índice único obligatorio. Sin él, las comprobaciones previas de los
+  routers son sólo mensajes amables que dos peticiones concurrentes pueden pasar a la vez.
+- Las **lecturas siguen funcionando**: un servicio degradado debe poder consultarse.
+- `/health` distingue `healthy` de `degraded` y nombra los índices que faltan, en vez de
+  decir siempre "healthy".
+
+Medido: el arranque sin MongoDB alcanzable pasó de ~30 s a **2 s**, y `/health` responde
+`degraded` con el detalle. Cobertura en `backend/tests/test_integrity.py` (10 tests): escritura
+rechazada con 503, lectura que sigue funcionando y `/health` reportando ambos estados.
+**82 tests de backend en verde.**

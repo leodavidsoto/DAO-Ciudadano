@@ -7,14 +7,33 @@ import axios from 'axios';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
 const API_BASE = `${BACKEND_URL}/api`;
 
+// The API runs on a free tier that spins down after 15 minutes of inactivity
+// and takes about a minute to boot again. A 30s timeout would abort during
+// that wake-up, so requests get a wider window and the app warms the service
+// up on load (see warmUpBackend below).
+const REQUEST_TIMEOUT_MS = 90000;
+
 // Create axios instance with defaults
 const api = axios.create({
     baseURL: API_BASE,
     headers: {
         'Content-Type': 'application/json',
     },
-    timeout: 30000,
+    timeout: REQUEST_TIMEOUT_MS,
 });
+
+/**
+ * Ping the health endpoint so a sleeping instance starts booting while the
+ * user is still reading the first screen. Failures are irrelevant here: this
+ * is a best-effort warm-up, never a gate on rendering the app.
+ *
+ * /health sits at the server root, outside the /api prefix, so it does not
+ * go through the `api` instance.
+ */
+export const warmUpBackend = () =>
+    axios
+        .get(`${BACKEND_URL}/health`, { timeout: REQUEST_TIMEOUT_MS })
+        .catch(() => null);
 
 // Request interceptor
 api.interceptors.request.use(
@@ -47,7 +66,7 @@ export const authAPI = {
         formData.append('file', file);
         return api.post('/auth/liveness', formData, {
             headers: { 'Content-Type': 'multipart/form-data' },
-            timeout: 60000, // Longer timeout for AI processing
+            timeout: 120000, // Longer timeout: AI processing on top of a possible cold start
         });
     },
     // RUT + Email registration
