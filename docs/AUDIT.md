@@ -12,6 +12,30 @@
 > Fase 3.6) fueron abordados en la **Fase 0** (rama `fase-0-higiene-y-verdad`). C-5 (tests del
 > contrato) se cerró con la suite de `contracts/test/`. Los críticos C-1…C-4 y C-6 siguen abiertos.
 >
+> 📌 **Nota (tercera pasada, 26-07-2026) — gobernanza:** cerrados **C-3**, **A-4**, **A-5**
+> y **M-10**.
+>
+> - **C-3**: todos los endpoints mutantes de gobernanza (crear propuesta, votar, delegar,
+>   convocar elección, postularse, votar en elección) exigen membresía activa vía
+>   `MembershipVerifier` (`backend/app/services/membership_verifier.py`). La implementación
+>   Mongo es la fuente de verdad hasta que exista el minteo on-chain;
+>   `OnChainMembershipVerifier` está deliberadamente **sin implementar** y lanza
+>   `NotImplementedError` en vez de simular. Se elige con `MEMBERSHIP_SOURCE`.
+> - **A-5**: `voting_power` = 1 + delegadores que sean miembros activos. Las delegaciones no
+>   son transitivas y quien delegó no puede votar directamente mientras la delegación siga
+>   vigente. El peso se persiste en el voto y se suma a los contadores.
+> - **A-4**: `fraud_detector` estaba importado y nunca se llamaba; ahora `check_rapid_voting`
+>   se ejecuta al votar y `check_delegation_chain` al delegar.
+> - **M-10**: la UI de gobernanza dejó de ser código muerto. `App.js` tiene router y
+>   `/dashboard` monta propuestas, elecciones, delegación y tesorería.
+> - **Nuevo módulo**: elecciones de representantes (candidaturas, escaños, mandatos,
+>   resultados), con los mismos controles de membresía y peso de voto.
+> - **A-9 (resto)**: `TreasuryDashboard` ya no muestra `$0` con badge "Activo" cuando el
+>   backend responde `configured: false`; distingue *sin configurar* de *vacía*.
+>
+> Siguen abiertos los críticos **C-1**, **C-2**, **C-4** y **C-6** (autenticación, minteo real
+> on-chain y tratamiento de PII), todos dependientes de la Fase 1.
+
 > 📌 **Nota (segunda pasada, 26-07-2026):** la Fase 2 quedó completa — tests de backend con
 > `pytest` + `mongomock` (2.2), `backend_test.py` y `test_result.md` eliminados (2.3 / M-14),
 > CI en GitHub Actions con backend, contratos, slither y build del frontend (2.4, 2.5), y

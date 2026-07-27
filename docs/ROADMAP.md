@@ -119,6 +119,11 @@ Objetivo: cerrar C-3, A-4, A-5, A-9 y M-10.
 
 | # | Tarea | Criterio de aceptación |
 |---|---|---|
+> **Estado 26-07-2026:** 3.1, 3.4, 3.5 y 3.7 implementados. La verificación de membresía
+> usa MongoDB con la interfaz lista para conmutar a on-chain (`MEMBERSHIP_SOURCE`). Añadido
+> fuera de plan: módulo de elecciones de representantes. Pendientes: 3.2 (votos firmados
+> EIP-712), 3.3 (nonce anti-replay), 3.6 (tesorería real), 3.8 (Redis) y 3.9.
+
 | 3.1 | **Verificación de membresía para votar**: consultar `hasMembership(address)` on-chain (con caché corta) antes de aceptar un voto o una propuesta | Una dirección sin SBT recibe 403 |
 | 3.2 | **Votos firmados**: cada voto es un mensaje EIP-712 firmado por el votante; se almacena mensaje + firma; endpoint público de reverificación | Cualquier tercero puede recomputar el resultado sin confiar en el servidor |
 | 3.3 | **Protección de replay real**: usar el `nonce` que ya viaja en `VoteRequest` y validarlo contra los ya consumidos | Reenviar un voto firmado da error |
