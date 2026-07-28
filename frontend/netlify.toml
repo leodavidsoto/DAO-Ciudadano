@@ -1,29 +1,61 @@
-# Netlify build settings
+# Netlify — build reproducible y endurecido
+#
+# La versión de Node se fija aquí y en .nvmrc para que el build local y el de
+# Netlify sean el mismo. Sin fijarla, Netlify elige una por su cuenta y un
+# build que pasa en local puede fallar —o peor, salir distinto— en producción.
+
 [build]
   command = "npm run build"
   publish = "build"
 
-# Environment variables
-# IMPORTANTE: REACT_APP_BACKEND_URL cambia si se recrea el servicio en Render.
-# Al actualizarla aquí hay que actualizar también CORS_ORIGINS en el backend
-# con este mismo dominio de Netlify, o el navegador bloqueará las peticiones.
-# Ver backend/DEPLOY.md, paso 3.
 [build.environment]
+  # Debe coincidir con frontend/.nvmrc y con el CI de GitHub Actions.
+  NODE_VERSION = "22"
+  # El lockfile tiene conflictos de peer deps que npm 7+ trata como error.
+  # Es lo mismo que usa el CI, así que la instalación es reproducible.
+  NPM_FLAGS = "--legacy-peer-deps"
+
+  # IMPORTANTE: REACT_APP_BACKEND_URL cambia si se recrea el servicio en
+  # Render. Al actualizarla hay que actualizar también CORS_ORIGINS en el
+  # backend con este mismo dominio, o el navegador bloqueará todas las
+  # peticiones sin error visible en pantalla. Ver backend/DEPLOY.md, paso 3.
   REACT_APP_BACKEND_URL = "https://dao-ciudadana-api.onrender.com"
+  # ⚠️ Dirección del contrato ANTERIOR (Ownable, identityHash como string).
+  # Actualizar tras el redespliegue descrito en docs/adr/0001-decisiones-fase-1.md.
   REACT_APP_SBT_CONTRACT_SEPOLIA = "0x813fd379F715107b2451553d97f29408d8185f0e"
 
-# SPA routing - redirect all routes to index.html
+# Routing SPA: /dashboard y sus subrutas las resuelve React Router en cliente,
+# así que todo lo que no sea un archivo real cae en index.html.
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
 
-# Security headers
+# === Cabeceras de seguridad ===
 [[headers]]
   for = "/*"
   [headers.values]
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
     X-Frame-Options = "DENY"
-    X-XSS-Protection = "1; mode=block"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+    # La cámara se permite: el paso de liveness la necesita. El resto se niega
+    # explícitamente para que un script inyectado no pueda pedirlas.
+    Permissions-Policy = "camera=(self), microphone=(), geolocation=(), payment=(), usb=()"
+    # X-XSS-Protection se retira a propósito: está obsoleta, ningún navegador
+    # actual la implementa y su filtro heurístico llegó a introducir
+    # vulnerabilidades. La protección real es la CSP del backend.
 
+# El shell de la SPA debe revalidarse siempre: si se cachea, una persona puede
+# quedarse con un index.html viejo apuntando a bundles que ya no existen.
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Los assets llevan hash en el nombre, así que un cambio produce un nombre
+# nuevo. Son inmutables por construcción y se pueden cachear un año.
+[[headers]]
+  for = "/static/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
