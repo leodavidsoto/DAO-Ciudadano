@@ -12,6 +12,34 @@
 > Fase 3.6) fueron abordados en la **Fase 0** (rama `fase-0-higiene-y-verdad`). C-5 (tests del
 > contrato) se cerró con la suite de `contracts/test/`. Los críticos C-1…C-4 y C-6 siguen abiertos.
 >
+> 📌 **Nota (quinta pasada, 27-07-2026) — Fase 1 implementada:** cerrados en código
+> **C-1**, **C-2**, **C-4**, **C-6**, **A-3** y **N-9**, más las decisiones D-1, D-2 y D-3
+> del [ADR 0001](./adr/0001-decisiones-fase-1.md).
+>
+> - **C-1 / C-6**: sesiones por firma de wallet (EIP-4361). La dirección que actúa sale del
+>   token de sesión, nunca del cuerpo de la petición. `ensure_acts_as_self` rechaza actuar
+>   en nombre de otra. El login por RUT+email deja de ser vía de autenticación.
+> - **C-2**: `chain_service` firma y envía la transacción, espera el recibo y lee el
+>   `tokenId` del evento. Sin cadena configurada el minteo on-chain queda **deshabilitado**
+>   y el modo demo nunca fabrica un `tx_hash`. Si la transacción revierte **no** hay
+>   retroceso silencioso a un registro local.
+> - **C-4**: `sha256(RUT)[:16]` sustituido por HMAC-SHA256 con pepper (32 bytes), y RUT,
+>   email y nombre cifrados en reposo con índices ciegos para poder consultarlos. Un test
+>   vuelca la colección y verifica que no aparece nada en claro.
+> - **A-3 / N-9**: el liveness falla cerrado y aplica umbral mínimo.
+> - **Contrato**: `AccessControl` con `MINTER_ROLE` separado de `ADMIN_ROLE`, e
+>   `identityHash` en `bytes32`.
+> - **D-3**: papeletas EIP-712 firmadas y verificables por terceros, con el nonce consumido
+>   contra un índice único.
+>
+> **132 tests de backend y 32 de contrato.** Dos hallazgos aparecieron al implementar:
+> `/api/membership/mint` seguía aceptando peticiones anónimas, y el camino on-chain tenía
+> un `cls` dentro de un `staticmethod`. Ambos corregidos.
+>
+> ⚠️ **Cerrado en código no es cerrado en producción.** El contrato nuevo no está
+> desplegado, la llave del minter no existe y los secretos no están configurados. Hasta
+> entonces `totalSupply()` sigue en 0 y el backend corre en modo demo explícito.
+
 > 📌 **Nota (tercera pasada, 26-07-2026) — gobernanza:** cerrados **C-3**, **A-4**, **A-5**
 > y **M-10**.
 >

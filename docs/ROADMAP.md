@@ -72,7 +72,12 @@ Objetivo: que el repositorio sea levantable y que la UI deje de afirmar cosas fa
 
 ---
 
-## Fase 1 — Autenticación y minteo real (2–3 semanas) · **BLOQUEANTE**
+## Fase 1 — Autenticación y minteo real · ✅ **IMPLEMENTADA EN CÓDIGO**
+
+> **Estado 27-07-2026:** 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 1.8, 1.10, 1.11 y 1.12 hechos.
+> Pendiente **1.6**: el redespliegue con `MINTER_ROLE` requiere una persona con la llave.
+> **Nada de esto rige en producción hasta desplegar el contrato y configurar los secretos**
+> — ver `HANDOFF.md`, sección «Lo que necesita una persona, no un agente».
 
 Objetivo: cerrar C-1, C-2 y C-6. Al terminar, un SBT existe de verdad y solo lo obtiene quien se verificó.
 

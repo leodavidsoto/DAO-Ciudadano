@@ -72,7 +72,7 @@ curl -s -X POST https://ethereum-sepolia-rpc.publicnode.com \
 # Backend
 cd backend && pip install -r requirements-dev.txt
 uvicorn main:app --reload --port 8000
-pytest -q                                   # 82 tests
+pytest -q                                   # 132 tests
 
 # Frontend
 cd frontend && npm install --legacy-peer-deps
@@ -81,7 +81,7 @@ npm run build
 
 # Contratos
 cd contracts && npm install
-npx hardhat test                            # 29 tests
+npx hardhat test                            # 32 tests
 npx hardhat coverage
 ```
 

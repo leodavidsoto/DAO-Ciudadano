@@ -1,6 +1,6 @@
 # ADR 0001 — Decisiones que bloquean la Fase 1
 
-**Estado:** 🟡 Propuesto — pendiente de aprobación del dueño del proyecto
+**Estado:** ✅ Aceptado e implementado en código (27-07-2026)
 **Fecha:** 27 de julio de 2026
 **Contexto:** [`../AUDIT.md`](../AUDIT.md) · [`../ROADMAP.md`](../ROADMAP.md)
 
@@ -139,6 +139,14 @@ La firma impide **fabricar** votos, pero no impide **censurarlos**: el operador 
 > Completar al aprobar. Registrar aquí las decisiones tomadas, quién las tomó y en qué fecha,
 > y cambiar el estado del documento a **Aceptado**.
 
-- **D-1:** _pendiente_
-- **D-2:** _pendiente_
-- **D-3:** _pendiente_
+- **D-1:** ✅ Opción A — backend custodial con `MINTER_ROLE` separado de `ADMIN_ROLE`.
+  Implementado en `contracts/contracts/DAOCiudadanaSBT.sol` y `app/services/chain_service.py`.
+- **D-2:** ✅ HMAC-SHA256 con pepper, 32 bytes, `bytes32` on-chain.
+  Implementado en `app/core/identity.py`.
+- **D-3:** ✅ Off-chain firmado con EIP-712. Implementado en `app/services/ballot_service.py`.
+
+**Pendiente de ejecución, no de decisión:** desplegar el contrato con las direcciones de
+admin y minter, generar los secretos y configurarlos en Render. Ver `HANDOFF.md`.
+
+**Los riesgos residuales de las tres decisiones siguen vigentes** y están descritos arriba.
+No desaparecieron al implementarlas.
