@@ -201,3 +201,71 @@ async def test_health_reports_integrity_state(client):
     finally:
         Database._indexes_ready = original
         Database._missing_required_indexes = []
+
+
+# === Hallazgos de la auditoría del 28-07-2026 (N-10, N-12, N-14) ===
+
+async def test_forwarded_header_cannot_rotate_the_rate_limit_bucket(client):
+    """X-Forwarded-For is client-controlled (N-10).
+
+    With no trusted proxy declared it must be ignored, or anyone could send a
+    fresh value per request and never hit a limit — while growing the
+    in-memory state without bound.
+    """
+    from app.core.config import settings
+    from app.core.security_middleware import RateLimitMiddleware
+
+    middleware = RateLimitMiddleware(app=None)
+    original = settings.TRUSTED_PROXY_COUNT
+    try:
+        settings.TRUSTED_PROXY_COUNT = 0
+
+        class _Req:
+            headers = {"X-Forwarded-For": "1.2.3.4"}
+            client = type("C", (), {"host": "10.0.0.1"})()
+
+        assert middleware._get_client_ip(_Req()) == "10.0.0.1", (
+            "se está confiando en X-Forwarded-For sin proxy declarado"
+        )
+    finally:
+        settings.TRUSTED_PROXY_COUNT = original
+
+
+def test_rate_limit_state_is_bounded():
+    """The tracking maps must not grow without bound under a burst."""
+    import time
+
+    from app.core.security_middleware import MAX_TRACKED_CLIENTS, RateLimitMiddleware
+
+    middleware = RateLimitMiddleware(app=None)
+    now = time.time()
+    for i in range(MAX_TRACKED_CLIENTS + 500):
+        middleware.requests[f"client-{i}"] = [now - 120]  # stale
+    middleware._evict_if_needed(now)
+
+    assert len(middleware.requests) < MAX_TRACKED_CLIENTS + 500
+
+
+async def test_public_member_endpoint_hides_the_identity_commitment(client):
+    """doc_hash is the HMAC of the RUT and goes on-chain (N-12).
+
+    Serving it from an unauthenticated endpoint would let anyone harvest every
+    member's commitment and correlate it with the chain.
+    """
+    address = "0x" + "7c" * 20
+    await client.post("/api/membership/mint", json={
+        "wallet_address": address, "assurance_level": "AL2",
+        "doc_hash": "0x" + "9d" * 32,
+    })
+
+    body = (await client.get(f"/api/membership/member/{address}")).json()
+    assert body["found"] is True
+    assert "doc_hash" not in body["member"], "el endpoint público expone doc_hash"
+    assert "9d9d" not in str(body)
+
+
+async def test_health_reports_the_database(client):
+    """A 200 while MongoDB is unreachable hides a total outage (N-14)."""
+    body = (await client.get("/health")).json()
+    assert "database" in body
+    assert body["database"]["reachable"] is True

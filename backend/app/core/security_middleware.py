@@ -5,6 +5,8 @@ Rate limiting, CSRF protection, and security headers
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from .config import settings
 from collections import defaultdict
 from datetime import datetime, timedelta
 import asyncio
@@ -14,6 +16,9 @@ import secrets
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Ceiling on rate-limit buckets held in memory (audit finding N-10).
+MAX_TRACKED_CLIENTS = 10000
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -27,6 +32,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.sensitive_paths_limit = sensitive_paths_limit
         self.requests = defaultdict(list)
         self.failed_attempts = defaultdict(int)
+        # Hard ceiling on tracked clients. Without it, a burst from many
+        # addresses grows these dicts until the process runs out of memory
+        # (audit finding N-10). Evicting the oldest bucket is safe: it only
+        # forgets history, and forgetting under pressure beats dying.
+        self.max_tracked_clients = MAX_TRACKED_CLIENTS
         
         # Sensitive paths that need stricter limits
         self.sensitive_paths = [
@@ -67,7 +77,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             delay = min(self.failed_attempts[client_ip] * 0.5, 30)  # Max 30 seconds
             await asyncio.sleep(delay)
         
-        # Record request
+        # Record request, evicting stale buckets first so the state cannot
+        # grow without bound.
+        self._evict_if_needed(now)
         self.requests[key].append(now)
         
         # Process request
@@ -81,11 +93,49 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         
         return response
     
+    def _evict_if_needed(self, now: float) -> None:
+        """Drop buckets with no recent activity once the map grows too large."""
+        if len(self.requests) < self.max_tracked_clients:
+            return
+
+        stale = [k for k, times in self.requests.items()
+                 if not times or now - times[-1] >= 60]
+        for key in stale:
+            del self.requests[key]
+
+        # Still over the ceiling: everything is active, so drop the oldest
+        # buckets. Losing history for the least recent client is preferable
+        # to unbounded growth.
+        if len(self.requests) >= self.max_tracked_clients:
+            oldest = sorted(self.requests.items(), key=lambda kv: kv[1][-1] if kv[1] else 0)
+            for key, _ in oldest[: len(self.requests) // 4]:
+                del self.requests[key]
+
+        if len(self.failed_attempts) >= self.max_tracked_clients:
+            self.failed_attempts.clear()
+            logger.warning("Cleared failed-attempt counters: tracking ceiling reached")
+
     def _get_client_ip(self, request: Request) -> str:
-        """Get real client IP, accounting for proxies"""
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
+        """Client IP for rate-limiting purposes.
+
+        X-Forwarded-For is CLIENT-CONTROLLED: anyone can set it to a random
+        value on every request and get a fresh bucket, which turns the rate
+        limiter off and — worse — grows the in-memory state without bound
+        (audit finding N-10).
+
+        It is honoured only when TRUSTED_PROXY_COUNT says a reverse proxy is
+        in front, and even then we take the entry that proxy appended rather
+        than the leftmost one, which is the part the client can forge.
+        """
+        trusted = settings.TRUSTED_PROXY_COUNT
+        if trusted > 0:
+            forwarded = request.headers.get("X-Forwarded-For")
+            if forwarded:
+                hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+                # The last `trusted` entries were appended by our own proxies;
+                # the client address is the one just before them.
+                if len(hops) >= trusted:
+                    return hops[-trusted]
         return request.client.host if request.client else "unknown"
 
 

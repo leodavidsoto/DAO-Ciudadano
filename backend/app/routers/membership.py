@@ -15,6 +15,24 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/membership", tags=["Membership"])
 
+def _public_view(member) -> dict:
+    """Fields safe to return on a public endpoint.
+
+    `doc_hash` is the identity commitment: HMAC of the RUT, and the same value
+    that goes on-chain. Returning it from an unauthenticated endpoint let
+    anyone harvest the commitments of every member and correlate them with the
+    chain (audit finding N-12). It is deliberately absent here.
+    """
+    return {
+        "wallet_address": member.wallet_address,
+        "token_id": member.token_id,
+        "assurance_level": member.assurance_level,
+        "status": member.status,
+        "created_at": member.created_at,
+        "tx_hash": member.tx_hash,
+    }
+
+
 
 @router.post("/mint", response_model=MintSBTResponse)
 async def mint_sbt(
@@ -75,6 +93,6 @@ async def get_member_by_wallet(wallet_address: str):
     member = await blockchain_service.get_member_by_wallet(wallet_address)
 
     if member:
-        return {"found": True, "member": member.model_dump()}
+        return {"found": True, "member": _public_view(member)}
 
     return {"found": False, "wallet_address": wallet_address}

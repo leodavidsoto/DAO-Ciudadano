@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     # not implemented yet — selecting it fails loudly instead of simulating).
     MEMBERSHIP_SOURCE: str = os.environ.get('MEMBERSHIP_SOURCE', 'mongo')
     
+    # Number of reverse proxies in front of the app. 0 means X-Forwarded-For
+    # is IGNORED, because a client-controlled header would otherwise let anyone
+    # rotate their rate-limit bucket at will (audit finding N-10).
+    # Render terminates TLS and adds one hop: set to 1 there.
+    TRUSTED_PROXY_COUNT: int = int(os.environ.get('TRUSTED_PROXY_COUNT', '0'))
+
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW_SECONDS: int = 60

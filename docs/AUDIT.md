@@ -366,3 +366,36 @@ Medido: el arranque sin MongoDB alcanzable pasó de ~30 s a **2 s**, y `/health`
 `degraded` con el detalle. Cobertura en `backend/tests/test_integrity.py` (10 tests): escritura
 rechazada con 503, lectura que sigue funcionando y `/health` reportando ambos estados.
 **82 tests de backend en verde.**
+
+
+---
+
+## Hallazgos nuevos (auditoría externa, 28-07-2026) — N-10 a N-16
+
+Reportados sobre el estado **anterior** a la Fase 1 (72 tests de backend, 29 de contrato).
+Se verificó cada uno contra `main` actual antes de aceptarlo.
+
+| ID | Hallazgo | Severidad | Estado |
+|---|---|---|---|
+| N-10 | **Rate limiter evadible y sin techo de memoria.** `X-Forwarded-For` es controlado por el cliente: mandar un valor distinto en cada petición daba un cubo nuevo y hacía crecer el estado en memoria sin límite. | Alta | ✅ Cerrado — la cabecera solo se honra si `TRUSTED_PROXY_COUNT > 0`, y se toma el salto que añadió el proxy, no el izquierdo que el cliente puede falsificar. Estado acotado con expulsión de cubos inactivos. |
+| N-11 | **Autoavance inseguro del onboarding.** Un `setTimeout` de 1,5 s podía llevar al minteo antes de que resolviera la consulta de membresía y saltándose la validación de red. | Alta | ✅ Cerrado — el avance ya no ocurre por temporizador; requiere acción del usuario y que las comprobaciones hayan resuelto. |
+| N-12 | **`doc_hash` expuesto públicamente.** Es el HMAC del RUT y el mismo valor que va on-chain; servirlo sin autenticar permitía cosechar los compromisos de todos los miembros y correlacionarlos con la cadena. | Alta | ✅ Cerrado — vista pública explícita que lo omite. |
+| N-13 | Duplicación concurrente de RUT/email. | Alta | ✅ Ya cerrado — los índices únicos sobre `rut_key` y `email_key` llegaron con el cifrado de PII. |
+| N-14 | **Health check engañoso.** Devolvía 200 aunque MongoDB fuera inalcanzable, ocultando una caída total al orquestador. | Media | ✅ Cerrado — hace ping a la base y responde **503** si no está sana. |
+| N-15 | **Fallback `0xDOC` inventado.** Sin verificación de identidad se enviaba un valor de relleno, fabricando justo la evidencia que el SBT debe acreditar. | Alta | ✅ Cerrado — sin `doc_hash` no se mintea. Además el contrato ahora exige 32 bytes. |
+| N-16 | **CI permisivo.** El build del frontend silenciaba los warnings alegando que se controlaban aparte, cosa que no hacía nadie. | Media | ✅ Cerrado — paso de lint con `--max-warnings=0`. El hueco del móvil sigue documentado y **abierto**: depende de la tarea 4.3. |
+
+### Sobre la reproducción de N-4
+
+Esa auditoría reprodujo la colisión concurrente de `token_id` (dos wallets con `token_id=1`)
+**contra el código anterior** al arreglo. Reproducida sobre `main` actual con el mismo
+método, ya no ocurre: el índice único sobre `token_id` más el reintento acotado la impiden.
+La evidencia de la colisión es válida para el commit que auditaron, no para el estado actual.
+
+### Lo que sigue siendo cierto de su conclusión
+
+Que los cambios no convierten esto en infraestructura apta para producción. Es correcto,
+aunque por razones distintas a las que enumeraban: la autenticación, el minteo real y la
+identidad ya están **en código**, pero el contrato nuevo no está desplegado, la llave del
+minter no existe y los secretos no están configurados. Y la identidad verificable
+(ClaveÚnica, PACE) sigue siendo Fase 4 y depende de terceros.

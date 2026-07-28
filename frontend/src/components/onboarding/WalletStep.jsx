@@ -34,6 +34,9 @@ const WalletStep = () => {
     const isWrongNetwork = isConnected && chainId != null && Number(chainId) !== REQUIRED_CHAIN_ID;
 
     const goToMint = () => {
+        // Belt and braces: the button is already disabled on the wrong
+        // network, but a stale render must not be able to slip through.
+        if (isWrongNetwork) return;
         setWallet({ address, chainId });
         setStep('mint');
     };
@@ -77,13 +80,16 @@ const WalletStep = () => {
     const handleConnect = async () => {
         const result = await connect();
         if (result.ok) {
-            // Update onboarding context with real wallet data
+            // Only record the wallet. Advancing on a timer used to race the
+            // membership lookup and skipped the wrong-network guard, so a
+            // person on Mainnet — or one who already holds an SBT — could be
+            // pushed into minting anyway (audit finding N-11). The step now
+            // advances only when the user presses a button, and only after
+            // the checks have resolved.
             setWallet({
                 address: result.address,
                 chainId: result.chainId,
             });
-            // Auto advance to next step
-            setTimeout(() => setStep('mint'), 1500);
         }
     };
 

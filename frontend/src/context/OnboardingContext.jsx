@@ -159,13 +159,22 @@ export const OnboardingProvider = ({ children }) => {
     const mintSBT = useCallback(async () => {
         if (!wallet.address) return;
 
+        // No document hash means no verified identity. Sending a placeholder
+        // ('0xDOC' before this) fabricated the very evidence the SBT is meant
+        // to attest, and would now be rejected on-chain anyway since the
+        // contract expects 32 bytes (audit finding N-15).
+        if (!nfc.doc_hash) {
+            setError('Falta la verificación de identidad. Completa ese paso antes de mintear.');
+            return;
+        }
+
         setLoading(true);
         setError('');
         try {
             const response = await membershipAPI.mint(
                 wallet.address,
                 clave.assurance_level || 'AL1',
-                nfc.doc_hash || '0xDOC'
+                nfc.doc_hash
             );
 
             if (response.data.ok) {

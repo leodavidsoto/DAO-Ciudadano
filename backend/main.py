@@ -2,7 +2,7 @@
 DAO Ciudadana API - Main Server Entry Point
 Professional modular FastAPI application with security hardening
 """
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -139,14 +139,37 @@ app.include_router(elections_router, prefix="/api")
 
 # Health check endpoint
 @app.get("/health")
-async def health_check():
-    """Health check endpoint for monitoring"""
+async def health_check(response: Response):
+    """Health check for monitoring.
+
+    Actually pings the database instead of only reporting process liveness:
+    a service that answers 200 while MongoDB is unreachable tells the
+    orchestrator everything is fine and hides a total outage (audit N-14).
+
+    Returns 503 when unhealthy, so a load balancer can act on it — a
+    monitoring endpoint that always answers 200 monitors nothing.
+    """
+    from datetime import datetime
+
+    database = {"reachable": False, "error": None}
+    try:
+        await Database.get_db().command("ping")
+        database["reachable"] = True
+    except Exception as e:
+        database["error"] = type(e).__name__
+
     integrity = Database.integrity_status()
+    healthy = database["reachable"] and integrity["ready"]
+
+    if not healthy:
+        response.status_code = 503
+
     return {
-        "status": "healthy" if integrity["ready"] else "degraded",
+        "status": "healthy" if healthy else "degraded",
+        "database": database,
         "integrity": integrity,
         "version": settings.APP_VERSION,
-        "timestamp": __import__('datetime').datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
     }
 
 
