@@ -21,6 +21,12 @@ INDEX_RETRY_DELAYS_S = [1, 3, 8, 20, 45]
 # MongoDB error code for a unique-constraint violation.
 DUPLICATE_KEY_CODE = 11000
 
+# MongoDB refuses to create an index whose name already exists with different
+# options. Hit in production when `members.token_id` was tightened to unique:
+# the old non-unique index of the same name was already there, so creation
+# failed, integrity_ready() stayed False and every write returned 503.
+INDEX_CONFLICT_CODES = {85, 86}  # IndexOptionsConflict, IndexKeySpecsConflict
+
 
 class Database:
     """Database connection manager"""
@@ -132,6 +138,50 @@ class Database:
 
         logger.error(f"Gave up creating indexes: {cls._missing_required_indexes}")
 
+    @staticmethod
+    def _index_name(keys) -> str:
+        """The name MongoDB auto-generates for these keys."""
+        spec = [(keys, 1)] if isinstance(keys, str) else list(keys)
+        return "_".join(f"{field}_{direction}" for field, direction in spec)
+
+    @classmethod
+    async def _create_index(cls, collection: str, keys, unique: bool):
+        """Create one index, reconciling any pre-existing definition.
+
+        An index tightened from non-unique to unique keeps its auto-generated
+        name, and MongoDB refuses the change rather than applying it
+        (IndexKeySpecsConflict). This is not hypothetical: it happened in
+        production when `members.token_id` was made unique — creation failed,
+        `integrity_ready()` stayed False, and every write returned 503.
+
+        The conflict is detected by INSPECTING the existing index rather than
+        by catching an error code: mongomock raises without a code, so relying
+        on the exception would work in production and silently misbehave in
+        tests — exactly backwards.
+
+        If the collection already holds documents that violate the new
+        constraint, recreation raises a duplicate-key error. That is the
+        correct outcome: the data must be cleaned before the guarantee can
+        hold, and papering over it would leave the invariant unmet.
+        """
+        handle = cls.get_db()[collection]
+        name = cls._index_name(keys)
+
+        try:
+            existing = await handle.index_information()
+        except Exception:
+            existing = {}
+
+        current = existing.get(name)
+        if current is not None and bool(current.get("unique", False)) != unique:
+            logger.warning(
+                f"Index {collection}.{name} exists with unique="
+                f"{bool(current.get('unique', False))}, expected {unique}; recreating"
+            )
+            await handle.drop_index(name)
+
+        await handle.create_index(keys, unique=unique)
+
     @classmethod
     async def _create_indexes_once(cls):
         """Create every index independently.
@@ -148,7 +198,7 @@ class Database:
 
         for collection, keys, unique, required in cls.INDEX_SPECS:
             try:
-                await cls.get_db()[collection].create_index(keys, unique=unique)
+                await cls._create_index(collection, keys, unique)
             except Exception as e:
                 label = f"{collection}.{keys}"
                 last_error = str(e)
@@ -164,8 +214,18 @@ class Database:
 
     @classmethod
     async def ensure_indexes(cls):
-        """Create indexes and wait for the result. Used by tests."""
-        await cls._build_indexes_with_retry()
+        """Create indexes once and wait for the result. Used by tests.
+
+        Deliberately WITHOUT the retry backoff: retrying is for a cold cluster
+        at startup, and in a test a genuine failure should surface immediately
+        instead of hanging for the length of the backoff.
+        """
+        missing, permanent, error = await cls._create_indexes_once()
+        cls._missing_required_indexes = missing
+        cls._index_error = error
+        cls._indexes_ready = not missing
+        if missing:
+            logger.error(f"Required indexes missing: {missing} ({error})")
 
     @classmethod
     def integrity_ready(cls) -> bool:

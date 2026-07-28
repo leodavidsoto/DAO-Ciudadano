@@ -269,3 +269,37 @@ async def test_health_reports_the_database(client):
     body = (await client.get("/health")).json()
     assert "database" in body
     assert body["database"]["reachable"] is True
+
+
+# === Reconciliación de índices preexistentes (fallo real en producción) ===
+
+async def test_tightening_an_index_to_unique_reconciles_the_old_one(client):
+    """A non-unique index cannot simply be redefined as unique.
+
+    MongoDB rejects an index whose name exists with different options
+    (IndexKeySpecsConflict). This is not hypothetical: after tightening
+    `members.token_id` to unique, the deployed database still had the old
+    non-unique index of the same name, creation failed, `integrity_ready()`
+    stayed False and every write returned 503.
+    """
+    members = Database.get_db()["members"]
+
+    # Recreate the production situation: drop the unique index, put back a
+    # plain one under the same auto-generated name.
+    try:
+        await members.drop_index("token_id_1")
+    except Exception:
+        pass
+    await members.create_index("token_id")
+
+    # A fresh run must reconcile it instead of giving up.
+    Database._indexes_ready = False
+    Database._missing_required_indexes = []
+    await Database.ensure_indexes()
+
+    assert Database.integrity_ready() is True, (
+        f"no se reconcilió el índice: {Database._missing_required_indexes}"
+    )
+
+    info = await members.index_information()
+    assert info["token_id_1"].get("unique") is True, "el índice quedó sin unique"

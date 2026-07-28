@@ -399,3 +399,36 @@ aunque por razones distintas a las que enumeraban: la autenticación, el minteo 
 identidad ya están **en código**, pero el contrato nuevo no está desplegado, la llave del
 minter no existe y los secretos no están configurados. Y la identidad verificable
 (ClaveÚnica, PACE) sigue siendo Fase 4 y depende de terceros.
+
+
+---
+
+## Incidente en producción (28-07-2026) — índice en conflicto bloqueaba las escrituras
+
+Lo detectó el propio health check añadido para **N-14**, horas después de desplegarlo.
+
+**Qué pasó.** Al endurecer `members.token_id` a `unique` (arreglo de N-4), el índice
+existente en Atlas conservaba su nombre autogenerado `token_id_1` sin la opción `unique`.
+MongoDB **rechaza** redefinir un índice con el mismo nombre y opciones distintas
+(`IndexKeySpecsConflict`, código 86) en vez de aplicar el cambio.
+
+**Consecuencia.** `integrity_ready()` quedaba en `False` de forma permanente y, por el
+diseño de N-7, **todas las escrituras devolvían 503**. El servicio quedó degradado: no se
+podía mintear, votar ni delegar.
+
+**Causa raíz.** El arreglo se probó contra una base vacía. En una base vacía el índice se
+crea sin conflicto; el fallo solo aparece sobre datos preexistentes.
+
+**Corrección.** `_create_index` inspecciona el índice existente y lo recrea cuando la
+opción `unique` no coincide. La detección se hace **inspeccionando**, no capturando el
+código de error: `mongomock` lanza sin `code`, así que depender de la excepción habría
+funcionado en producción y fallado en silencio en los tests — exactamente al revés de lo
+deseable.
+
+Si la colección ya contiene documentos que violan la restricción, la recreación falla con
+error de clave duplicada. Es el resultado correcto: hay que limpiar los datos antes de que
+la garantía pueda sostenerse.
+
+**Lección.** Un cambio de esquema probado solo contra una base vacía no está probado.
+El test que lo cubre reproduce la situación de producción: crea el índice no único primero,
+y solo entonces ejecuta la reconciliación.
