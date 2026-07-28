@@ -28,6 +28,8 @@ from ..core.security_middleware import (
     generate_nonce,
     hash_vote_data
 )
+from ..core.config import settings
+from ..services.ballot_service import ballot_service
 from ..services.governance_service import governance_service
 from .deps import (
     current_address,
@@ -126,7 +128,11 @@ class VoteRequest(BaseModel):
     proposal_id: str
     voter_address: str
     vote: str  # for, against, abstain
-    nonce: Optional[str] = None  # For replay protection
+    # EIP-712 signed ballot (ROADMAP 3.2/3.3). Optional while clients migrate:
+    # SIGNED_BALLOTS_REQUIRED makes it mandatory. Without a signature the tally
+    # is only as trustworthy as the operator.
+    nonce: Optional[str] = None
+    signature: Optional[str] = None
     
     @field_validator('voter_address')
     @classmethod
@@ -311,6 +317,23 @@ async def cast_vote(request: VoteRequest = Depends(verified_voter)):
         if existing_vote:
             return VoteResponse(ok=False, error="Already voted on this proposal")
         
+        # Signed ballot (ROADMAP 3.2/3.3): verifying the signature is what
+        # lets a third party recompute the tally without trusting this server,
+        # and consuming the nonce is what stops a captured ballot being
+        # replayed.
+        if request.signature:
+            ok, error = await ballot_service.verify(
+                request.proposal_id, request.voter_address,
+                request.vote, request.nonce or "", request.signature,
+            )
+            if not ok:
+                return VoteResponse(ok=False, error=error)
+        elif settings.SIGNED_BALLOTS_REQUIRED:
+            return VoteResponse(
+                ok=False,
+                error="Esta propuesta requiere una papeleta firmada con tu wallet.",
+            )
+
         # Voting power: own vote + delegations from active members (A-5)
         weight = await governance_service.voting_power(request.voter_address)
 
@@ -330,6 +353,8 @@ async def cast_vote(request: VoteRequest = Depends(verified_voter)):
             "weight": weight,
             "nonce": nonce,
             "vote_hash": vote_hash,
+            # Stored so anyone can recompute the result independently.
+            "signature": request.signature,
             "timestamp": datetime.now(timezone.utc)
         }
         # The pre-check above is a friendlier error, not the guarantee: two

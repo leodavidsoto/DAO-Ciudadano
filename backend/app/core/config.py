@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     # Llave con MINTER_ROLE. En producción vive en un KMS, nunca aquí.
     MINTER_PRIVATE_KEY: str = os.environ.get('MINTER_PRIVATE_KEY', '')
     SBT_TOKEN_URI: str = os.environ.get('SBT_TOKEN_URI', '')
+    # Chain the EIP-712 domain is bound to, so a ballot signed for one
+    # network is not replayable on another.
+    # Require every ballot to carry an EIP-712 signature. Off by default so
+    # existing clients keep working; turn it on once the frontend signs
+    # (ROADMAP 3.2). Until then the tally is only as trustworthy as the operator.
+    SIGNED_BALLOTS_REQUIRED: bool = os.environ.get(
+        'SIGNED_BALLOTS_REQUIRED', 'false').lower() == 'true'
+
+    SBT_CHAIN_ID: int = int(os.environ.get('SBT_CHAIN_ID', '11155111'))
 
     # External Services
     EMERGENT_LLM_KEY: Optional[str] = None
