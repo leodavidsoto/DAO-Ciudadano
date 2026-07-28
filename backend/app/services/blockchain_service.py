@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 
 from pymongo.errors import DuplicateKeyError
 
+from ..core.config import settings
 from ..core.database import members_collection
+from .chain_service import chain_service
 from ..core.errors import report
 from ..core.security_middleware import verify_eth_address
 from ..models import Member
@@ -27,8 +29,9 @@ MAX_TOKEN_ID_ATTEMPTS = 5
 class BlockchainService:
     """Service for blockchain and Web3 operations"""
 
-    @staticmethod
+    @classmethod
     async def mint_sbt(
+        cls,
         wallet_address: str,
         assurance_level: str,
         doc_hash: str
@@ -55,9 +58,22 @@ class BlockchainService:
                     f"Ya existe un SBT para esta wallet (Token #{existing.get('token_id')})"
                 )
 
+            # === On-chain path (ROADMAP 1.5) ===
+            # When the chain is configured, the contract is the source of
+            # truth: it assigns the tokenId and enforces uniqueness. The Mongo
+            # document becomes a cache of something that really happened,
+            # instead of the only place the "membership" ever existed (C-2).
+            if chain_service.enabled:
+                return await cls._mint_on_chain(
+                    address, assurance_level, doc_hash
+                )
+
+            # === Off-chain demo path ===
+            # Reached only when the chain is NOT configured. It never claims a
+            # transaction happened: tx_hash stays null.
+            #
             # Sequential id over the highest existing one: survives revocations
-            # without colliding (count+1 does not). Replaced by the on-chain
-            # tokenId when task 1.5 lands.
+            # without colliding (count+1 does not).
             #
             # Read-then-write is not atomic: two concurrent mints can compute
             # the same next id (audit finding N-4). The unique index on
@@ -105,6 +121,52 @@ class BlockchainService:
             logger.error(f"SBT minting error: {e}")
             return (False, None, None, report(e, "mint_sbt"))
     
+    @classmethod
+    async def _mint_on_chain(cls, address, assurance_level, doc_hash):
+        """Mint through the contract and record the result.
+
+        The blocking web3 calls run in a worker thread: awaiting a receipt on
+        the event loop would stall every other request for as long as the
+        block takes.
+        """
+        import asyncio
+
+        try:
+            token_id, tx_hash = await asyncio.to_thread(
+                chain_service.mint,
+                address,
+                doc_hash,
+                assurance_level,
+                settings.SBT_TOKEN_URI,
+            )
+        except Exception as e:
+            # No silent fallback to a database write: reporting success for a
+            # mint that did not happen is exactly the behaviour being removed.
+            logger.error(f"On-chain mint failed for {address}: {e}", exc_info=True)
+            return (False, None, None, report(e, "mint_on_chain",
+                                              "No se pudo emitir la membresía en la blockchain"))
+
+        if token_id is None:
+            logger.error(f"Mint confirmed but no tokenId in the receipt: {tx_hash}")
+            return (False, None, None,
+                    "La transacción se confirmó pero no se pudo leer el ID del token")
+
+        member = Member(
+            wallet_address=address,
+            token_id=token_id,
+            doc_hash=doc_hash,
+            assurance_level=assurance_level,
+            tx_hash=tx_hash,
+        )
+        try:
+            await members_collection().insert_one(member.model_dump())
+        except DuplicateKeyError:
+            # The token exists on-chain; only the local cache collided.
+            logger.warning(f"Token #{token_id} minted on-chain but cache insert collided")
+
+        logger.info(f"SBT minted on-chain: Token #{token_id} for {address} ({tx_hash})")
+        return (True, token_id, tx_hash, None)
+
     @staticmethod
     async def get_member_by_wallet(wallet_address: str) -> Optional[Member]:
         """Get member by wallet address"""

@@ -35,6 +35,11 @@ pillow==11.0.0             # validación de imágenes en el flujo de liveness
 PyJWT==2.10.1
 eth-account==0.13.4        # recuperación de la dirección desde la firma
 
+# === Blockchain (ROADMAP 1.5) ===
+# Minteo real on-chain. Sin RPC, contrato y llave configurados, el minteo
+# on-chain queda deshabilitado en vez de degradar a un registro en base.
+web3==7.6.0
+
 # === Criptografía ===
 # Cifrado de PII en reposo (Fernet). Se había retirado por no estar importada;
 # vuelve porque app/core/crypto.py la usa de verdad (ROADMAP 1.4).

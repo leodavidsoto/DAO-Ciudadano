@@ -147,6 +147,9 @@ class Member(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     wallet_address: str
     token_id: int
+    # Set only when the membership was minted on-chain. Null in demo mode:
+    # never fabricate a transaction hash (audit finding C-2).
+    tx_hash: Optional[str] = None
     doc_hash: str
     assurance_level: str
     status: str = "active"

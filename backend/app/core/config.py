@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     # propósito: comprometer una no debe comprometer la otra.
     PII_ENCRYPTION_KEY: str = os.environ.get('PII_ENCRYPTION_KEY', '')
 
+    # On-chain minting (ROADMAP 1.5, ADR 0001 D-1). Sin estas tres, el minteo
+    # on-chain queda DESHABILITADO en vez de degradar a un registro en base.
+    SEPOLIA_RPC_URL: str = os.environ.get('SEPOLIA_RPC_URL', '')
+    SBT_CONTRACT_ADDRESS: str = os.environ.get('SBT_CONTRACT_ADDRESS', '')
+    # Llave con MINTER_ROLE. En producción vive en un KMS, nunca aquí.
+    MINTER_PRIVATE_KEY: str = os.environ.get('MINTER_PRIVATE_KEY', '')
+    SBT_TOKEN_URI: str = os.environ.get('SBT_TOKEN_URI', '')
+
     # External Services
     EMERGENT_LLM_KEY: Optional[str] = None
     
