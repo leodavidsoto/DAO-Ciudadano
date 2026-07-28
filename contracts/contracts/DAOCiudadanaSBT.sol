@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
@@ -18,9 +18,18 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  * - Contains identity hash (not PII)
  * - Pausable for emergencies
  * - Reentrancy protected
- * - Revocable by owner with cooldown
+ * - Revocable by admin with cooldown
+ *
+ * Roles (ADR 0001, decision D-1): minting is separated from administration so
+ * a leaked minter key can issue memberships but cannot revoke, pause or grant
+ * roles. DEFAULT_ADMIN_ROLE is meant to be held by a multisig, never an EOA.
  */
-contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, ReentrancyGuard {
+contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, AccessControl, Pausable, ReentrancyGuard {
+    /// @dev May mint memberships. Nothing else.
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    /// @dev May pause and revoke. Held by a multisig.
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
     uint256 private _nextTokenId;
     
     // === Mappings ===
@@ -29,13 +38,13 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
     mapping(address => uint256) private _memberTokens;
     
     // Token ID to identity hash
-    mapping(uint256 => string) private _identityHashes;
+    mapping(uint256 => bytes32) private _identityHashes;
     
     // Token ID to assurance level
     mapping(uint256 => string) private _assuranceLevels;
     
     // Identity hash to boolean (prevents same identity from getting multiple SBTs)
-    mapping(string => bool) private _usedIdentityHashes;
+    mapping(bytes32 => bool) private _usedIdentityHashes;
     
     // Revocation requests with cooldown
     mapping(uint256 => uint256) private _revocationRequests;
@@ -76,14 +85,20 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
     // === Errors ===
     
     error AlreadyHasMembership(address member);
-    error IdentityAlreadyUsed(string identityHash);
+    error IdentityAlreadyUsed(bytes32 identityHash);
     error InvalidIdentityHash();
     error TokenDoesNotExist(uint256 tokenId);
     error RevocationNotRequested(uint256 tokenId);
     error RevocationCooldownNotPassed(uint256 tokenId, uint256 executeAfter);
     error SoulboundTokenCannotBeTransferred();
+    error InvalidRoleAddress();
     
-    constructor() ERC721("DAO Ciudadana SBT", "DAOSBT") Ownable(msg.sender) {}
+    constructor(address admin, address minter) ERC721("DAO Ciudadana SBT", "DAOSBT") {
+        if (admin == address(0) || minter == address(0)) revert InvalidRoleAddress();
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(ADMIN_ROLE, admin);
+        _grantRole(MINTER_ROLE, minter);
+    }
     
     // === Core Functions ===
     
@@ -96,15 +111,15 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
      */
     function mintMembership(
         address to,
-        string memory identityHash,
+        bytes32 identityHash,
         string memory assuranceLevel,
         string memory uri
-    ) public onlyOwner whenNotPaused nonReentrant returns (uint256) {
+    ) public onlyRole(MINTER_ROLE) whenNotPaused nonReentrant returns (uint256) {
         // Validate inputs
         if (_memberTokens[to] != 0) {
             revert AlreadyHasMembership(to);
         }
-        if (bytes(identityHash).length == 0) {
+        if (identityHash == bytes32(0)) {
             revert InvalidIdentityHash();
         }
         if (_usedIdentityHashes[identityHash]) {
@@ -133,7 +148,7 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
      * @dev Request membership revocation (starts cooldown)
      * @param tokenId Token ID to revoke
      */
-    function requestRevocation(uint256 tokenId) public onlyOwner {
+    function requestRevocation(uint256 tokenId) public onlyRole(ADMIN_ROLE) {
         if (_ownerOf(tokenId) == address(0)) {
             revert TokenDoesNotExist(tokenId);
         }
@@ -148,7 +163,7 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
      * @dev Cancel a revocation request
      * @param tokenId Token ID to cancel revocation for
      */
-    function cancelRevocation(uint256 tokenId) public onlyOwner {
+    function cancelRevocation(uint256 tokenId) public onlyRole(ADMIN_ROLE) {
         if (_revocationRequests[tokenId] == 0) {
             revert RevocationNotRequested(tokenId);
         }
@@ -163,7 +178,7 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
      * @param tokenId Token ID to revoke
      * @param reason Reason for revocation
      */
-    function executeRevocation(uint256 tokenId, string memory reason) public onlyOwner nonReentrant {
+    function executeRevocation(uint256 tokenId, string memory reason) public onlyRole(ADMIN_ROLE) nonReentrant {
         uint256 executeAfter = _revocationRequests[tokenId];
         
         if (executeAfter == 0) {
@@ -174,7 +189,8 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
         }
         
         address member = _ownerOf(tokenId);
-        string memory identityHash = _identityHashes[tokenId];
+        // NOTE: _usedIdentityHashes is deliberately NOT cleared, so the same
+        // identity cannot obtain a new membership after a revocation.
         
         // Burn token
         _burn(tokenId);
@@ -194,7 +210,7 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
     /**
      * @dev Pause all minting operations
      */
-    function pause(string memory reason) public onlyOwner {
+    function pause(string memory reason) public onlyRole(ADMIN_ROLE) {
         _pause();
         emit ContractPaused(msg.sender, reason);
     }
@@ -202,7 +218,7 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
     /**
      * @dev Unpause minting operations
      */
-    function unpause() public onlyOwner {
+    function unpause() public onlyRole(ADMIN_ROLE) {
         _unpause();
         emit ContractUnpaused(msg.sender);
     }
@@ -226,7 +242,7 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
     /**
      * @dev Get identity hash for a token
      */
-    function getIdentityHash(uint256 tokenId) public view returns (string memory) {
+    function getIdentityHash(uint256 tokenId) public view returns (bytes32) {
         if (_ownerOf(tokenId) == address(0)) {
             revert TokenDoesNotExist(tokenId);
         }
@@ -246,7 +262,7 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
     /**
      * @dev Check if identity hash has been used
      */
-    function isIdentityUsed(string memory identityHash) public view returns (bool) {
+    function isIdentityUsed(bytes32 identityHash) public view returns (bool) {
         return _usedIdentityHashes[identityHash];
     }
     
@@ -292,7 +308,7 @@ contract DAOCiudadanaSBT is ERC721, ERC721URIStorage, Ownable, Pausable, Reentra
         return super.tokenURI(tokenId);
     }
     
-    function supportsInterface(bytes4 interfaceId) public view override(ERC721, ERC721URIStorage) returns (bool) {
+    function supportsInterface(bytes4 interfaceId) public view override(ERC721, ERC721URIStorage, AccessControl) returns (bool) {
         return super.supportsInterface(interfaceId);
     }
 }

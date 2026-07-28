@@ -14,8 +14,11 @@ const { loadFixture, time } = require("@nomicfoundation/hardhat-toolbox/network-
  * - identity hashes stay burned forever (no re-registration after revocation)
  */
 describe("DAOCiudadanaSBT", function () {
-    const IDENTITY_HASH = "a3f8b2c941d05e7f6a1b8c2d3e4f5a6b";
-    const OTHER_HASH = "ffeeddccbbaa99887766554433221100";
+    // identityHash is bytes32 (ADR 0001, decision D-2): 32 raw bytes, not a
+    // truncated hex string. In production this is HMAC-SHA256(RUT, pepper).
+    const IDENTITY_HASH = ethers.keccak256(ethers.toUtf8Bytes("identity-a"));
+    const OTHER_HASH = ethers.keccak256(ethers.toUtf8Bytes("identity-b"));
+    const EMPTY_HASH = ethers.ZeroHash;
     const ASSURANCE_AL2 = "AL2";
     const TOKEN_URI = "ipfs://QmTestMetadata";
     const REVOCATION_COOLDOWN = 3 * 24 * 60 * 60; // 3 days in seconds
@@ -23,7 +26,7 @@ describe("DAOCiudadanaSBT", function () {
     async function deployFixture() {
         const [owner, member, otherMember, stranger] = await ethers.getSigners();
         const Factory = await ethers.getContractFactory("DAOCiudadanaSBT");
-        const sbt = await Factory.deploy();
+        const sbt = await Factory.deploy(owner.address, owner.address);
         await sbt.waitForDeployment();
         return { sbt, owner, member, otherMember, stranger };
     }
@@ -42,9 +45,10 @@ describe("DAOCiudadanaSBT", function () {
     }
 
     describe("Deployment", function () {
-        it("sets deployer as owner, starts unpaused with zero supply", async function () {
+        it("grants admin and minter roles at deploy, starts unpaused with zero supply", async function () {
             const { sbt, owner } = await loadFixture(deployFixture);
-            expect(await sbt.owner()).to.equal(owner.address);
+            expect(await sbt.hasRole(await sbt.ADMIN_ROLE(), owner.address)).to.equal(true);
+            expect(await sbt.hasRole(await sbt.MINTER_ROLE(), owner.address)).to.equal(true);
             expect(await sbt.paused()).to.equal(false);
             expect(await sbt.totalSupply()).to.equal(0);
             expect(await sbt.name()).to.equal("DAO Ciudadana SBT");
@@ -126,17 +130,62 @@ describe("DAOCiudadanaSBT", function () {
             const { sbt, member } = await loadFixture(deployFixture);
 
             await expect(
-                sbt.mintMembership(member.address, "", ASSURANCE_AL2, TOKEN_URI)
+                sbt.mintMembership(member.address, EMPTY_HASH, ASSURANCE_AL2, TOKEN_URI)
             ).to.be.revertedWithCustomError(sbt, "InvalidIdentityHash");
         });
 
-        it("only the owner can mint", async function () {
+        it("only MINTER_ROLE can mint", async function () {
             const { sbt, member, stranger } = await loadFixture(deployFixture);
 
             await expect(
                 sbt.connect(stranger).mintMembership(member.address, IDENTITY_HASH, ASSURANCE_AL2, TOKEN_URI)
-            ).to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount")
-                .withArgs(stranger.address);
+            ).to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount")
+                .withArgs(stranger.address, await sbt.MINTER_ROLE());
+        });
+    });
+
+    describe("Role separation (ADR 0001, decision D-1)", function () {
+        it("a minter cannot pause, revoke or grant roles", async function () {
+            const { sbt, owner, stranger } = await loadFixture(deployFixture);
+            // stranger holds ONLY the minter role
+            await sbt.grantRole(await sbt.MINTER_ROLE(), stranger.address);
+
+            await expect(sbt.connect(stranger).pause("try"))
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount");
+            await expect(sbt.connect(stranger).requestRevocation(1))
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount");
+            await expect(
+                sbt.connect(stranger).grantRole(await sbt.MINTER_ROLE(), stranger.address)
+            ).to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount");
+
+            // ...but it CAN mint: that is the whole point of the separation
+            await expect(
+                sbt.connect(stranger).mintMembership(
+                    owner.address, OTHER_HASH, ASSURANCE_AL2, TOKEN_URI
+                )
+            ).to.not.be.reverted;
+        });
+
+        it("the admin can revoke a compromised minter", async function () {
+            const { sbt, member, stranger } = await loadFixture(deployFixture);
+            const MINTER = await sbt.MINTER_ROLE();
+            await sbt.grantRole(MINTER, stranger.address);
+            await sbt.revokeRole(MINTER, stranger.address);
+
+            await expect(
+                sbt.connect(stranger).mintMembership(
+                    member.address, OTHER_HASH, ASSURANCE_AL2, TOKEN_URI
+                )
+            ).to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount");
+        });
+
+        it("rejects the zero address for admin or minter at deploy", async function () {
+            const [owner] = await ethers.getSigners();
+            const Factory = await ethers.getContractFactory("DAOCiudadanaSBT");
+            await expect(Factory.deploy(ethers.ZeroAddress, owner.address))
+                .to.be.revertedWithCustomError(Factory, "InvalidRoleAddress");
+            await expect(Factory.deploy(owner.address, ethers.ZeroAddress))
+                .to.be.revertedWithCustomError(Factory, "InvalidRoleAddress");
         });
     });
 
@@ -176,12 +225,12 @@ describe("DAOCiudadanaSBT", function () {
     });
 
     describe("Pausing", function () {
-        it("only the owner can pause and unpause", async function () {
+        it("only ADMIN_ROLE can pause and unpause", async function () {
             const { sbt, stranger } = await loadFixture(deployFixture);
             await expect(sbt.connect(stranger).pause("attack"))
-                .to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount");
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount");
             await expect(sbt.connect(stranger).unpause())
-                .to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount");
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount");
         });
 
         it("emits ContractPaused / ContractUnpaused", async function () {
@@ -209,15 +258,15 @@ describe("DAOCiudadanaSBT", function () {
     });
 
     describe("Revocation lifecycle", function () {
-        it("only the owner can request, cancel and execute revocations", async function () {
+        it("only ADMIN_ROLE can request, cancel and execute revocations", async function () {
             const { sbt, stranger, tokenId } = await loadFixture(deployWithMintedTokenFixture);
 
             await expect(sbt.connect(stranger).requestRevocation(tokenId))
-                .to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount");
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount");
             await expect(sbt.connect(stranger).cancelRevocation(tokenId))
-                .to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount");
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount");
             await expect(sbt.connect(stranger).executeRevocation(tokenId, "x"))
-                .to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount");
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount");
         });
 
         it("requestRevocation reverts for a nonexistent token", async function () {
@@ -363,7 +412,7 @@ describe("DAOCiudadanaSBT", function () {
             const { sbt, stranger } = await loadFixture(deployFixture);
             expect(await sbt.hasMembership(stranger.address)).to.equal(false);
             expect(await sbt.getMembershipToken(stranger.address)).to.equal(0n);
-            expect(await sbt.isIdentityUsed("never-used-hash")).to.equal(false);
+            expect(await sbt.isIdentityUsed(ethers.keccak256(ethers.toUtf8Bytes("never-used-hash")))).to.equal(false);
         });
     });
 
@@ -389,7 +438,7 @@ describe("DAOCiudadanaSBT", function () {
             // slither reentrancy-no-eth: _safeMint invokes onERC721Received on
             // contract receivers. The receiver must already see consistent
             // membership state during that callback.
-            const { sbt } = await loadFixture(deployFixture);
+            const { sbt, owner } = await loadFixture(deployFixture);
 
             const Probe = await ethers.getContractFactory("ReceiverProbe");
             const probe = await Probe.deploy();
