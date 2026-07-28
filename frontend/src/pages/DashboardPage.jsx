@@ -9,8 +9,8 @@
  */
 import React from 'react';
 import { NavLink, Outlet, useOutletContext } from 'react-router-dom';
-import { Shield, FileText, Vote, Coins, Users, Home, Wallet } from 'lucide-react';
-import { useWallet } from '@/hooks';
+import { Shield, FileText, Vote, Coins, Users, Home, Wallet, LogIn, LogOut, Loader2 } from 'lucide-react';
+import { useWallet, useSession } from '@/hooks';
 import {
     ProposalsList,
     TreasuryDashboard,
@@ -30,6 +30,12 @@ const NAV = [
 
 const DashboardLayout = () => {
     const { address, shortAddress, isConnected, connect, isConnecting } = useWallet();
+    const session = useSession();
+
+    // Connecting a wallet only proves the browser has one. The backend takes
+    // the acting address from a signed session, so reading is possible while
+    // connected but every write needs the signature.
+    const canParticipate = session.isSignedIn && session.address === address?.toLowerCase();
 
     return (
         <div className="min-h-screen relative overflow-hidden">
@@ -55,16 +61,44 @@ const DashboardLayout = () => {
                             </div>
                         </div>
 
-                        {isConnected ? (
-                            <div className="cyber-badge flex items-center gap-2">
-                                <Wallet className="w-3 h-3" />
-                                <span className="font-mono text-xs">{shortAddress}</span>
-                            </div>
-                        ) : (
-                            <button onClick={connect} disabled={isConnecting} className="cyber-button text-xs">
-                                {isConnecting ? 'CONECTANDO...' : 'CONECTAR WALLET'}
-                            </button>
-                        )}
+                        <div className="flex items-center gap-2 flex-wrap">
+                            {isConnected && (
+                                <div className="cyber-badge flex items-center gap-2">
+                                    <Wallet className="w-3 h-3" />
+                                    <span className="font-mono text-xs">{shortAddress}</span>
+                                </div>
+                            )}
+
+                            {!isConnected && (
+                                <button onClick={connect} disabled={isConnecting} className="cyber-button text-xs">
+                                    {isConnecting ? 'CONECTANDO...' : 'CONECTAR WALLET'}
+                                </button>
+                            )}
+
+                            {isConnected && !canParticipate && (
+                                <button
+                                    onClick={() => session.signIn(address)}
+                                    disabled={session.isSigningIn}
+                                    className="cyber-button-premium text-xs flex items-center gap-2"
+                                >
+                                    {session.isSigningIn
+                                        ? <Loader2 className="w-3 h-3 animate-spin" />
+                                        : <LogIn className="w-3 h-3" />}
+                                    {session.isSigningIn ? 'FIRMANDO...' : 'INICIAR SESIÓN'}
+                                </button>
+                            )}
+
+                            {canParticipate && (
+                                <button
+                                    onClick={session.signOut}
+                                    className="cyber-button text-xs flex items-center gap-2"
+                                    title="Cerrar sesión"
+                                >
+                                    <LogOut className="w-3 h-3" />
+                                    SALIR
+                                </button>
+                            )}
+                        </div>
                     </div>
 
                     <nav className="flex flex-wrap gap-2">
@@ -90,14 +124,28 @@ const DashboardLayout = () => {
                 {!isConnected && (
                     <div className="mb-6 p-4 rounded-lg border border-yellow-500/40 bg-yellow-500/10">
                         <p className="text-yellow-300 text-xs font-mono">
-                            Conecta tu wallet para participar. Puedes leer todo sin conectarla,
-                            pero crear propuestas, votar y postularte requieren una membresía activa.
+                            Puedes leer todo sin conectar tu wallet. Para crear propuestas, votar
+                            o postularte necesitas conectarla, iniciar sesión firmando, y tener
+                            una membresía activa.
                         </p>
                     </div>
                 )}
 
+                {isConnected && !canParticipate && (
+                    <div className="mb-6 p-4 rounded-lg border border-cyan-500/40 bg-cyan-500/10">
+                        <p className="text-cyan-300 text-xs font-mono">
+                            Wallet conectada. Falta iniciar sesión: firma un mensaje para
+                            demostrar que la controlas. La firma no autoriza ninguna transacción
+                            ni gasto.
+                        </p>
+                        {session.error && (
+                            <p className="text-red-300 text-xs font-mono mt-2">{session.error}</p>
+                        )}
+                    </div>
+                )}
+
                 <main className="pb-12">
-                    <Outlet context={{ walletAddress: address }} />
+                    <Outlet context={{ walletAddress: canParticipate ? address : null, connectedAddress: address, canParticipate }} />
                 </main>
 
                 <footer className="text-center text-gray-600 font-mono text-[11px] pb-6">

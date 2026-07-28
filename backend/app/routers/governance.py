@@ -29,7 +29,7 @@ from ..core.security_middleware import (
     hash_vote_data
 )
 from ..core.config import settings
-from ..services.ballot_service import ballot_service
+from ..services.ballot_service import BALLOT_TYPES, ballot_service
 from ..services.governance_service import governance_service
 from .deps import (
     current_address,
@@ -268,6 +268,22 @@ async def get_proposal(proposal_id: str):
     if not proposal:
         raise HTTPException(status_code=404, detail="Proposal not found")
     return ProposalResponse(**proposal)
+
+
+@router.get("/ballot-schema")
+async def ballot_schema():
+    """EIP-712 domain and types the client must sign.
+
+    Served instead of duplicated in the frontend: a hand-maintained copy of a
+    signing schema drifts, and when it does every signature silently fails to
+    verify. The ABI already taught us that (audit finding A-2).
+    """
+    return {
+        "domain": ballot_service.domain(),
+        "types": BALLOT_TYPES,
+        "primaryType": "Ballot",
+        "signatureRequired": settings.SIGNED_BALLOTS_REQUIRED,
+    }
 
 
 @router.post("/vote", response_model=VoteResponse)

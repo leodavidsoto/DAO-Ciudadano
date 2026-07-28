@@ -11,6 +11,7 @@ import {
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { governanceAPI } from '@/lib/api';
+import { signBallot, isSignatureRequired } from '@/lib/ballot';
 import CreateProposalModal from './CreateProposalModal';
 
 const ProposalCard = ({ proposal, walletAddress, onVote }) => {
@@ -135,6 +136,7 @@ const ProposalCard = ({ proposal, walletAddress, onVote }) => {
 };
 
 const ProposalsList = ({ walletAddress }) => {
+    const [voteError, setVoteError] = useState('');
     const [proposals, setProposals] = useState([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState(null);
@@ -157,14 +159,42 @@ const ProposalsList = ({ walletAddress }) => {
     };
 
     const handleVote = async (proposalId, vote) => {
+        setVoteError('');
         try {
-            const response = await governanceAPI.vote(proposalId, walletAddress, vote);
+            // Sign the ballot so the result can be recomputed by anyone
+            // without trusting this server. If the wallet cannot sign, the
+            // vote is only sent unsigned when the backend still allows it —
+            // never silently, so nobody believes a tally is verifiable when
+            // it is not.
+            let ballot = {};
+            try {
+                ballot = await signBallot({ proposalId, voter: walletAddress, choice: vote });
+            } catch (signError) {
+                if (signError?.code === 4001) {
+                    setVoteError('Firma cancelada');
+                    return;
+                }
+                if (await isSignatureRequired()) {
+                    setVoteError('Tu wallet no pudo firmar la papeleta y esta votación exige firma.');
+                    return;
+                }
+                console.warn('Ballot not signed:', signError);
+            }
+
+            const response = await governanceAPI.vote(proposalId, walletAddress, vote, ballot);
             if (response.data.ok) {
                 loadProposals(); // Reload to show updated counts
             } else {
-                alert(response.data.error);
+                setVoteError(response.data.error || 'No se pudo registrar el voto');
             }
         } catch (err) {
+            if (err.response?.status === 401) {
+                setVoteError('Inicia sesión firmando con tu wallet para votar.');
+            } else if (err.response?.status === 403) {
+                setVoteError(err.response.data?.detail || 'No tienes membresía activa.');
+            } else {
+                setVoteError('Error de conexión al votar');
+            }
             console.error('Vote error:', err);
         }
     };
@@ -195,6 +225,12 @@ const ProposalsList = ({ walletAddress }) => {
                     </Button>
                 )}
             </div>
+
+            {voteError && (
+                <div className="mb-4 p-3 rounded-lg border border-red-500/40 bg-red-500/10">
+                    <p className="text-red-300 text-sm font-mono">{voteError}</p>
+                </div>
+            )}
 
             {/* Filters */}
             <div className="flex gap-2 mb-6 overflow-x-auto pb-2">

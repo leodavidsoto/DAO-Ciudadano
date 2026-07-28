@@ -159,3 +159,37 @@ async def test_a_third_party_can_recount_without_trusting_the_server(client):
 
     proposal = await Database.get_db()["proposals"].find_one({"id": pid})
     assert recounted == proposal["votes_for"]
+
+
+async def test_schema_endpoint_matches_what_verifies_signatures(client):
+    """The frontend signs with this schema; the backend verifies with the same.
+
+    Serving it instead of duplicating it in the client is the whole point: a
+    hand-maintained copy drifts, and when it does every signature fails to
+    verify with no obvious cause (the ABI already taught us that, A-2).
+    """
+    schema = (await client.get("/api/governance/ballot-schema")).json()
+
+    assert schema["domain"] == ballot_service.domain()
+    assert schema["primaryType"] == "Ballot"
+    fields = [f["name"] for f in schema["types"]["Ballot"]]
+    assert fields == ["proposalId", "voter", "choice", "nonce"]
+
+    # A ballot signed against the served schema must verify server-side.
+    from eth_account.messages import encode_typed_data
+    payload = {
+        "types": schema["types"],
+        "primaryType": schema["primaryType"],
+        "domain": schema["domain"],
+        "message": {
+            "proposalId": "p-1", "voter": VOTER.address.lower(),
+            "choice": "for", "nonce": "n-schema",
+        },
+    }
+    signature = Account.sign_message(
+        encode_typed_data(full_message=payload), VOTER.key
+    ).signature.hex()
+
+    assert ballot_service.recover_signer(
+        "p-1", VOTER.address.lower(), "for", "n-schema", signature
+    ) == VOTER.address.lower()

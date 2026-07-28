@@ -35,11 +35,19 @@ export const warmUpBackend = () =>
         .get(`${BACKEND_URL}/health`, { timeout: REQUEST_TIMEOUT_MS })
         .catch(() => null);
 
+// === Session token ===
+// sessionStorage, not localStorage: the session should not outlive the
+// browser session, and a shorter-lived credential is a smaller target.
+const TOKEN_KEY = 'dao_session_token';
+
+export const setAuthToken = (token) => sessionStorage.setItem(TOKEN_KEY, token);
+export const getAuthToken = () => sessionStorage.getItem(TOKEN_KEY);
+export const clearAuthToken = () => sessionStorage.removeItem(TOKEN_KEY);
+
 // Request interceptor
 api.interceptors.request.use(
     (config) => {
-        // Add auth token if available
-        const token = localStorage.getItem('auth_token');
+        const token = getAuthToken();
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         }
@@ -56,6 +64,12 @@ api.interceptors.response.use(
         return Promise.reject(error);
     }
 );
+
+// === Session API (wallet sign-in) ===
+export const sessionAPI = {
+    challenge: (address) => api.post('/session/challenge', { address }),
+    verify: (address, signature) => api.post('/session/verify', { address, signature }),
+};
 
 // === Auth API ===
 export const authAPI = {
@@ -116,12 +130,18 @@ export const governanceAPI = {
         }),
 
     // Voting
-    vote: (proposalId, voterAddress, vote) =>
+    vote: (proposalId, voterAddress, vote, { nonce, signature } = {}) =>
         api.post('/governance/vote', {
             proposal_id: proposalId,
             voter_address: voterAddress,
             vote,
+            nonce,
+            signature,
         }),
+
+    // EIP-712 domain and types, served by the backend so the signing schema
+    // cannot drift from what verifies it (the ABI already taught us that).
+    ballotSchema: () => api.get('/governance/ballot-schema'),
 
     // Delegation
     delegate: (delegatorAddress, delegateAddress) =>
