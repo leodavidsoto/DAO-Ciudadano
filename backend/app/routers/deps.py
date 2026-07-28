@@ -11,7 +11,7 @@ on-chain hasMembership() call (ROADMAP Fase 1.5) is configuration, not code.
 """
 import logging
 
-from fastapi import HTTPException
+from fastapi import Header, HTTPException
 
 from ..services.membership_verifier import get_membership_verifier
 
@@ -72,3 +72,44 @@ async def require_integrity_indexes(area: str = "") -> None:
             "aceptar escrituras en este momento. Reintenta en unos segundos."
         ),
     )
+
+
+async def current_address(
+    authorization: str = Header(default=""),
+) -> str:
+    """The address proven by the caller's session token.
+
+    Mutating endpoints must take the acting address from HERE, never from the
+    request body. Trusting a body field is exactly what made the API writable
+    by anyone with curl (audit finding C-1).
+    """
+    from ..services.siwe_service import siwe_service
+
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Falta el token de sesión. Inicia sesión firmando con tu wallet.",
+        )
+
+    address = siwe_service.read_token(token)
+    if not address:
+        raise HTTPException(
+            status_code=401,
+            detail="Sesión inválida o expirada. Vuelve a iniciar sesión.",
+        )
+    return address
+
+
+def ensure_acts_as_self(claimed: str, authenticated: str, action: str) -> None:
+    """Refuse an action on behalf of a different address.
+
+    Kept explicit rather than silently overriding the body: a client sending
+    someone else's address is either buggy or hostile, and both deserve an
+    error rather than a quietly different outcome.
+    """
+    if claimed.lower() != authenticated.lower():
+        raise HTTPException(
+            status_code=403,
+            detail=f"No puedes {action} en nombre de otra dirección.",
+        )

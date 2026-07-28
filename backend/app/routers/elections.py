@@ -31,7 +31,12 @@ from ..core.database import (
 )
 from ..core.security_middleware import fraud_detector, verify_eth_address
 from ..services.governance_service import governance_service
-from .deps import ensure_active_member, require_integrity_indexes
+from .deps import (
+    current_address,
+    ensure_acts_as_self,
+    ensure_active_member,
+    require_integrity_indexes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -180,13 +185,21 @@ class RepresentativeResponse(BaseModel):
 
 # === Membership dependencies (C-3) ===
 
-async def verified_candidate(request: CandidacyCreate) -> CandidacyCreate:
+async def verified_candidate(
+    request: CandidacyCreate,
+    caller: str = Depends(current_address),
+) -> CandidacyCreate:
+    ensure_acts_as_self(request.candidate_address, caller, "postularte")
     await require_integrity_indexes("candidatura")
     await ensure_active_member(request.candidate_address, "postularse a una elección")
     return request
 
 
-async def verified_election_voter(request: ElectionVoteRequest) -> ElectionVoteRequest:
+async def verified_election_voter(
+    request: ElectionVoteRequest,
+    caller: str = Depends(current_address),
+) -> ElectionVoteRequest:
+    ensure_acts_as_self(request.voter_address, caller, "votar")
     await require_integrity_indexes("voto de elección")
     await ensure_active_member(request.voter_address, "votar en una elección")
     return request
@@ -227,12 +240,16 @@ async def _to_election_response(election: dict) -> ElectionResponse:
 # === Election Endpoints ===
 
 @router.post("/elections", response_model=ElectionResponse)
-async def create_election(request: ElectionCreate):
+async def create_election(
+    request: ElectionCreate,
+    caller: str = Depends(current_address),
+):
     """Open a representative election (nominations start immediately)."""
     # Same gate as proposals: opening an election is a governance action,
     # not something any address on the internet should be able to do.
+    ensure_acts_as_self(request.creator_address, caller, "convocar elecciones")
     await require_integrity_indexes("elección")
-    await ensure_active_member(request.creator_address, "convocar elecciones")
+    await ensure_active_member(caller, "convocar elecciones")
     now = datetime.now(timezone.utc)
     election = {
         "id": str(uuid.uuid4())[:8],

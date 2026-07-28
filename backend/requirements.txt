@@ -29,6 +29,12 @@ python-multipart==0.0.20
 # === Procesamiento de imágenes ===
 pillow==11.0.0             # validación de imágenes en el flujo de liveness
 
+# === Autenticación (ROADMAP 1.1) ===
+# Sesiones por firma de wallet (EIP-4361). PyJWT se había retirado por no
+# estar importada; vuelve porque ahora sí se emiten y validan tokens.
+PyJWT==2.10.1
+eth-account==0.13.4        # recuperación de la dirección desde la firma
+
 # === Criptografía ===
 # Cifrado de PII en reposo (Fernet). Se había retirado por no estar importada;
 # vuelve porque app/core/crypto.py la usa de verdad (ROADMAP 1.4).

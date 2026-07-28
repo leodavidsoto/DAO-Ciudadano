@@ -4,12 +4,12 @@ Handles SBT minting and member management.
 
 Thin HTTP layer: business logic lives in BlockchainService (see CLAUDE.md rule 5).
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 import logging
 
 from ..models import MintSBTRequest, MintSBTResponse
 from ..services.blockchain_service import blockchain_service
-from .deps import require_integrity_indexes
+from .deps import current_address, ensure_acts_as_self, require_integrity_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -17,13 +17,20 @@ router = APIRouter(prefix="/membership", tags=["Membership"])
 
 
 @router.post("/mint", response_model=MintSBTResponse)
-async def mint_sbt(request: MintSBTRequest):
+async def mint_sbt(
+    request: MintSBTRequest,
+    caller: str = Depends(current_address),
+):
     """
     Register a DAO membership (demo of the future SBT mint).
 
     DEMO MODE: nothing is written on-chain yet (ROADMAP task 1.5, blocked on
     D-1/D-2), so tx_hash is null. Duplicate wallets are rejected.
     """
+    # A membership can only be minted for the address you proved you control:
+    # otherwise anyone could register memberships for arbitrary wallets (C-1).
+    ensure_acts_as_self(request.wallet_address, caller, "mintear")
+
     # Without the unique indexes on members, two concurrent mints can create
     # duplicate memberships or collide on token_id (audit N-4).
     await require_integrity_indexes("minteo")

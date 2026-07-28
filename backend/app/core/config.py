@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str = os.environ.get('SECRET_KEY', 'dev-secret-key')
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Domain shown in the message the wallet signs, so the person can see
+    # which site is asking before approving.
+    SIWE_DOMAIN: str = os.environ.get('SIWE_DOMAIN', 'DAO Ciudadana')
     
     # Liveness: minimum score to accept a capture as a live person.
     # Below this the flow must stop (ROADMAP 1.10 / audit N-9).

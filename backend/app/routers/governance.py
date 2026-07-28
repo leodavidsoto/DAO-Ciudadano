@@ -29,7 +29,12 @@ from ..core.security_middleware import (
     hash_vote_data
 )
 from ..services.governance_service import governance_service
-from .deps import ensure_active_member, require_integrity_indexes
+from .deps import (
+    current_address,
+    ensure_acts_as_self,
+    ensure_active_member,
+    require_integrity_indexes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -151,15 +156,24 @@ class VoteResponse(BaseModel):
 # FastAPI parses the body once; each dependency re-declares the request model
 # so the membership check runs before the endpoint body executes.
 
-async def verified_proposal_creator(request: ProposalCreate) -> ProposalCreate:
+async def verified_proposal_creator(
+    request: ProposalCreate,
+    caller: str = Depends(current_address),
+) -> ProposalCreate:
+    # The acting address comes from the session token, never from the body.
+    ensure_acts_as_self(request.creator_address, caller, "crear propuestas")
     await require_integrity_indexes("propuesta")
-    await ensure_active_member(request.creator_address, "crear propuestas")
+    await ensure_active_member(caller, "crear propuestas")
     return request
 
 
-async def verified_voter(request: VoteRequest) -> VoteRequest:
+async def verified_voter(
+    request: VoteRequest,
+    caller: str = Depends(current_address),
+) -> VoteRequest:
+    ensure_acts_as_self(request.voter_address, caller, "votar")
     await require_integrity_indexes("voto")
-    await ensure_active_member(request.voter_address, "votar")
+    await ensure_active_member(caller, "votar")
     return request
 
 
@@ -422,9 +436,13 @@ class DelegationResponse(BaseModel):
     error: Optional[str] = None
 
 
-async def verified_delegator(request: DelegationRequest) -> DelegationRequest:
+async def verified_delegator(
+    request: DelegationRequest,
+    caller: str = Depends(current_address),
+) -> DelegationRequest:
+    ensure_acts_as_self(request.delegator_address, caller, "delegar el voto")
     await require_integrity_indexes("delegación")
-    await ensure_active_member(request.delegator_address, "delegar el voto")
+    await ensure_active_member(caller, "delegar el voto")
     return request
 
 
