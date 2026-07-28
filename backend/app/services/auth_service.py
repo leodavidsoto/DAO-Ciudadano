@@ -10,6 +10,7 @@ from PIL import Image
 import io
 
 from ..core.security import generate_short_hash
+from ..core.identity import identity_hash_hex, lookup_key
 from ..core.errors import report
 from ..core.database import identity_events_collection
 from ..core.config import settings
@@ -37,9 +38,9 @@ class AuthService:
             
             # Store identity event
             event = IdentityEvent(
-                user_id=rut,
+                user_id=identity_hash_hex(rut),
                 event_type="clave_unica",
-                hash_value=generate_short_hash(rut),
+                hash_value=identity_hash_hex(rut),
                 verifier="claveunica_gov"
             )
             await identity_events_collection().insert_one(event.model_dump())

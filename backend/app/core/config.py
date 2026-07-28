@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     # Below this the flow must stop (ROADMAP 1.10 / audit N-9).
     LIVENESS_MIN_SCORE: float = float(os.environ.get('LIVENESS_MIN_SCORE', '0.75'))
 
+    # Identity hashing (ADR 0001, D-2). Secreto de máximo valor: va en KMS,
+    # nunca en el repositorio ni en la base. Si se filtra, las identidades ya
+    # acuñadas quedan reversibles de forma retroactiva y sin rotación posible.
+    IDENTITY_PEPPER: str = os.environ.get('IDENTITY_PEPPER', '')
+
     # External Services
     EMERGENT_LLM_KEY: Optional[str] = None
     

@@ -16,6 +16,7 @@ from ..models import (
     NFCRequest, NFCResponse, LivenessResponse, IdentityEvent
 )
 from ..core.security import generate_short_hash
+from ..core.identity import identity_hash_hex, lookup_key
 from ..core.errors import report
 from ..core.database import identity_events_collection
 from ..core.config import settings
@@ -49,9 +50,9 @@ async def authenticate_clave_unica(request: ClaveUnicaRequest):
         
         # Store identity event
         event = IdentityEvent(
-            user_id=request.rut,
+            user_id=identity_hash_hex(request.rut),
             event_type="clave_unica",
-            hash_value=generate_short_hash(request.rut),
+            hash_value=identity_hash_hex(request.rut),
             verifier="claveunica_gov"
         )
         await identity_events_collection().insert_one(event.model_dump())
@@ -337,9 +338,9 @@ async def register_user(request: UserRegisterRequest):
         
         # Store identity event
         event = IdentityEvent(
-            user_id=formatted_rut,
+            user_id=identity_hash_hex(formatted_rut),
             event_type="rut_email",
-            hash_value=generate_short_hash(formatted_rut + request.email),
+            hash_value=identity_hash_hex(formatted_rut),
             verifier="dao_ciudadana_registration"
         )
         await identity_events_collection().insert_one(event.model_dump())
@@ -388,9 +389,9 @@ async def login_user(request: UserLoginRequest):
         
         # Store identity event
         event = IdentityEvent(
-            user_id=formatted_rut,
+            user_id=identity_hash_hex(formatted_rut),
             event_type="rut_email_login",
-            hash_value=generate_short_hash(f"login_{formatted_rut}"),
+            hash_value=identity_hash_hex(formatted_rut),
             verifier="dao_ciudadana_login"
         )
         await identity_events_collection().insert_one(event.model_dump())

@@ -54,7 +54,13 @@ def generate_hash(data: str) -> str:
 
 
 def generate_short_hash(data: str, length: int = 16) -> str:
-    """Generate truncated hash for display"""
+    """Truncated SHA-256, for display and non-identifying values ONLY.
+
+    ⚠️ NEVER use this for a RUT or any other personal identifier: the space of
+    valid Chilean RUTs is small enough to reverse this by brute force in
+    seconds (audit finding C-4). Use app.core.identity.identity_hash instead,
+    which is HMAC with a pepper held outside the database.
+    """
     return generate_hash(data)[:length]
 
 
