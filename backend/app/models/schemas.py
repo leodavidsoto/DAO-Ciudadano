@@ -89,12 +89,19 @@ class UserLoginRequest(BaseModel):
 
 
 class User(BaseModel):
-    """User model stored in database"""
+    """User model stored in database.
+
+    rut/email/nombre/apellido are stored ENCRYPTED (app.core.crypto), so they
+    cannot be queried directly. `rut_key` and `email_key` are blind indexes
+    (app.core.identity.lookup_key) used for uniqueness checks and login.
+    """
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    rut: str
-    email: str
-    nombre: str
-    apellido: str
+    rut: str          # encrypted
+    email: str        # encrypted
+    nombre: str       # encrypted
+    apellido: str     # encrypted
+    rut_key: Optional[str] = None      # blind index
+    email_key: Optional[str] = None    # blind index
     verified: bool = False
     status: str = "active"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

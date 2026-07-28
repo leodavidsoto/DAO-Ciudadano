@@ -17,6 +17,7 @@ from ..models import (
 )
 from ..core.security import generate_short_hash
 from ..core.identity import identity_hash_hex, lookup_key
+from ..core.crypto import encrypt, decrypt
 from ..core.errors import report
 from ..core.database import identity_events_collection
 from ..core.config import settings
@@ -316,24 +317,26 @@ async def register_user(request: UserRegisterRequest):
         if not re.match(email_regex, request.email):
             return UserResponse(ok=False, error="Email inválido")
         
-        # Check if RUT already registered
-        existing = await users_collection().find_one({"rut": formatted_rut})
-        if existing:
+        # Uniqueness is checked against blind indexes, never against plaintext:
+        # the stored columns are encrypted and cannot be queried directly
+        # (ROADMAP 1.4 / audit C-4).
+        rut_key = lookup_key(formatted_rut)
+        email_key = lookup_key(request.email)
+
+        if await users_collection().find_one({"rut_key": rut_key}):
             return UserResponse(ok=False, error="Este RUT ya está registrado")
-        
-        # Check if email already registered
-        existing_email = await users_collection().find_one({"email": request.email.lower()})
-        if existing_email:
+        if await users_collection().find_one({"email_key": email_key}):
             return UserResponse(ok=False, error="Este email ya está registrado")
-        
-        # Create user
+
         user = User(
-            rut=formatted_rut,
-            email=request.email.lower(),
-            nombre=request.nombre.strip(),
-            apellido=request.apellido.strip()
+            rut=encrypt(formatted_rut),
+            email=encrypt(request.email.lower()),
+            nombre=encrypt(request.nombre.strip()),
+            apellido=encrypt(request.apellido.strip()),
+            rut_key=rut_key,
+            email_key=email_key,
         )
-        
+
         await users_collection().insert_one(user.model_dump())
         
         # Store identity event
@@ -375,10 +378,10 @@ async def login_user(request: UserLoginRequest):
         # Format RUT for lookup
         formatted_rut = format_rut(request.rut)
         
-        # Find user
+        # Look up by blind index; the stored values are encrypted.
         user_doc = await users_collection().find_one({
-            "rut": formatted_rut,
-            "email": request.email.lower()
+            "rut_key": lookup_key(formatted_rut),
+            "email_key": lookup_key(request.email),
         })
         
         if not user_doc:
@@ -402,8 +405,8 @@ async def login_user(request: UserLoginRequest):
             ok=True,
             user_id=user_doc.get("id"),
             rut=formatted_rut,
-            email=user_doc.get("email"),
-            nombre=user_doc.get("nombre"),
+            email=decrypt(user_doc.get("email")),
+            nombre=decrypt(user_doc.get("nombre")),
             subject_id=f"rut:{formatted_rut}",
             assurance_level="AL1"
         )

@@ -9,6 +9,7 @@ from pathlib import Path
 # Deterministic pepper so identity hashes are stable across the suite.
 # Production reads it from a KMS; without it the code fails closed (ADR 0001 D-2).
 os.environ.setdefault("IDENTITY_PEPPER", "test-pepper-not-a-secret")
+os.environ.setdefault("PII_ENCRYPTION_KEY", "test-encryption-key-not-a-secret")
 
 import httpx
 import pytest

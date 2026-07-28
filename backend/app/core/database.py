@@ -64,6 +64,8 @@ class Database:
     # `required=True`: without this index the data model can be corrupted
     # silently — double votes, duplicate token_ids, duplicated representatives.
     INDEX_SPECS = [
+        ("users", "rut_key", True, True),
+        ("users", "email_key", True, True),
         ("members", "wallet_address", True, True),
         ("members", "token_id", True, True),
         ("votes", [("proposal_id", 1), ("voter_address", 1)], True, True),

@@ -29,10 +29,15 @@ python-multipart==0.0.20
 # === Procesamiento de imágenes ===
 pillow==11.0.0             # validación de imágenes en el flujo de liveness
 
+# === Criptografía ===
+# Cifrado de PII en reposo (Fernet). Se había retirado por no estar importada;
+# vuelve porque app/core/crypto.py la usa de verdad (ROADMAP 1.4).
+cryptography==44.0.0
+
 # NOTA — retiradas por no estar importadas en ningún módulo (verificado sobre
 # el árbol de imports completo tras el PR #1):
-#   openai, aiohttp, prometheus-client, python-jose, PyJWT, passlib, bcrypt,
-#   cryptography, email-validator, anyio.
+#   openai, aiohttp, prometheus-client, python-jose, passlib, bcrypt,
+#   email-validator, anyio.
 # httpx pasó a requirements-dev.txt: solo lo usa tests/conftest.py.
 # Las de autenticación vuelven en la tarea 1.1 del ROADMAP, cuando exista
 # código que efectivamente emita y valide un JWT.

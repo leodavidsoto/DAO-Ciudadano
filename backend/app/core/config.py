@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # acuñadas quedan reversibles de forma retroactiva y sin rotación posible.
     IDENTITY_PEPPER: str = os.environ.get('IDENTITY_PEPPER', '')
 
+    # PII encryption at rest (ROADMAP 1.4). Separada del pepper de identidad a
+    # propósito: comprometer una no debe comprometer la otra.
+    PII_ENCRYPTION_KEY: str = os.environ.get('PII_ENCRYPTION_KEY', '')
+
     # External Services
     EMERGENT_LLM_KEY: Optional[str] = None
     
