@@ -18,6 +18,7 @@ load_dotenv(ROOT_DIR / '.env')
 # Import app modules
 from app.core.config import settings
 from app.core.database import Database
+from app.core import readiness
 from app.core.security_middleware import (
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
@@ -49,6 +50,10 @@ async def lifespan(app: FastAPI):
     db_name = os.environ.get('DB_NAME', settings.DB_NAME)
     Database.connect(mongo_url, db_name)
     Database.schedule_index_creation()
+
+    # Missing secrets are permanent, not transient: say so once, loudly,
+    # instead of failing every request with an opaque reference.
+    readiness.report_at_startup()
 
     yield
     
@@ -159,7 +164,8 @@ async def health_check(response: Response):
         database["error"] = type(e).__name__
 
     integrity = Database.integrity_status()
-    healthy = database["reachable"] and integrity["ready"]
+    configuration = readiness.status()
+    healthy = database["reachable"] and integrity["ready"] and configuration["ready"]
 
     if not healthy:
         response.status_code = 503
@@ -168,6 +174,7 @@ async def health_check(response: Response):
         "status": "healthy" if healthy else "degraded",
         "database": database,
         "integrity": integrity,
+        "configuration": configuration,
         "version": settings.APP_VERSION,
         "timestamp": datetime.now().isoformat(),
     }

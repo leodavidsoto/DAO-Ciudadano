@@ -18,6 +18,7 @@ from ..models import (
 from ..core.security import generate_short_hash
 from ..core.identity import identity_hash_hex, lookup_key
 from ..core.crypto import encrypt, decrypt
+from ..core import readiness
 from ..core.errors import report
 from ..core.database import identity_events_collection
 from ..core.config import settings
@@ -305,6 +306,9 @@ async def register_user(request: UserRegisterRequest):
     try:
         await mock_delay(0.1)
         
+        readiness.require("IDENTITY_PEPPER", "registrar cuentas")
+        readiness.require("PII_ENCRYPTION_KEY", "registrar cuentas")
+
         # Validate RUT
         if not validate_rut(request.rut):
             return UserResponse(ok=False, error="RUT inválido. Verifica el formato (ej: 12345678-9)")
@@ -360,6 +364,10 @@ async def register_user(request: UserRegisterRequest):
             assurance_level="AL1"  # Lower assurance since not verified with ClaveÚnica
         )
         
+    except HTTPException:
+        # Configuration errors carry an actionable message; do not flatten
+        # them into the generic one (that is what made this hard to diagnose).
+        raise
     except Exception as e:
         logger.error(f"Error in registration: {e}")
         return UserResponse(ok=False, error=report(e, "user_auth"))
@@ -375,6 +383,8 @@ async def login_user(request: UserLoginRequest):
     try:
         await mock_delay(0.1)
         
+        readiness.require("IDENTITY_PEPPER", "iniciar sesión")
+
         # Format RUT for lookup
         formatted_rut = format_rut(request.rut)
         
@@ -411,6 +421,8 @@ async def login_user(request: UserLoginRequest):
             assurance_level="AL1"
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in login: {e}")
         return UserResponse(ok=False, error=report(e, "user_auth"))

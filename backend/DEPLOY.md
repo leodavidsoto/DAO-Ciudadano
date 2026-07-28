@@ -72,6 +72,8 @@ Después, **redesplegar el frontend** (Netlify no relee `netlify.toml` sin un nu
 | `SECRET_KEY` | sí | Generada por Render (`generateValue: true`) |
 | `DEBUG` | no | `false` en producción (`true` expone `/docs` y devuelve detalle de errores) |
 | `CORS_ORIGIN_REGEX` | no | Regex para orígenes dinámicos (previews de Netlify). Ver abajo |
+| `IDENTITY_PEPPER` | **sí** | Pepper del HMAC de identidad. Sin ella, registro e inicio de sesión devuelven 503. |
+| `PII_ENCRYPTION_KEY` | **sí** | Cifrado de RUT, email y nombre. Sin ella, el registro devuelve 503. |
 | `SBT_CONTRACT_ADDRESS` | no | `0x813fd379F715107b2451553d97f29408d8185f0e` |
 | `EMERGENT_LLM_KEY` | no | Solo para el análisis de liveness real |
 
@@ -92,6 +94,11 @@ En vez de ir añadiendo URLs a mano, define `CORS_ORIGIN_REGEX`:
 Acepta el dominio de producción y cualquier preview, y solo eso. El ancla `$`
 final es lo que impide que `tu-sitio.netlify.app.dominio-atacante.com` pase el
 filtro — no la quites.
+
+**Si falta un secreto obligatorio**, el servicio arranca pero deja funciones caídas.
+No lo esconde: lo registra al arrancar, `/health` responde `degraded` con **503** nombrando
+la variable que falta, y los endpoints afectados devuelven un mensaje que dice cuál es. Un
+despliegue incompleto se diagnostica en segundos, no adivinando.
 
 **Defaults seguros:** si `CORS_ORIGINS` no está definida, la lista de orígenes permitidos queda vacía (deny-all) en lugar de `*`. Si `DEBUG` no está definida, vale `false`. Un despliegue sin configurar falla de forma visible, no de forma insegura.
 
