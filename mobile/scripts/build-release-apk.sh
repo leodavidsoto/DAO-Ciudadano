@@ -16,9 +16,11 @@ echo "==> Instalando dependencias de mobile (con el fix de MetaMask ya aplicado)
 cd "$MOBILE_DIR"
 npm install
 
-echo "==> Limpiando build anterior (importante: había quedado compilado con newArchEnabled=false)"
+echo "==> Limpiando build anterior, incluida la caché nativa de CMake (.cxx)"
+echo "    (newArchEnabled ha cambiado varias veces entre intentos; .cxx puede quedar en un estado mezclado)"
 cd android
 ./gradlew clean
+rm -rf app/.cxx
 
 echo "==> Compilando release (puede tardar varios minutos la primera vez)"
 ./gradlew assembleRelease
