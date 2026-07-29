@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { DarkTheme, NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar, View, Text, ScrollView } from 'react-native';
@@ -88,10 +88,7 @@ const screenOptions = {
   },
   headerTintColor: '#00FFFF',
   headerTitleStyle: {
-    // fontWeight quitado a propósito: react-native-screens 4.26.2 explota
-    // en useHeaderConfigProps ("Cannot read property 'regular' of
-    // undefined") al intentar resolver una variante de fuente bold/regular
-    // que esta app no registra. Ver commit del fix del cierre en release.
+    fontWeight: 'bold' as const,
     letterSpacing: 1,
   },
   headerBackTitleVisible: false,
@@ -107,8 +104,10 @@ function App(): React.JSX.Element {
       <StatusBar barStyle="light-content" backgroundColor="#0a0a1a" />
       <NavigationContainer
         theme={{
+          ...DarkTheme,
           dark: true,
           colors: {
+            ...DarkTheme.colors,
             primary: '#00FFFF',
             background: '#0a0a1a',
             card: '#0a0a2a',
@@ -116,6 +115,11 @@ function App(): React.JSX.Element {
             border: '#00FFFF30',
             notification: '#FF00FF',
           },
+          // React Navigation v7 exige 'fonts' en el theme (useHeaderConfigProps
+          // lee fonts.regular/medium/bold/heavy). Como este theme es un objeto
+          // literal completo y no un merge parcial, sin esto 'fonts' queda
+          // undefined y la app crashea apenas monta la primera pantalla con
+          // header -- esta fue la causa real del cierre inmediato en release.
         }}
       >
         <Stack.Navigator
