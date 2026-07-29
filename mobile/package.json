@@ -24,7 +24,7 @@
     "react-native-nfc-manager": "^3.14.14",
     "react-native-quick-crypto": "^0.7.0",
     "react-native-safe-area-context": "^5.5.2",
-    "react-native-screens": "^4.4.0",
+    "react-native-screens": "^4.26.2",
     "react-native-vector-icons": "^10.2.0"
   },
   "devDependencies": {

@@ -88,7 +88,10 @@ const screenOptions = {
   },
   headerTintColor: '#00FFFF',
   headerTitleStyle: {
-    fontWeight: 'bold' as const,
+    // fontWeight quitado a propósito: react-native-screens 4.26.2 explota
+    // en useHeaderConfigProps ("Cannot read property 'regular' of
+    // undefined") al intentar resolver una variante de fuente bold/regular
+    // que esta app no registra. Ver commit del fix del cierre en release.
     letterSpacing: 1,
   },
   headerBackTitleVisible: false,
