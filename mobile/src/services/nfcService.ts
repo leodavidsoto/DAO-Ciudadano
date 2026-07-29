@@ -6,7 +6,23 @@
  */
 
 import NfcManager, { NfcTech, Ndef } from 'react-native-nfc-manager';
-import { createHash, createCipheriv, createDecipheriv } from 'crypto';
+// crypto functions loaded lazily to avoid crash if native module fails to init
+let _crypto: any = null;
+function getCrypto() {
+    if (!_crypto) {
+        try {
+            _crypto = require('react-native-quick-crypto');
+        } catch (e) {
+            console.warn('react-native-quick-crypto not available:', e);
+            _crypto = {
+                createHash: () => { throw new Error('Crypto not available'); },
+                createCipheriv: () => { throw new Error('Crypto not available'); },
+                createDecipheriv: () => { throw new Error('Crypto not available'); },
+            };
+        }
+    }
+    return _crypto;
+}
 
 // APDU Commands for eID reading
 const APDU_COMMANDS = {
@@ -45,6 +61,7 @@ function deriveBACKeys(mrzInfo: {
     dateOfExpiry: string;
 }): { encKey: Buffer; macKey: Buffer } {
     const { documentNumber, dateOfBirth, dateOfExpiry } = mrzInfo;
+    const { createHash } = getCrypto();
 
     // Calculate check digits
     const docNumCheck = calculateCheckDigit(documentNumber);
