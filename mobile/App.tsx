@@ -7,7 +7,7 @@ import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { StatusBar } from 'react-native';
+import { StatusBar, View, Text, ScrollView } from 'react-native';
 
 // Screens
 import HomeScreen from './src/screens/HomeScreen';
@@ -16,6 +16,71 @@ import SuccessScreen from './src/screens/SuccessScreen';
 import WalletScreen from './src/screens/WalletScreen';
 
 const Stack = createNativeStackNavigator();
+
+/**
+ * DIAGNÓSTICO TEMPORAL: en vez de dejar que un error de render tumbe
+ * silenciosamente la app en release (Android la cierra sin mostrar nada),
+ * esto lo captura y lo muestra en pantalla. Quitar una vez identificada
+ * y resuelta la causa del cierre inmediato.
+ */
+class CrashScreenBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null; info: string }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null, info: '' };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    this.setState({ info: info?.componentStack || '' });
+    // eslint-disable-next-line no-console
+    console.error('CrashScreenBoundary capturó un error:', error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <ScrollView
+          style={{ flex: 1, backgroundColor: '#1a0000' }}
+          contentContainerStyle={{ padding: 20, paddingTop: 60 }}>
+          <Text
+            style={{
+              color: '#ff5555',
+              fontSize: 18,
+              fontWeight: 'bold',
+              marginBottom: 12,
+            }}>
+            La app encontró un error al abrir
+          </Text>
+          <View style={{ marginBottom: 16 }}>
+            <Text selectable style={{ color: '#fff', fontSize: 13 }}>
+              {String(this.state.error?.name || 'Error')}:{' '}
+              {String(this.state.error?.message || this.state.error)}
+            </Text>
+          </View>
+          <Text style={{ color: '#888', fontSize: 11, marginBottom: 6 }}>
+            Stack:
+          </Text>
+          <Text selectable style={{ color: '#aaa', fontSize: 10 }}>
+            {String(this.state.error?.stack || 'sin stack')}
+          </Text>
+          <Text style={{ color: '#888', fontSize: 11, marginTop: 16, marginBottom: 6 }}>
+            Componentes:
+          </Text>
+          <Text selectable style={{ color: '#aaa', fontSize: 10 }}>
+            {this.state.info}
+          </Text>
+        </ScrollView>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const screenOptions = {
   headerStyle: {
@@ -34,7 +99,8 @@ const screenOptions = {
 
 function App(): React.JSX.Element {
   return (
-    <SafeAreaProvider>
+    <CrashScreenBoundary>
+      <SafeAreaProvider>
       <StatusBar barStyle="light-content" backgroundColor="#0a0a1a" />
       <NavigationContainer
         theme={{
@@ -75,7 +141,8 @@ function App(): React.JSX.Element {
           />
         </Stack.Navigator>
       </NavigationContainer>
-    </SafeAreaProvider>
+      </SafeAreaProvider>
+    </CrashScreenBoundary>
   );
 }
 
