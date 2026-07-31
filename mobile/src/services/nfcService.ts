@@ -6,23 +6,7 @@
  */
 
 import NfcManager, { NfcTech, Ndef } from 'react-native-nfc-manager';
-// crypto functions loaded lazily to avoid crash if native module fails to init
-let _crypto: any = null;
-function getCrypto() {
-    if (!_crypto) {
-        try {
-            _crypto = require('react-native-quick-crypto');
-        } catch (e) {
-            console.warn('react-native-quick-crypto not available:', e);
-            _crypto = {
-                createHash: () => { throw new Error('Crypto not available'); },
-                createCipheriv: () => { throw new Error('Crypto not available'); },
-                createDecipheriv: () => { throw new Error('Crypto not available'); },
-            };
-        }
-    }
-    return _crypto;
-}
+import { deriveBACKeys as deriveBACKeysICAO, MRZKeyData } from './bacCrypto';
 
 // APDU Commands for eID reading
 const APDU_COMMANDS = {
@@ -35,53 +19,20 @@ const APDU_COMMANDS = {
     READ_BINARY: [0x00, 0xB0, 0x00, 0x00, 0x00],
 };
 
-// MRZ Check digit calculation
-function calculateCheckDigit(str: string): number {
-    const weights = [7, 3, 1];
-    let sum = 0;
-    for (let i = 0; i < str.length; i++) {
-        let value = 0;
-        const char = str[i].toUpperCase();
-        if (char >= '0' && char <= '9') {
-            value = parseInt(char, 10);
-        } else if (char >= 'A' && char <= 'Z') {
-            value = char.charCodeAt(0) - 55; // A=10, B=11, etc.
-        } else if (char === '<') {
-            value = 0;
-        }
-        sum += value * weights[i % 3];
-    }
-    return sum % 10;
-}
-
-// Derive BAC keys from MRZ
-function deriveBACKeys(mrzInfo: {
-    documentNumber: string;
-    dateOfBirth: string;
-    dateOfExpiry: string;
-}): { encKey: Buffer; macKey: Buffer } {
-    const { documentNumber, dateOfBirth, dateOfExpiry } = mrzInfo;
-    const { createHash } = getCrypto();
-
-    // Calculate check digits
-    const docNumCheck = calculateCheckDigit(documentNumber);
-    const dobCheck = calculateCheckDigit(dateOfBirth);
-    const doeCheck = calculateCheckDigit(dateOfExpiry);
-
-    // Create MRZ info string
-    const mrzInfoStr = `${documentNumber}${docNumCheck}${dateOfBirth}${dobCheck}${dateOfExpiry}${doeCheck}`;
-
-    // Create seed using SHA-1
-    const seed = createHash('sha1').update(mrzInfoStr).digest();
-
-    // Derive encryption and MAC keys
-    const encKeyData = Buffer.concat([seed.slice(0, 16), Buffer.from([0x00, 0x00, 0x00, 0x01])]);
-    const macKeyData = Buffer.concat([seed.slice(0, 16), Buffer.from([0x00, 0x00, 0x00, 0x02])]);
-
-    const encKey = createHash('sha1').update(encKeyData).digest().slice(0, 16);
-    const macKey = createHash('sha1').update(macKeyData).digest().slice(0, 16);
-
-    return { encKey, macKey };
+/**
+ * Derivación de llaves BAC. Delega en bacCrypto.ts, que está verificado
+ * contra los vectores publicados de ICAO 9303 (ver
+ * __tests__/bacCrypto.test.ts).
+ *
+ * La implementación anterior que vivía acá tenía dos errores que la hacían
+ * incapaz de autenticar contra un chip real: (1) no rellenaba el número de
+ * documento a 9 caracteres con '<' como exige la MRZ, y (2) no ajustaba la
+ * paridad impar de las llaves DES. No se notaban porque el protocolo nunca
+ * llegaba a ejecutarse.
+ */
+function deriveBACKeys(mrz: MRZKeyData): { encKey: Buffer; macKey: Buffer } {
+    const { kenc, kmac } = deriveBACKeysICAO(mrz);
+    return { encKey: kenc, macKey: kmac };
 }
 
 export interface ChileanIDData {
@@ -103,6 +54,15 @@ export interface NFCReadResult {
     data?: ChileanIDData;
     error?: string;
     serialNumber?: string;
+    /**
+     * true SOLO si se estableció el canal seguro BAC y los datos de
+     * identidad vienen firmados por el Registro Civil (EF.SOD verificado).
+     *
+     * Nunca asumas identidad verificada por `success: true`: leer el número
+     * de serie de un tag NFC es "éxito" a nivel de lectura, pero no prueba
+     * absolutamente nada sobre quién es la persona.
+     */
+    identityVerified: boolean;
 }
 
 class NFCService {
@@ -159,37 +119,46 @@ class NFCService {
 
             console.log('Tag detected:', tag);
 
-            // If MRZ data provided, attempt BAC authentication
-            if (mrzData) {
-                const keys = deriveBACKeys(mrzData);
-                console.log('BAC keys derived');
-
-                // TODO: Implement full PACE/BAC protocol
-                // This requires sending specific APDU commands in sequence
+            if (!mrzData) {
+                return {
+                    success: false,
+                    identityVerified: false,
+                    serialNumber,
+                    error:
+                        'Faltan los datos de la MRZ (número de documento, fecha de nacimiento y ' +
+                        'de expiración). Sin ellos no se pueden derivar las llaves BAC y el chip ' +
+                        'no entrega ningún dato.',
+                };
             }
 
-            // For now, return basic tag info
-            const result: NFCReadResult = {
-                success: true,
-                serialNumber,
-                data: {
-                    documentNumber: mrzData?.documentNumber || '',
-                    firstName: '',
-                    lastName: '',
-                    dateOfBirth: mrzData?.dateOfBirth || '',
-                    dateOfExpiry: mrzData?.dateOfExpiry || '',
-                    nationality: 'CHL',
-                    sex: '',
-                    rut: '',
-                    serialNumber,
-                },
-            };
+            // Las llaves BAC ya se derivan correctamente (bacCrypto.ts,
+            // verificado contra los vectores de ICAO 9303). Lo que falta es
+            // el intercambio de APDUs sobre el canal seguro.
+            deriveBACKeys(mrzData);
 
-            return result;
+            // NO IMPLEMENTADO: autenticación mutua BAC + secure messaging +
+            // lectura de DG1/EF.SOD. Hasta que exista, esta función NO puede
+            // entregar identidad verificada.
+            //
+            // Antes devolvía `success: true` con firstName/lastName/rut en
+            // blanco, y quien llamaba no tenía forma de distinguir eso de una
+            // lectura real. Eso es precisamente la "capacidad fingida" que
+            // docs/HANDOFF.md prohíbe, y provocó que el minteo aceptara
+            // cualquier tag NFC como si fuera una cédula.
+            return {
+                success: false,
+                identityVerified: false,
+                serialNumber,
+                error:
+                    'La lectura autenticada de la cédula (BAC + DG1/EF.SOD) todavía no está ' +
+                    'implementada. Las llaves BAC ya se derivan correctamente; falta el ' +
+                    'intercambio de APDUs sobre el canal seguro.',
+            };
         } catch (error: any) {
             console.error('NFC read error:', error);
             return {
                 success: false,
+                identityVerified: false,
                 error: error.message || 'Failed to read NFC tag',
             };
         } finally {
@@ -198,7 +167,12 @@ class NFCService {
     }
 
     /**
-     * Simple NFC tag read (for NDEF tags)
+     * Lectura simple de un tag NDEF.
+     *
+     * ATENCIÓN: esto lee CUALQUIER tag NFC (una tarjeta de transporte, una
+     * llave de hotel) y devuelve su número de serie. NO es lectura de cédula
+     * y NO verifica identidad: `identityVerified` siempre es false. Sirve
+     * para diagnóstico de hardware NFC, no para registrar a nadie.
      */
     async readSimpleTag(): Promise<NFCReadResult> {
         try {
@@ -229,6 +203,7 @@ class NFCService {
 
             return {
                 success: true,
+                identityVerified: false, // un serial de tag no es identidad
                 serialNumber,
                 data: {
                     documentNumber: serialNumber,
@@ -246,6 +221,7 @@ class NFCService {
         } catch (error: any) {
             return {
                 success: false,
+                identityVerified: false,
                 error: error.message || 'Failed to read NFC tag',
             };
         } finally {

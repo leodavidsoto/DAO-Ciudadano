@@ -88,17 +88,20 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
         setScanResult(null);
 
         try {
-            // For Chilean ID, we'd need MRZ data first
-            // For demo, using simple read
+            // OJO: readSimpleTag() lee cualquier tag NFC y NO verifica
+            // identidad (identityVerified siempre false). La lectura
+            // autenticada de la cédula (BAC sobre DG1/EF.SOD) está en
+            // desarrollo; hasta entonces esto sirve para comprobar que el
+            // hardware NFC responde, no para registrar a nadie.
             const result = await nfcService.readSimpleTag();
 
             setScanResult(result);
 
             if (result.success && result.data) {
-                // Navigate to success screen with data
                 navigation.navigate('Success', {
                     idData: result.data,
                     serialNumber: result.serialNumber,
+                    identityVerified: result.identityVerified,
                 });
             } else {
                 setError(result.error || 'Error al leer la tarjeta');

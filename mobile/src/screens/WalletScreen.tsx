@@ -10,11 +10,11 @@
  *    botón visible pero deshabilitado para no prometer algo que no existe.
  *
  * Si se llega desde el flujo NFC (Home -> Scan -> Success -> Wallet), los
- * datos del chip vienen en route.params y se usan para mintear la
- * membresía automáticamente en cuanto la sesión de wallet queda firmada. Si
- * se llega directo desde "YA TENGO MEMBRESÍA" en Home, route.params viene
- * vacío y la pantalla se limita a conectar/crear la wallet y mostrar el
- * estado de membresía existente.
+ * datos del chip llegan en route.params. El minteo automático con esos datos
+ * está DESHABILITADO hasta que exista lectura autenticada de la cédula: ver
+ * el comentario en signInAndProceed. Si se llega directo desde "YA TENGO
+ * MEMBRESÍA" en Home, route.params viene vacío y la pantalla se limita a
+ * crear/cargar la wallet y mostrar el estado de membresía existente.
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
@@ -33,31 +33,6 @@ import { Wallet as EthersWallet } from 'ethers';
 import apiService from '../services/apiService';
 import walletService, { GeneratedWallet } from '../services/walletService';
 import { ChileanIDData } from '../services/nfcService';
-
-// SHA-256 cargado en diferido, mismo patrón que nfcService.ts: no debe
-// tumbar la carga de la app si el módulo nativo falla en inicializar.
-let _crypto: any = null;
-function getCrypto() {
-    if (!_crypto) {
-        try {
-            _crypto = require('react-native-quick-crypto');
-        } catch (e) {
-            _crypto = null;
-        }
-    }
-    return _crypto;
-}
-
-/** doc_hash determinístico a partir del serial NFC leído (el backend lo
- * vuelve a peppear con HMAC antes de usarlo on-chain, ver
- * app/core/identity.py:document_identity_hash_hex — acá solo hace falta
- * un valor no vacío y estable). */
-function hashSerial(serialNumber: string): string {
-    const crypto = getCrypto();
-    if (!crypto) return `0x${Buffer.from(serialNumber).toString('hex')}`;
-    const digest = crypto.createHash('sha256').update(serialNumber).digest('hex');
-    return `0x${digest}`;
-}
 
 interface MemberInfo {
     token_id: number;
@@ -122,24 +97,22 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                 return;
             }
 
+            // El minteo automático tras el escaneo NFC queda deshabilitado a
+            // propósito: la versión anterior usaba sha256(serial del tag)
+            // como doc_hash, con lo cual CUALQUIER tag NFC (tarjeta de bus,
+            // llave de hotel) servía para registrarse como ciudadano. El
+            // serial de un tag no prueba identidad.
+            //
+            // Se reactiva cuando nfcService.readChileanID() devuelva
+            // identityVerified: true, es decir cuando esté implementada la
+            // lectura autenticada BAC de DG1/EF.SOD (las llaves BAC ya están
+            // listas y verificadas en bacCrypto.ts).
             if (idData && serialNumber) {
-                setState('minting');
-                const mintResult = await apiService.mintSBT({
-                    walletAddress: wallet.address,
-                    docHash: hashSerial(serialNumber),
-                    assuranceLevel: 'AL2',
-                });
-                if (mintResult.ok) {
-                    setMember({
-                        token_id: mintResult.token_id,
-                        wallet_address: wallet.address,
-                        assurance_level: 'AL2',
-                        status: 'active',
-                        tx_hash: mintResult.tx_hash,
-                    });
-                } else {
-                    setError(mintResult.error || 'No se pudo registrar la membresía');
-                }
+                setError(
+                    'Registro con cédula todavía no disponible: la lectura autenticada del ' +
+                    'chip (BAC) está en desarrollo. Tu billetera quedó creada y guardada en ' +
+                    'este dispositivo.',
+                );
             }
             setState('ready');
         } catch (e: any) {

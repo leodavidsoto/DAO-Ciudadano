@@ -76,6 +76,21 @@ agenthub/agents/youtube/db
 # Build caches
 .cache/
 
+# Artefactos ZKP (circuits/) — pesados y regenerables con circuits/compile.sh.
+# Los .ptau y .zkey intermedios pueden pesar cientos de MB y no aportan nada
+# al repositorio: se regeneran o se descargan de la ceremonia.
+circuits/build/
+*.ptau
+*.zkey
+*.r1cs
+*.sym
+# El .wasm del prover se genera al compilar; se publica como asset del build
+# del frontend, no como fuente versionada.
+circuits/**/*.wasm
+# El verificador en Solidity lo genera snarkjs a partir del .zkey: versionarlo
+# invita a que se desincronice de la llave con la que realmente se verifica.
+contracts/contracts/Verifier.sol
+
 # Mobile development
 android-sdk/ -e 
 # Environment files

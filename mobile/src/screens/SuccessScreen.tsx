@@ -20,28 +20,39 @@ interface SuccessScreenProps {
         params: {
             idData: ChileanIDData;
             serialNumber: string;
+            identityVerified?: boolean;
         };
     };
 }
 
 const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
-    const { idData, serialNumber } = route.params;
+    const { idData, serialNumber, identityVerified = false } = route.params;
 
     const handleContinue = () => {
-        navigation.navigate('Wallet', { idData, serialNumber });
+        navigation.navigate('Wallet', { idData, serialNumber, identityVerified });
     };
 
     return (
         <SafeAreaView style={styles.container}>
             <ScrollView contentContainerStyle={styles.content}>
-                {/* Success Icon */}
-                <View style={styles.successIcon}>
-                    <Text style={styles.checkmark}>✓</Text>
+                {/* Estado de lectura. El ícono y el texto reflejan si la
+                    identidad fue verificada criptográficamente o si solo se
+                    detectó un tag NFC: decir "verificado" sin serlo es
+                    justamente lo que permitía registrarse con cualquier
+                    tarjeta. */}
+                <View style={identityVerified ? styles.successIcon : styles.warningIcon}>
+                    <Text style={identityVerified ? styles.checkmark : styles.warningMark}>
+                        {identityVerified ? '✓' : '!'}
+                    </Text>
                 </View>
 
-                <Text style={styles.title}>CHIP VERIFICADO</Text>
+                <Text style={identityVerified ? styles.title : styles.titleWarning}>
+                    {identityVerified ? 'CHIP VERIFICADO' : 'CHIP DETECTADO'}
+                </Text>
                 <Text style={styles.subtitle}>
-                    La identificación ha sido leída exitosamente
+                    {identityVerified
+                        ? 'La identificación ha sido leída y verificada'
+                        : 'Se detectó un chip NFC, pero su identidad aún no está verificada'}
                 </Text>
 
                 {/* Data Card */}
@@ -77,26 +88,38 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
                     )}
 
                     <View style={styles.hashContainer}>
-                        <Text style={styles.hashLabel}>Hash de Verificación:</Text>
+                        {/* Antes decía "Hash de Verificación", pero es el serial
+                            del tag recortado -- ni es un hash ni verifica nada. */}
+                        <Text style={styles.hashLabel}>Identificador del chip:</Text>
                         <Text style={styles.hashValue}>
                             {serialNumber.substring(0, 8)}...{serialNumber.substring(serialNumber.length - 4)}
                         </Text>
                     </View>
                 </View>
 
-                {/* Security Badge */}
-                <View style={styles.securityBadge}>
-                    <Text style={styles.securityIcon}>🔒</Text>
-                    <Text style={styles.securityText}>
-                        Verificación criptográfica completada
-                    </Text>
-                </View>
+                {/* Estado real de la verificación criptográfica */}
+                {identityVerified ? (
+                    <View style={styles.securityBadge}>
+                        <Text style={styles.securityIcon}>🔒</Text>
+                        <Text style={styles.securityText}>
+                            Verificación criptográfica completada
+                        </Text>
+                    </View>
+                ) : (
+                    <View style={styles.pendingBadge}>
+                        <Text style={styles.securityIcon}>⚠️</Text>
+                        <Text style={styles.pendingText}>
+                            Lectura sin verificar: el número de serie de un chip no prueba
+                            identidad. La lectura autenticada de la cédula está en desarrollo.
+                        </Text>
+                    </View>
+                )}
             </ScrollView>
 
             {/* Continue Button */}
             <View style={styles.buttonContainer}>
                 <TouchableOpacity style={styles.button} onPress={handleContinue}>
-                    <Text style={styles.buttonText}>CONECTAR WALLET</Text>
+                    <Text style={styles.buttonText}>CONTINUAR A MI BILLETERA</Text>
                 </TouchableOpacity>
             </View>
         </SafeAreaView>
@@ -132,6 +155,45 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#00FF00',
         letterSpacing: 2,
+    },
+    titleWarning: {
+        fontSize: 24,
+        fontWeight: 'bold',
+        color: '#FFA500',
+        letterSpacing: 2,
+        textAlign: 'center',
+    },
+    warningIcon: {
+        width: 100,
+        height: 100,
+        borderRadius: 50,
+        backgroundColor: '#FFA50020',
+        borderWidth: 3,
+        borderColor: '#FFA500',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginVertical: 30,
+    },
+    warningMark: {
+        fontSize: 48,
+        color: '#FFA500',
+        fontWeight: 'bold',
+    },
+    pendingBadge: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        marginTop: 20,
+        padding: 12,
+        backgroundColor: '#FFA50010',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#FFA50040',
+    },
+    pendingText: {
+        color: '#FFCC80',
+        fontSize: 12,
+        flex: 1,
+        lineHeight: 17,
     },
     subtitle: {
         fontSize: 14,
