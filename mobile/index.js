@@ -2,6 +2,13 @@
  * @format
  */
 
+// Debe ser el primer import de todo el bundle: instala global.crypto.getRandomValues
+// (vía RNGetRandomValues nativo) ANTES de que cualquier otro módulo -en
+// particular ethers, usado en services/walletService.ts para generar
+// billeteras- intente usarlo. Importarlo más tarde (o dentro de un
+// try/catch más abajo) puede dejarlo sin instalar si algo lo captura antes.
+import 'react-native-get-random-values';
+
 import React from 'react';
 import { AppRegistry, ScrollView, Text, View } from 'react-native';
 import { name as appName } from './app.json';

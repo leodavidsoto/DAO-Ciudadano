@@ -34,6 +34,24 @@ class ApiService {
         this.token = token;
     }
 
+    // Wallet session (SIWE) endpoints
+
+    /** POST /wallet/challenge — pide un desafío de un solo uso para firmar. */
+    async walletChallenge(address: string) {
+        const response = await this.client.post('/wallet/challenge', { address });
+        return response.data as { message: string; nonce: string };
+    }
+
+    /** POST /wallet/verify — verifica la firma y devuelve el JWT de sesión. */
+    async walletVerify(address: string, nonce: string, signature: string) {
+        const response = await this.client.post('/wallet/verify', {
+            address,
+            nonce,
+            signature,
+        });
+        return response.data as { token: string; address: string; expires_in: number };
+    }
+
     // Auth endpoints
 
     /** POST /auth/register — expects rut, email, nombre, apellido */
