@@ -156,8 +156,8 @@ Objetivo: cerrar C-4 en su raíz, A-3 y A-8. Los tiempos dependen de organismos 
 |---|---|
 | 5.1 | Migrar el `owner` del contrato de una EOA a un Safe multisig (cierra M-11) |
 | 5.2 | Definir y publicar el proceso de revocación: quién puede pedirla, con qué causal, con qué apelación. El cooldown de 3 días ya existe en el contrato; falta la gobernanza que lo legitime |
-| 5.3 | Restaurar el backend en producción; evaluar si Render free tier es adecuado o migrar |
-| 5.4 | Observabilidad: Sentry para errores, métricas Prometheus (`prometheus-client` ya está en requirements y no se usa), alertas |
+| 5.3 | ✅ **Configurado (julio 2026)** — evaluación hecha: Fly.io eliminó su capa gratuita y Koyeb cerró la suya, así que el destino es **Render free + MongoDB Atlas M0**. `render.yaml` con `plan: free`, `Dockerfile` portable para migrar sin reescribir, dependencias de producción recortadas y arranque que no bloquea esperando a Mongo. Falta el paso manual de crear el servicio y el clúster (guía en `backend/DEPLOY.md`) |
+| 5.4 | Observabilidad: Sentry para errores, métricas Prometheus, alertas. (`prometheus-client` se retiró de `requirements.txt` por no estar importado; hay que volver a añadirlo cuando se instrumente de verdad) |
 | 5.5 | Auditoría externa del contrato antes de cualquier despliegue en mainnet |
 | 5.6 | Evaluación de impacto en protección de datos (Ley 21.719) y política de privacidad publicada |
 | 5.7 | Despliegue en mainnet (Polygon, según el README) con contrato auditado y verificado |
