@@ -2,13 +2,18 @@
  * DAO Ciudadana - Main Application Entry
  *
  * Routes:
- *   /            onboarding flow (identity verification + SBT)
+ *   /            landing pública (EstamosDAO)
+ *   /unete       onboarding flow (identity verification + SBT)
  *   /dashboard   citizen governance dashboard
+ *
+ * La landing pasó a ser la puerta de entrada: antes "/" abría directo el
+ * flujo de verificación, sin explicar antes qué es la red. El CTA "ÚNETE A
+ * LA RED" es el que entra al onboarding, ahora en /unete.
  */
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { OnboardingProvider } from "./context";
-import { OnboardingPage } from "./pages";
+import { LandingPage, OnboardingPage } from "./pages";
 import {
   DashboardLayout,
   OverviewSection,
@@ -25,10 +30,12 @@ const App = () => {
     <BrowserRouter>
       <div className="App">
         <Routes>
+          <Route path="/" element={<LandingPage />} />
+
           {/* Onboarding keeps its own provider: the dashboard does not need
               the onboarding state machine and should not re-mount it. */}
           <Route
-            path="/"
+            path="/unete"
             element={
               <OnboardingProvider>
                 <OnboardingPage />

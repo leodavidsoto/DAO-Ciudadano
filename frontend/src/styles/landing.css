@@ -1,0 +1,122 @@
+/**
+ * Estilos de la landing pública (EstamosDAO).
+ *
+ * El mockup de origen usaba un atributo `style-hover` que solo entiende el
+ * runtime de Claude Design. Acá se traduce a CSS real: los estados :hover
+ * no se pueden expresar con estilos inline de React, así que cada uno vive
+ * como clase.
+ *
+ * Paleta (bandera de Chile): azul #003897, rojo #CB2C27, tinta #0B2545.
+ * Tipografías: Poppins (títulos/UI) y Open Sans (texto), cargadas en
+ * public/index.html.
+ */
+
+.landing-root {
+    margin: 0;
+    background: #ffffff;
+    font-family: "Open Sans", system-ui, sans-serif;
+    color: #0B2545;
+    -webkit-font-smoothing: antialiased;
+}
+
+.landing-root a {
+    color: #003897;
+    text-decoration: none;
+}
+
+.landing-root ::selection {
+    background: #D8E4F7;
+}
+
+.landing-root *:focus-visible {
+    outline: 2px solid #CB2C27;
+    outline-offset: 2px;
+}
+
+@keyframes floatNode {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-6px); }
+}
+
+.landing-float {
+    animation: floatNode 7s ease-in-out infinite;
+}
+
+/* Respeta a quien pidió menos movimiento en su sistema operativo. */
+@media (prefers-reduced-motion: reduce) {
+    .landing-float { animation: none; }
+}
+
+/* === Estados hover === */
+
+.landing-nav-link {
+    color: #33456B;
+    padding: 6px 0;
+    border-bottom: 2px solid transparent;
+    transition: color .2s ease;
+}
+.landing-nav-link:hover { color: #CB2C27; }
+
+.landing-nav-link.is-active {
+    color: #003897;
+    border-bottom-color: #003897;
+}
+
+.landing-btn-primary {
+    background: #003897;
+    color: #ffffff;
+    transition: background .2s ease;
+}
+.landing-btn-primary:hover { background: #002B75; color: #ffffff; }
+
+.landing-btn-red {
+    background: #CB2C27;
+    color: #ffffff;
+    transition: background .2s ease;
+}
+.landing-btn-red:hover { background: #A9211D; color: #ffffff; }
+
+.landing-btn-ghost {
+    border: 1.5px solid #C2D2EC;
+    background: rgba(255, 255, 255, 0.7);
+    color: #003897;
+    transition: border-color .2s ease;
+}
+.landing-btn-ghost:hover { border-color: #003897; }
+
+.landing-card {
+    transition: box-shadow .25s ease, transform .25s ease;
+}
+.landing-card:hover {
+    box-shadow: 0 16px 34px rgba(11, 37, 69, 0.10);
+    transform: translateY(-3px);
+}
+
+.landing-footer-link {
+    color: #C3D3EE;
+    transition: color .2s ease;
+}
+.landing-footer-link:hover { color: #ffffff; }
+
+/* === Responsive ===
+   El mockup asume un lienzo de 1440px. Sin esto, en móvil las grillas de
+   3-4 columnas se salen de pantalla. */
+
+@media (max-width: 1024px) {
+    .landing-hero-grid,
+    .landing-grid-3,
+    .landing-grid-4,
+    .landing-cta-grid { grid-template-columns: 1fr !important; }
+    .landing-steps-line { display: none !important; }
+    .landing-footer-grid { grid-template-columns: 1fr 1fr !important; }
+}
+
+@media (max-width: 720px) {
+    .landing-section { padding-left: 22px !important; padding-right: 22px !important; }
+    .landing-header  { padding-left: 22px !important; padding-right: 22px !important; }
+    .landing-hero-title { font-size: 36px !important; }
+    .landing-h2 { font-size: 28px !important; }
+    .landing-nav { display: none !important; }
+    .landing-footer-grid { grid-template-columns: 1fr !important; }
+    .landing-grid-4 { grid-template-columns: 1fr 1fr !important; }
+}

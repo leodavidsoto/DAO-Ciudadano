@@ -1,3 +1,4 @@
 // Pages exports
+export { default as LandingPage } from './LandingPage';
 export { default as OnboardingPage } from './OnboardingPage';
 export { default as DashboardPage } from './DashboardPage';
