@@ -3,7 +3,7 @@
  * Manages the state of the citizen onboarding flow
  */
 import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
-import { authAPI, walletAPI, membershipAPI, dashboardAPI } from '../lib/api';
+import { authAPI, membershipAPI, dashboardAPI } from '../lib/api';
 
 const OnboardingContext = createContext(null);
 
@@ -108,23 +108,11 @@ export const OnboardingProvider = ({ children }) => {
         }
     }, [selectedFile]);
 
-    const connectWallet = useCallback(async () => {
-        setLoading(true);
-        setError('');
-        try {
-            const response = await walletAPI.connect();
-            if (response.data.ok) {
-                setWallet(response.data);
-                setStep('mint');
-            } else {
-                setError(response.data.error || 'Error conectando wallet');
-            }
-        } catch (err) {
-            setError('Error de conexión con wallet');
-        } finally {
-            setLoading(false);
-        }
-    }, []);
+    // NOTA: la conexión de wallet real (MetaMask + sesión SIWE) vive en
+    // hooks/useWallet.js y se usa directamente desde WalletStep.jsx -- no
+    // hay una acción `connectWallet` acá. La que había antes llamaba al
+    // endpoint mock deprecado POST /wallet/connect (dirección inventada por
+    // el servidor, sin firma) y no la usaba ningún componente.
 
     const loadStats = useCallback(async () => {
         try {
@@ -245,7 +233,6 @@ export const OnboardingProvider = ({ children }) => {
         authenticateClaveUnica,
         authenticateNFC,
         analyzeLiveness,
-        connectWallet,
         mintSBT,
         fetchExistingMembership,
         loadStats,

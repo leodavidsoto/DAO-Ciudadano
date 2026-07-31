@@ -34,6 +34,13 @@ api.interceptors.response.use(
     (response) => response,
     (error) => {
         console.error('API Error:', error.response?.data || error.message);
+        if (error.response?.status === 401) {
+            // El token de sesión (SIWE) expiró o es inválido -- lo limpiamos
+            // para que el próximo connect() vuelva a pedir firma en vez de
+            // reintentar para siempre con un token muerto.
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('auth_address');
+        }
         return Promise.reject(error);
     }
 );
@@ -59,7 +66,13 @@ export const authAPI = {
 
 // === Wallet API ===
 export const walletAPI = {
+    // DEPRECADO: dirección inventada por el servidor, no autentica nada.
+    // Se mantiene solo por compatibilidad; el flujo real es challenge+verify.
     connect: () => api.post('/wallet/connect'),
+    // Sesión de wallet real (SIWE, ver services/siwe_service.py en el backend).
+    challenge: (address) => api.post('/wallet/challenge', { address }),
+    verify: (address, nonce, signature) =>
+        api.post('/wallet/verify', { address, nonce, signature }),
     getBalance: (address) => api.get(`/wallet/balance/${address}`),
 };
 

@@ -1,9 +1,21 @@
 /**
  * useWallet Hook - Real MetaMask/Web3 integration
  * Connects to Ethereum wallets and manages Web3 state
+ *
+ * Sesión de wallet (SIWE, cierra el hallazgo C-1): conectar MetaMask solo
+ * prueba que el usuario tiene esa extensión abierta, NO que controla la
+ * dirección -- cualquiera puede escribir cualquier address en un form. Tras
+ * obtener la cuenta, este hook pide un desafío (POST /wallet/challenge), lo
+ * firma con personal_sign vía el signer real de MetaMask, y verifica la
+ * firma (POST /wallet/verify) para obtener un JWT de sesión corto. Ese JWT
+ * se guarda en localStorage bajo 'auth_token' -- la misma clave que el
+ * interceptor de axios en lib/api.js ya adjunta como Bearer en cada
+ * request, así que mint/votar/delegar quedan autenticados automáticamente
+ * sin tocar esos otros call sites.
  */
 import { useState, useCallback, useEffect } from 'react';
 import { BrowserProvider, formatEther } from 'ethers';
+import { walletAPI } from '../lib/api';
 
 // Supported networks
 const NETWORKS = {
@@ -58,6 +70,29 @@ const useWallet = () => {
     // Get network info
     const getNetworkInfo = (id) => NETWORKS[id] || { name: `Chain ${id}`, symbol: 'ETH' };
 
+    // Sesión SIWE: pide el desafío, lo firma con el signer real, verifica
+    // la firma y guarda el JWT devuelto. Lanza si algo falla -- el llamador
+    // decide cómo reportarlo (connect() lo trata como fallo de conexión).
+    //
+    // Si ya hay un token guardado para esta MISMA dirección, no se vuelve a
+    // pedir firma: sin este atajo, cada recarga de página (el efecto de
+    // "reconectar si MetaMask ya está autorizado", más abajo) dispararía un
+    // popup de firma de MetaMask sin que el usuario haya hecho nada.
+    const signInWithEthereum = useCallback(async (signerInstance, expectedAddress) => {
+        const cachedAddress = localStorage.getItem('auth_address');
+        const cachedToken = localStorage.getItem('auth_token');
+        if (cachedToken && cachedAddress && cachedAddress.toLowerCase() === expectedAddress.toLowerCase()) {
+            return { token: cachedToken, reused: true };
+        }
+
+        const { data: challenge } = await walletAPI.challenge(expectedAddress);
+        const signature = await signerInstance.signMessage(challenge.message);
+        const { data: session } = await walletAPI.verify(expectedAddress, challenge.nonce, signature);
+        localStorage.setItem('auth_token', session.token);
+        localStorage.setItem('auth_address', expectedAddress.toLowerCase());
+        return session;
+    }, []);
+
     // Connect wallet
     const connect = useCallback(async () => {
         // Re-check MetaMask installation
@@ -90,6 +125,14 @@ const useWallet = () => {
             const network = await browserProvider.getNetwork();
             const balanceWei = await browserProvider.getBalance(accounts[0]);
 
+            // Prueba de propiedad de la dirección (SIWE): sin esto, conectar
+            // MetaMask solo demuestra que la extensión está abierta, no que
+            // el usuario controla accounts[0]. Si el usuario rechaza firmar
+            // o el backend no puede emitir sesión, la conexión se considera
+            // fallida -- el address quedaría "conectado" pero sin poder
+            // mintear/votar (el backend rechazaría todo con 401).
+            await signInWithEthereum(signerInstance, accounts[0]);
+
             setProvider(browserProvider);
             setSigner(signerInstance);
             setAddress(accounts[0]);
@@ -112,16 +155,20 @@ const useWallet = () => {
                 errorMessage = 'Conexión rechazada por el usuario';
             } else if (err.code === -32002) {
                 errorMessage = 'Ya hay una solicitud pendiente en MetaMask. Por favor revisa la extensión.';
+            } else if (err.response?.data?.detail) {
+                // Error de sesión SIWE devuelto por el backend (challenge/verify)
+                errorMessage = err.response.data.detail;
             } else if (err.message) {
                 errorMessage = err.message;
             }
 
+            localStorage.removeItem('auth_token');
             setError(errorMessage);
             return { ok: false, error: errorMessage };
         } finally {
             setIsConnecting(false);
         }
-    }, []);
+    }, [signInWithEthereum]);
 
     // Disconnect wallet
     const disconnect = useCallback(() => {
@@ -131,6 +178,8 @@ const useWallet = () => {
         setProvider(null);
         setSigner(null);
         setError(null);
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('auth_address');
     }, []);
 
     // Switch network
