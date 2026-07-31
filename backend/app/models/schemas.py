@@ -89,12 +89,20 @@ class UserLoginRequest(BaseModel):
 
 
 class User(BaseModel):
-    """User model stored in database"""
+    """User model stored in database.
+
+    rut/email/nombre/apellido se guardan CIFRADOS (app/core/crypto.py) —
+    nunca en texto plano. rut_key/email_key son índices ciegos
+    (app/core/identity.lookup_key) que sí son determinísticos y permiten
+    buscar por RUT/email sin descifrar toda la colección.
+    """
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    rut: str
-    email: str
-    nombre: str
-    apellido: str
+    rut: str  # cifrado
+    rut_key: str  # índice ciego, determinístico
+    email: str  # cifrado
+    email_key: str  # índice ciego, determinístico
+    nombre: str  # cifrado
+    apellido: str  # cifrado
     verified: bool = False
     status: str = "active"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -143,6 +151,7 @@ class Member(BaseModel):
     doc_hash: str
     assurance_level: str
     status: str = "active"
+    tx_hash: Optional[str] = None  # None en modo demo; hash real si se minteó on-chain (task 1.5)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

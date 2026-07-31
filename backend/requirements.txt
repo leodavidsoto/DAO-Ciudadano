@@ -29,10 +29,14 @@ python-multipart==0.0.20
 # === Procesamiento de imágenes ===
 pillow==11.0.0             # validación de imágenes en el flujo de liveness
 
+# === Autenticación e identidad (tarea 1.1 del ROADMAP) ===
+cryptography==44.0.0       # Fernet: cifrado de PII en reposo (app/core/crypto.py)
+PyJWT==2.10.1               # JWT de sesión emitido tras verificar SIWE
+eth-account==0.13.7        # recuperar firmante de personal_sign y de firmas EIP-712
+web3==7.16.0                # minteo real on-chain (app/services/chain_service.py)
+
 # NOTA — retiradas por no estar importadas en ningún módulo (verificado sobre
 # el árbol de imports completo tras el PR #1):
-#   openai, aiohttp, prometheus-client, python-jose, PyJWT, passlib, bcrypt,
-#   cryptography, email-validator, anyio.
+#   openai, aiohttp, prometheus-client, python-jose, passlib, bcrypt,
+#   email-validator, anyio.
 # httpx pasó a requirements-dev.txt: solo lo usa tests/conftest.py.
-# Las de autenticación vuelven en la tarea 1.1 del ROADMAP, cuando exista
-# código que efectivamente emita y valide un JWT.

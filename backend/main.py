@@ -18,6 +18,7 @@ load_dotenv(ROOT_DIR / '.env')
 # Import app modules
 from app.core.config import settings
 from app.core.database import Database
+from app.core import readiness
 from app.core.security_middleware import (
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI):
     db_name = os.environ.get('DB_NAME', settings.DB_NAME)
     Database.connect(mongo_url, db_name)
     await Database.ensure_indexes()
+    readiness.report_at_startup()
 
     yield
     
@@ -138,12 +140,30 @@ app.include_router(elections_router, prefix="/api")
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for monitoring"""
-    return {
-        "status": "healthy",
+    """Health check endpoint for monitoring.
+
+    Incluye el estado de configuración (readiness.status()) para que un
+    secreto faltante en producción sea diagnosticable desde aquí en vez
+    de descubrirse como un error opaco en el primer request real.
+    """
+    from fastapi.responses import JSONResponse
+
+    configuration = readiness.status()
+    db_healthy = True
+    try:
+        await Database.get_db().command("ping")
+    except Exception:
+        db_healthy = False
+
+    healthy = db_healthy
+    body = {
+        "status": "healthy" if healthy else "degraded",
         "version": settings.APP_VERSION,
-        "timestamp": __import__('datetime').datetime.now().isoformat()
+        "timestamp": __import__('datetime').datetime.now().isoformat(),
+        "database": {"healthy": db_healthy},
+        "configuration": configuration,
     }
+    return JSONResponse(status_code=200 if healthy else 503, content=body)
 
 
 if __name__ == "__main__":

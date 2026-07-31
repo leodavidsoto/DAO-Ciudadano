@@ -30,7 +30,31 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str = os.environ.get('SECRET_KEY', 'dev-secret-key')
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    
+
+    # Pepper para el hash de identidad HMAC (app/core/identity.py, D-2).
+    # Nunca en el repo. Sin esto, en producción (DEBUG=false) el registro
+    # y login fallan en vez de usar un hash sin sal.
+    IDENTITY_PEPPER: str = os.environ.get('IDENTITY_PEPPER', '')
+
+    # Llave Fernet para cifrar PII en reposo (app/core/crypto.py).
+    # Generar con: python -c "from app.core.crypto import generate_key; print(generate_key())"
+    PII_ENCRYPTION_KEY: str = os.environ.get('PII_ENCRYPTION_KEY', '')
+
+    # Segundos de validez de una sesión de wallet (JWT emitido tras SIWE).
+    SESSION_TOKEN_EXPIRE_SECONDS: int = int(os.environ.get('SESSION_TOKEN_EXPIRE_SECONDS', '3600'))
+
+    # Si es True, /governance/vote rechaza votos sin firma EIP-712 válida.
+    # Se deja en False por defecto para no romper el flujo actual hasta
+    # confirmar que la firma funciona end-to-end desde una wallet real.
+    SIGNED_BALLOTS_REQUIRED: bool = os.environ.get('SIGNED_BALLOTS_REQUIRED', 'false').lower() == 'true'
+
+    # Minteo real on-chain (app/services/chain_service.py). Sin las tres,
+    # ChainService.enabled es False y el minteo sigue en modo demo (sin
+    # tx_hash), nunca con un fallback silencioso a un tx_hash inventado.
+    SEPOLIA_RPC_URL: str = os.environ.get('SEPOLIA_RPC_URL', '')
+    SBT_CONTRACT_ADDRESS: str = os.environ.get('SBT_CONTRACT_ADDRESS', '')
+    MINTER_PRIVATE_KEY: str = os.environ.get('MINTER_PRIVATE_KEY', '')
+
     # External Services
     EMERGENT_LLM_KEY: Optional[str] = None
     

@@ -6,25 +6,60 @@ proposal-expiry tests use).
 """
 from datetime import datetime, timedelta, timezone
 
+from eth_account import Account
+from eth_account.messages import encode_defunct
+
 from app.core.database import (
     candidacies_collection,
     elections_collection,
     representatives_collection,
 )
 
-ADDR_A = "0x" + "1a" * 20
-ADDR_B = "0x" + "2b" * 20
-ADDR_C = "0x" + "3c" * 20
-ADDR_D = "0x" + "4d" * 20
-NON_MEMBER = "0x" + "9f" * 20
+# Wallets reales derivadas de llaves privadas fijas de prueba (NO producción).
+# Necesarias porque POST /api/membership/mint exige una sesión de wallet
+# (SIWE, C-1) aunque los endpoints de elecciones en sí no lo exijan todavía.
+_ACCOUNT_A = Account.from_key("0x" + "1a" * 32)
+_ACCOUNT_B = Account.from_key("0x" + "2b" * 32)
+_ACCOUNT_C = Account.from_key("0x" + "3c" * 32)
+_ACCOUNT_D = Account.from_key("0x" + "4d" * 32)
+_NON_MEMBER_ACCOUNT = Account.from_key("0x" + "9f" * 32)
+
+# Todos los endpoints normalizan direcciones a minúsculas antes de guardarlas
+# o devolverlas, así que estas constantes ya están en minúsculas para poder
+# comparar directamente contra las respuestas (igual que las literales "0x..."
+# que reemplazan, que ya eran todas minúsculas).
+ADDR_A = _ACCOUNT_A.address.lower()
+ADDR_B = _ACCOUNT_B.address.lower()
+ADDR_C = _ACCOUNT_C.address.lower()
+ADDR_D = _ACCOUNT_D.address.lower()
+NON_MEMBER = _NON_MEMBER_ACCOUNT.address.lower()
+
+_ACCOUNTS_BY_ADDRESS = {
+    a.address.lower(): a for a in (_ACCOUNT_A, _ACCOUNT_B, _ACCOUNT_C, _ACCOUNT_D, _NON_MEMBER_ACCOUNT)
+}
+
+
+async def _sign_in(client, account):
+    challenge = await client.post("/api/wallet/challenge", json={"address": account.address})
+    challenge.raise_for_status()
+    body = challenge.json()
+    signed = Account.sign_message(encode_defunct(text=body["message"]), private_key=account.key)
+    verify = await client.post("/api/wallet/verify", json={
+        "address": account.address,
+        "nonce": body["nonce"],
+        "signature": signed.signature.hex(),
+    })
+    verify.raise_for_status()
+    return {"Authorization": f"Bearer {verify.json()['token']}"}
 
 
 async def _mint_member(client, address):
+    headers = await _sign_in(client, _ACCOUNTS_BY_ADDRESS[address])
     response = await client.post("/api/membership/mint", json={
         "wallet_address": address,
         "assurance_level": "AL2",
         "doc_hash": f"0xdoc{address[-8:]}",
-    })
+    }, headers=headers)
     assert response.json()["ok"] is True
     return response
 
@@ -217,9 +252,10 @@ async def test_election_vote_uses_delegated_weight(client):
 
     # A and B delegate to C -> C votes with weight 3
     for delegator in (ADDR_A, ADDR_B):
+        headers = await _sign_in(client, _ACCOUNTS_BY_ADDRESS[delegator])
         assert (await client.post("/api/governance/delegate", json={
             "delegator_address": delegator, "delegate_address": ADDR_C,
-        })).json()["ok"] is True
+        }, headers=headers)).json()["ok"] is True
 
     vote = await _vote(client, election_id, ADDR_C, ADDR_D)
     data = vote.json()
@@ -242,9 +278,10 @@ async def test_delegator_cannot_vote_in_election(client):
     await _nominate(client, election_id, ADDR_C)
     await _open_voting(election_id)
 
+    headers = await _sign_in(client, _ACCOUNTS_BY_ADDRESS[ADDR_A])
     await client.post("/api/governance/delegate", json={
         "delegator_address": ADDR_A, "delegate_address": ADDR_B,
-    })
+    }, headers=headers)
     response = await _vote(client, election_id, ADDR_A, ADDR_C)
     assert response.status_code == 403
     assert ADDR_B in response.json()["detail"]

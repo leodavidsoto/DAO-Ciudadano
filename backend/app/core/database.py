@@ -57,6 +57,20 @@ class Database:
             )
             await cls.get_db()["delegations"].create_index("delegator", unique=True)
             await cls.get_db()["delegations"].create_index("delegate")
+            # Índices ciegos de usuarios (app/core/identity.lookup_key): el
+            # campo real (rut/email) va cifrado y no es determinístico, así
+            # que la unicidad se aplica sobre estos, no sobre el valor cifrado.
+            await cls.get_db()["users"].create_index("rut_key", unique=True)
+            await cls.get_db()["users"].create_index("email_key", unique=True)
+            # Sesiones SIWE: nonce de un solo uso.
+            await cls.get_db()["siwe_nonces"].create_index("nonce", unique=True)
+            await cls.get_db()["siwe_nonces"].create_index(
+                "created_at", expireAfterSeconds=600
+            )
+            # Papeletas EIP-712: un nonce no se puede reutilizar por votante.
+            await cls.get_db()["ballot_nonces"].create_index(
+                [("voter_address", 1), ("nonce", 1)], unique=True
+            )
         except Exception as e:
             # A pre-existing duplicate in the collection blocks unique index
             # creation; keep the app bootable and surface it in the logs.
@@ -116,4 +130,12 @@ def election_votes_collection():
 
 def representatives_collection():
     return get_collection("representatives")
+
+
+def siwe_nonces_collection():
+    return get_collection("siwe_nonces")
+
+
+def ballot_nonces_collection():
+    return get_collection("ballot_nonces")
 

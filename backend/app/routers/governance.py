@@ -26,8 +26,10 @@ from ..core.security_middleware import (
     generate_nonce,
     hash_vote_data
 )
+from ..core.config import settings
 from ..services.governance_service import governance_service
-from .deps import ensure_active_member
+from ..services import ballot_service
+from .deps import ensure_active_member, current_address, ensure_acts_as_self
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +122,8 @@ class VoteRequest(BaseModel):
     voter_address: str
     vote: str  # for, against, abstain
     nonce: Optional[str] = None  # For replay protection
-    
+    signature: Optional[str] = None  # EIP-712 typed-data signature (ver GET /governance/ballot-schema)
+
     @field_validator('voter_address')
     @classmethod
     def validate_address(cls, v):
@@ -162,8 +165,12 @@ async def verified_voter(request: VoteRequest) -> VoteRequest:
 # === Proposal Endpoints ===
 
 @router.post("/proposals", response_model=ProposalResponse)
-async def create_proposal(request: ProposalCreate = Depends(verified_proposal_creator)):
-    """Create a new governance proposal (active members only)"""
+async def create_proposal(
+    request: ProposalCreate = Depends(verified_proposal_creator),
+    authenticated: str = Depends(current_address),
+):
+    """Create a new governance proposal (active members only, sesión de wallet requerida)"""
+    ensure_acts_as_self(request.creator_address, authenticated, "crear propuestas")
     try:
         proposal_id = str(uuid.uuid4())[:8]
         now = datetime.now(timezone.utc)
@@ -237,6 +244,22 @@ async def get_proposals(status: Optional[str] = None, limit: int = 20):
         raise HTTPException(status_code=500, detail="Error al listar propuestas")
 
 
+@router.get("/ballot-schema")
+async def get_ballot_schema(chain_id: int = ballot_service.DEFAULT_CHAIN_ID):
+    """Types + domain EIP-712 para que el cliente arme y firme la papeleta
+    con eth_signTypedData_v4 (MetaMask, wallet generada en la app móvil, etc).
+
+    Evita que frontend/móvil mantengan una copia manual del schema
+    desincronizada de lo que el backend realmente verifica en POST /vote.
+    """
+    return {
+        "types": ballot_service.BALLOT_TYPES,
+        "primaryType": "Ballot",
+        "domain": ballot_service.domain(chain_id),
+        "signed_ballots_required": settings.SIGNED_BALLOTS_REQUIRED,
+    }
+
+
 @router.get("/proposals/{proposal_id}", response_model=ProposalResponse)
 async def get_proposal(proposal_id: str):
     """Get a specific proposal by ID"""
@@ -247,12 +270,28 @@ async def get_proposal(proposal_id: str):
 
 
 @router.post("/vote", response_model=VoteResponse)
-async def cast_vote(request: VoteRequest = Depends(verified_voter)):
+async def cast_vote(
+    request: VoteRequest = Depends(verified_voter),
+    authenticated: str = Depends(current_address),
+):
     """Cast a vote on a proposal.
 
     Weight = 1 (own vote) + active-member delegators (see GovernanceService).
     An address that delegated its vote must revoke before voting directly.
+
+    Si SIGNED_BALLOTS_REQUIRED está activo (settings), o si el cliente envía
+    `signature`, se exige una firma EIP-712 válida (ver GET
+    /governance/ballot-schema) que pruebe que el dueño de voter_address
+    efectivamente firmó ESTE proposal_id + ESTA elección + ESTE nonce.
     """
+    ensure_acts_as_self(request.voter_address, authenticated, "votar")
+
+    if settings.SIGNED_BALLOTS_REQUIRED and not request.signature:
+        raise HTTPException(
+            status_code=422,
+            detail="Esta votación requiere una papeleta firmada (EIP-712). Ver GET /governance/ballot-schema.",
+        )
+
     # Anti-fraud: rapid-voting pattern check (A-4, wired per ROADMAP 3.4)
     suspicious, reason = fraud_detector.check_rapid_voting(
         request.voter_address, request.proposal_id
@@ -296,10 +335,22 @@ async def cast_vote(request: VoteRequest = Depends(verified_voter)):
         # Voting power: own vote + delegations from active members (A-5)
         weight = await governance_service.voting_power(request.voter_address)
 
-        # Integrity fingerprint of the ballot. NOTE: this is not replay
-        # protection (task 3.3) nor a signature (3.2) — it lets anyone
-        # recompute the hash of what was recorded.
-        nonce = request.nonce or generate_nonce()
+        if request.signature:
+            # El nonce firmado debe ser el mismo que se registra: si el
+            # cliente no lo mandó, no hay forma de saber cuál firmó.
+            if not request.nonce:
+                return VoteResponse(ok=False, error="Falta el nonce de la papeleta firmada")
+            await ballot_service.verify(
+                request.proposal_id, request.voter_address, request.vote,
+                request.nonce, request.signature,
+            )
+            nonce = request.nonce
+        else:
+            nonce = request.nonce or generate_nonce()
+
+        # Integrity fingerprint of the ballot (recomputable por cualquiera).
+        # Cuando hay `signature`, la prueba criptográfica real de autoría es
+        # la firma EIP-712 verificada arriba, no este hash.
         vote_hash = hash_vote_data(
             request.proposal_id, request.voter_address, request.vote, nonce
         )
@@ -414,8 +465,12 @@ async def verified_delegator(request: DelegationRequest) -> DelegationRequest:
 
 
 @router.post("/delegate", response_model=DelegationResponse)
-async def delegate_vote(request: DelegationRequest = Depends(verified_delegator)):
-    """Delegate voting power to another address (active members only)"""
+async def delegate_vote(
+    request: DelegationRequest = Depends(verified_delegator),
+    authenticated: str = Depends(current_address),
+):
+    """Delegate voting power to another address (active members only, sesión de wallet requerida)"""
+    ensure_acts_as_self(request.delegator_address, authenticated, "delegar el voto")
     try:
         if request.delegator_address == request.delegate_address:
             return DelegationResponse(ok=False, error="No puedes delegarte a ti mismo")
@@ -500,8 +555,9 @@ async def delegate_vote(request: DelegationRequest = Depends(verified_delegator)
 
 
 @router.delete("/delegate/{address}")
-async def revoke_delegation(address: str):
-    """Revoke vote delegation"""
+async def revoke_delegation(address: str, authenticated: str = Depends(current_address)):
+    """Revoke vote delegation (sesión de wallet requerida)"""
+    ensure_acts_as_self(address, authenticated, "revocar tu delegación")
     result = await delegations_collection().delete_one({"delegator": address.lower()})
     if result.deleted_count > 0:
         fraud_detector.remove_delegation(address)

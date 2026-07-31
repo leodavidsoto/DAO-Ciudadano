@@ -217,6 +217,9 @@ async def analyze_liveness(file: UploadFile = File(...)):
 
 from ..models import User, UserRegisterRequest, UserLoginRequest, UserResponse
 from ..core.database import users_collection
+from ..core import readiness
+from ..core.crypto import encrypt, decrypt
+from ..core.identity import lookup_key
 import re
 
 
@@ -273,118 +276,143 @@ def format_rut(rut: str) -> str:
 async def register_user(request: UserRegisterRequest):
     """
     Register a new user with RUT and email.
-    
+
     Simple registration while waiting for ClaveÚnica sandbox access.
-    Validates RUT format and stores user in database.
+    Validates RUT format, cifra el RUT/email/nombre antes de guardarlos
+    (nunca en texto plano) y busca duplicados por índice ciego, no por
+    el valor cifrado (que es distinto cada vez por el IV de Fernet).
     """
+    readiness.require("IDENTITY_PEPPER", "registrar ciudadanos")
+    readiness.require("PII_ENCRYPTION_KEY", "registrar ciudadanos")
+
     try:
         await mock_delay(0.1)
-        
+
         # Validate RUT
         if not validate_rut(request.rut):
             return UserResponse(ok=False, error="RUT inválido. Verifica el formato (ej: 12345678-9)")
-        
+
         # Format RUT
         formatted_rut = format_rut(request.rut)
-        
+
         # Validate email
         email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         if not re.match(email_regex, request.email):
             return UserResponse(ok=False, error="Email inválido")
-        
-        # Check if RUT already registered
-        existing = await users_collection().find_one({"rut": formatted_rut})
+
+        normalized_email = request.email.lower()
+        rut_key = lookup_key(formatted_rut, domain="rut")
+        email_key = lookup_key(normalized_email, domain="email")
+
+        # Check if RUT already registered (por índice ciego, no por el
+        # valor cifrado -- dos cifrados del mismo RUT no son iguales)
+        existing = await users_collection().find_one({"rut_key": rut_key})
         if existing:
             return UserResponse(ok=False, error="Este RUT ya está registrado")
-        
-        # Check if email already registered
-        existing_email = await users_collection().find_one({"email": request.email.lower()})
+
+        existing_email = await users_collection().find_one({"email_key": email_key})
         if existing_email:
             return UserResponse(ok=False, error="Este email ya está registrado")
-        
-        # Create user
+
+        # Create user (PII cifrada en reposo)
         user = User(
-            rut=formatted_rut,
-            email=request.email.lower(),
-            nombre=request.nombre.strip(),
-            apellido=request.apellido.strip()
+            rut=encrypt(formatted_rut),
+            rut_key=rut_key,
+            email=encrypt(normalized_email),
+            email_key=email_key,
+            nombre=encrypt(request.nombre.strip()),
+            apellido=encrypt(request.apellido.strip()),
         )
-        
+
         await users_collection().insert_one(user.model_dump())
-        
-        # Store identity event
+
+        # Store identity event -- usa el hash de identidad (D-2), no un
+        # sha256 sin sal sobre RUT+email en texto plano
         event = IdentityEvent(
-            user_id=formatted_rut,
+            user_id=rut_key,
             event_type="rut_email",
-            hash_value=generate_short_hash(formatted_rut + request.email),
+            hash_value=generate_short_hash(rut_key + email_key),
             verifier="dao_ciudadana_registration"
         )
         await identity_events_collection().insert_one(event.model_dump())
-        
-        logger.info(f"New user registered: {formatted_rut}")
-        
+
+        logger.info(f"New user registered (rut_key={rut_key[:8]}...)")
+
         return UserResponse(
             ok=True,
             user_id=user.id,
             rut=formatted_rut,
-            email=request.email.lower(),
+            email=normalized_email,
             nombre=request.nombre,
-            subject_id=f"rut:{formatted_rut}",
+            subject_id=f"rut:{rut_key}",
             assurance_level="AL1"  # Lower assurance since not verified with ClaveÚnica
         )
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in registration: {e}")
-        return UserResponse(ok=False, error=str(e))
+        return UserResponse(ok=False, error="No se pudo completar el registro. Intenta de nuevo.")
 
 
 @router.post("/login", response_model=UserResponse)
 async def login_user(request: UserLoginRequest):
     """
     Login with RUT and email.
-    
-    Simple authentication for registered users.
+
+    Busca por índice ciego (rut_key/email_key), descifra solo el
+    registro encontrado para devolver los datos en la respuesta.
     """
+    readiness.require("IDENTITY_PEPPER", "iniciar sesión")
+    readiness.require("PII_ENCRYPTION_KEY", "iniciar sesión")
+
     try:
         await mock_delay(0.1)
-        
-        # Format RUT for lookup
+
         formatted_rut = format_rut(request.rut)
-        
-        # Find user
+        normalized_email = request.email.lower()
+        rut_key = lookup_key(formatted_rut, domain="rut")
+        email_key = lookup_key(normalized_email, domain="email")
+
         user_doc = await users_collection().find_one({
-            "rut": formatted_rut,
-            "email": request.email.lower()
+            "rut_key": rut_key,
+            "email_key": email_key,
         })
-        
+
         if not user_doc:
             return UserResponse(ok=False, error="RUT o email incorrectos")
-        
+
         if user_doc.get("status") != "active":
             return UserResponse(ok=False, error="Cuenta desactivada")
-        
-        # Store identity event
+
         event = IdentityEvent(
-            user_id=formatted_rut,
+            user_id=rut_key,
             event_type="rut_email_login",
-            hash_value=generate_short_hash(f"login_{formatted_rut}"),
+            hash_value=generate_short_hash(f"login_{rut_key}"),
             verifier="dao_ciudadana_login"
         )
         await identity_events_collection().insert_one(event.model_dump())
-        
-        logger.info(f"User logged in: {formatted_rut}")
-        
+
+        logger.info(f"User logged in (rut_key={rut_key[:8]}...)")
+
+        try:
+            nombre = decrypt(user_doc.get("nombre"))
+        except ValueError:
+            nombre = None
+
         return UserResponse(
             ok=True,
             user_id=user_doc.get("id"),
             rut=formatted_rut,
-            email=user_doc.get("email"),
-            nombre=user_doc.get("nombre"),
-            subject_id=f"rut:{formatted_rut}",
+            email=normalized_email,
+            nombre=nombre,
+            subject_id=f"rut:{rut_key}",
             assurance_level="AL1"
         )
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in login: {e}")
-        return UserResponse(ok=False, error=str(e))
+        return UserResponse(ok=False, error="No se pudo iniciar sesión. Intenta de nuevo.")
 

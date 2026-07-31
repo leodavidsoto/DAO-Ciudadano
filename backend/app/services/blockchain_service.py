@@ -2,10 +2,11 @@
 Blockchain Service
 Handles Web3 operations, wallet connections, and SBT minting
 
-DEMO MODE: no transaction is sent on-chain yet. Real minting is ROADMAP
-task 1.5 and is blocked on architecture decisions D-1/D-2 (see docs/ROADMAP.md).
-Until then this service only registers members in MongoDB and returns
-tx_hash=None — it never fabricates a transaction hash.
+Minteo real (ROADMAP tarea 1.5, D-1): si chain_service.is_configured() es
+verdadero (SEPOLIA_RPC_URL + SBT_CONTRACT_ADDRESS + MINTER_PRIVATE_KEY),
+esta función envía una transacción real a DAOCiudadanaSBT.mintMembership()
+y guarda el tx_hash devuelto por la cadena. Si no está configurado, cae a
+modo demo (solo MongoDB, tx_hash=None) — nunca fabrica un tx_hash falso.
 """
 from typing import Optional, Tuple
 import logging
@@ -15,7 +16,9 @@ from pymongo.errors import DuplicateKeyError
 
 from ..core.database import members_collection
 from ..core.security_middleware import verify_eth_address
+from ..core.identity import document_identity_hash_hex
 from ..models import Member
+from . import chain_service
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +54,26 @@ class BlockchainService:
                     f"Ya existe un SBT para esta wallet (Token #{existing.get('token_id')})"
                 )
 
+            tx_hash: Optional[str] = None
+            onchain_token_id: Optional[int] = None
+
+            if chain_service.is_configured():
+                try:
+                    identity_hash_hex = document_identity_hash_hex(doc_hash)
+                    tx_hash, onchain_token_id = chain_service.mint_sbt_onchain(
+                        wallet_address=address,
+                        identity_hash_hex=identity_hash_hex,
+                        assurance_level=assurance_level,
+                    )
+                except chain_service.ChainMintError as e:
+                    logger.error(f"On-chain mint failed for {address}: {e}")
+                    return (False, None, None, f"Error al mintear on-chain: {e}")
+
             # Sequential id over the highest existing one: survives revocations
-            # without colliding (count+1 does not). Replaced by the on-chain
-            # tokenId when task 1.5 lands.
+            # without colliding (count+1 does not). Overridden by the real
+            # on-chain tokenId when minting actually happened on-chain.
             last = await members_collection().find_one(sort=[("token_id", -1)])
-            token_id = (last["token_id"] + 1) if last else 1
+            token_id = onchain_token_id if onchain_token_id is not None else ((last["token_id"] + 1) if last else 1)
 
             member = Member(
                 wallet_address=address,
@@ -64,16 +82,23 @@ class BlockchainService:
                 assurance_level=assurance_level
             )
 
+            member_dict = member.model_dump()
+            if tx_hash:
+                member_dict["tx_hash"] = tx_hash
+
             try:
-                await members_collection().insert_one(member.model_dump())
+                await members_collection().insert_one(member_dict)
             except DuplicateKeyError:
                 # Unique index on wallet_address closed the race between the
                 # duplicate check above and this insert.
                 return (False, None, None, "Ya existe un SBT para esta wallet")
 
-            logger.info(f"Membership registered (off-chain demo): Token #{token_id} for {address}")
+            if tx_hash:
+                logger.info(f"Membership minted on-chain: Token #{token_id} for {address} (tx {tx_hash})")
+            else:
+                logger.info(f"Membership registered (off-chain demo): Token #{token_id} for {address}")
 
-            return (True, token_id, None, None)
+            return (True, token_id, tx_hash, None)
 
         except Exception as e:
             logger.error(f"SBT minting error: {e}")

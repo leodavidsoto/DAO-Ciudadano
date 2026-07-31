@@ -2,8 +2,18 @@
 Shared fixtures: in-memory MongoDB (mongomock) + ASGI test client.
 No real network or database is touched by this suite.
 """
+import os
 import sys
 from pathlib import Path
+
+# Deben fijarse ANTES de importar nada de `app` o `main`: Settings() se
+# construye una sola vez al importar app.core.config, y con el fail-closed
+# de identity.py/crypto.py (sin pepper/llave en producción -> excepción)
+# la suite entera rompería si estos quedaran vacíos como en CI real.
+# Valores fijos y obviamente-de-test, no los que usa producción.
+os.environ.setdefault("IDENTITY_PEPPER", "test-only-identity-pepper-not-for-production")
+os.environ.setdefault("PII_ENCRYPTION_KEY", "pDWj9oG8D2Ms2dcHjTCiLsQM5raWlXfiINYLooDS4Q0=")
+os.environ.setdefault("SECRET_KEY", "test-only-secret-key-not-for-production")
 
 import httpx
 import pytest

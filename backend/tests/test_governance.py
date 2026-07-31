@@ -3,39 +3,108 @@ Governance endpoints: proposals, voting, delegation and honest treasury reportin
 
 Since the membership gate (C-3) landed, every mutating governance action
 requires an ACTIVE member: tests mint memberships first via the real endpoint.
+
+Since the wallet-session gate (C-1) landed, every mutating governance action
+ALSO requires the caller to be authenticated (SIWE) as the exact address it
+claims to act as: tests sign in with real eth_account keypairs and attach
+the resulting Bearer token.
 """
 from datetime import datetime, timedelta, timezone
 
+from eth_account import Account
+from eth_account.messages import encode_defunct
+
 from app.core.database import members_collection, proposals_collection, votes_collection
 
-ADDR_A = "0x" + "1a" * 20
-ADDR_B = "0x" + "2b" * 20
-ADDR_C = "0x" + "3c" * 20
-ADDR_D = "0x" + "4d" * 20
-NON_MEMBER = "0x" + "9f" * 20
+# Wallets reales derivadas de llaves privadas fijas de prueba (NO producción).
+ACCOUNT_A = Account.from_key("0x" + "1a" * 32)
+ACCOUNT_B = Account.from_key("0x" + "2b" * 32)
+ACCOUNT_C = Account.from_key("0x" + "3c" * 32)
+ACCOUNT_D = Account.from_key("0x" + "4d" * 32)
+NON_MEMBER_ACCOUNT = Account.from_key("0x" + "9f" * 32)
+
+# Todos los endpoints normalizan direcciones a minúsculas antes de guardarlas
+# o devolverlas, así que estas constantes ya están en minúsculas para poder
+# comparar directamente contra las respuestas.
+ADDR_A = ACCOUNT_A.address.lower()
+ADDR_B = ACCOUNT_B.address.lower()
+ADDR_C = ACCOUNT_C.address.lower()
+ADDR_D = ACCOUNT_D.address.lower()
+NON_MEMBER = NON_MEMBER_ACCOUNT.address.lower()
+
+_ACCOUNTS_BY_ADDRESS = {
+    a.address.lower(): a for a in (ACCOUNT_A, ACCOUNT_B, ACCOUNT_C, ACCOUNT_D, NON_MEMBER_ACCOUNT)
+}
+
+
+async def _sign_in(client, account):
+    """Ejecuta el flujo SIWE real (challenge + firma + verify) y devuelve
+    los headers de Authorization para autenticar como esa cuenta."""
+    challenge = await client.post("/api/wallet/challenge", json={"address": account.address})
+    challenge.raise_for_status()
+    body = challenge.json()
+    signed = Account.sign_message(encode_defunct(text=body["message"]), private_key=account.key)
+    verify = await client.post("/api/wallet/verify", json={
+        "address": account.address,
+        "nonce": body["nonce"],
+        "signature": signed.signature.hex(),
+    })
+    verify.raise_for_status()
+    return {"Authorization": f"Bearer {verify.json()['token']}"}
+
+
+async def _headers_for(client, address):
+    """Resuelve la Account registrada para `address` y firma la sesión."""
+    account = _ACCOUNTS_BY_ADDRESS[address]
+    return await _sign_in(client, account)
 
 
 async def _mint_member(client, address):
-    """Register an active member through the real mint endpoint."""
+    """Register an active member through the real mint endpoint (self-auth)."""
+    headers = await _headers_for(client, address)
     response = await client.post("/api/membership/mint", json={
         "wallet_address": address,
         "assurance_level": "AL2",
         "doc_hash": f"0xdoc{address[-8:]}",
-    })
+    }, headers=headers)
     assert response.json()["ok"] is True, f"fixture mint failed: {response.json()}"
     return response
 
 
 async def _create_proposal(client, title="Propuesta de prueba",
                            description="Una descripción suficientemente larga para validar.",
-                           creator=ADDR_A, duration_days=7):
+                           creator=ADDR_A, duration_days=7, headers=None):
+    if headers is None and creator in _ACCOUNTS_BY_ADDRESS:
+        headers = await _headers_for(client, creator)
     return await client.post("/api/governance/proposals", json={
         "title": title,
         "description": description,
         "category": "general",
         "creator_address": creator,
         "duration_days": duration_days,
-    })
+    }, headers=headers)
+
+
+async def _vote(client, voter, proposal_id, choice, headers=None):
+    if headers is None and voter in _ACCOUNTS_BY_ADDRESS:
+        headers = await _headers_for(client, voter)
+    return await client.post("/api/governance/vote", json={
+        "proposal_id": proposal_id, "voter_address": voter, "vote": choice,
+    }, headers=headers)
+
+
+async def _delegate(client, delegator, delegate, headers=None):
+    if headers is None and delegator in _ACCOUNTS_BY_ADDRESS:
+        headers = await _headers_for(client, delegator)
+    return await client.post("/api/governance/delegate", json={
+        "delegator_address": delegator, "delegate_address": delegate,
+    }, headers=headers)
+
+
+async def _revoke_delegation(client, delegator, headers=None):
+    if headers is None and delegator in _ACCOUNTS_BY_ADDRESS:
+        headers = await _headers_for(client, delegator)
+    return await client.delete(f"/api/governance/delegate/{delegator}", headers=headers)
 
 
 # === Proposals ===
@@ -47,7 +116,7 @@ async def test_create_proposal(client):
     data = response.json()
     assert data["status"] == "active"
     assert data["votes_for"] == 0
-    assert data["creator_address"] == ADDR_A
+    assert data["creator_address"] == ADDR_A.lower()
 
 
 async def test_create_proposal_strips_html_tags(client):
@@ -57,19 +126,35 @@ async def test_create_proposal_strips_html_tags(client):
 
 
 async def test_create_proposal_rejects_invalid_address(client):
-    response = await _create_proposal(client, creator="not-an-address")
+    """Con sesión válida (de cualquier cuenta), un creator_address con
+    formato inválido en el body se rechaza con 422 -- se prueba con una
+    sesión real porque current_address (C-1) corre antes que la
+    validación del body, así que sin Authorization el resultado sería 401,
+    no 422."""
+    headers = await _headers_for(client, ADDR_A)
+    response = await _create_proposal(client, creator="not-an-address", headers=headers)
     assert response.status_code == 422
 
 
 async def test_create_proposal_rejects_short_title(client):
-    response = await _create_proposal(client, title="ab")
+    headers = await _headers_for(client, ADDR_A)
+    response = await _create_proposal(client, title="ab", headers=headers)
     assert response.status_code == 422
 
 
 async def test_create_proposal_rejects_non_member(client):
-    response = await _create_proposal(client, creator=NON_MEMBER)
+    headers = await _headers_for(client, NON_MEMBER)
+    response = await _create_proposal(client, creator=NON_MEMBER, headers=headers)
     assert response.status_code == 403
     assert "miembros activos" in response.json()["detail"]
+
+
+async def test_create_proposal_rejects_acting_as_another_address(client):
+    """Autenticado como B pero reclamando ser el creador A: 403 (cierra C-1)."""
+    await _mint_member(client, ADDR_A)
+    headers = await _headers_for(client, ADDR_B)
+    response = await _create_proposal(client, creator=ADDR_A, headers=headers)
+    assert response.status_code == 403
 
 
 # === Voting ===
@@ -79,9 +164,7 @@ async def test_vote_flow(client):
     await _mint_member(client, ADDR_B)
     proposal_id = (await _create_proposal(client)).json()["id"]
 
-    vote = await client.post("/api/governance/vote", json={
-        "proposal_id": proposal_id, "voter_address": ADDR_B, "vote": "for",
-    })
+    vote = await _vote(client, ADDR_B, proposal_id, "for")
     data = vote.json()
     assert data["ok"] is True
     assert data["weight"] == 1
@@ -91,9 +174,7 @@ async def test_vote_flow(client):
     assert proposal["votes_for"] == 1
     assert proposal["total_votes"] == 1
 
-    duplicate = await client.post("/api/governance/vote", json={
-        "proposal_id": proposal_id, "voter_address": ADDR_B, "vote": "against",
-    })
+    duplicate = await _vote(client, ADDR_B, proposal_id, "against")
     data = duplicate.json()
     assert data["ok"] is False
     assert "Already voted" in data["error"]
@@ -103,11 +184,9 @@ async def test_vote_rejects_non_member(client):
     await _mint_member(client, ADDR_A)
     proposal_id = (await _create_proposal(client)).json()["id"]
 
-    response = await client.post("/api/governance/vote", json={
-        "proposal_id": proposal_id, "voter_address": NON_MEMBER, "vote": "for",
-    })
+    response = await _vote(client, NON_MEMBER, proposal_id, "for")
     assert response.status_code == 403
-    assert NON_MEMBER in response.json()["detail"]
+    assert NON_MEMBER.lower() in response.json()["detail"]
 
 
 async def test_vote_rejects_revoked_member(client):
@@ -116,27 +195,38 @@ async def test_vote_rejects_revoked_member(client):
     proposal_id = (await _create_proposal(client)).json()["id"]
 
     await members_collection().update_one(
-        {"wallet_address": ADDR_B}, {"$set": {"status": "revoked"}}
+        {"wallet_address": ADDR_B.lower()}, {"$set": {"status": "revoked"}}
     )
-    response = await client.post("/api/governance/vote", json={
-        "proposal_id": proposal_id, "voter_address": ADDR_B, "vote": "for",
-    })
+    response = await _vote(client, ADDR_B, proposal_id, "for")
     assert response.status_code == 403
 
 
 async def test_vote_on_missing_proposal_fails(client):
     await _mint_member(client, ADDR_A)
-    response = await client.post("/api/governance/vote", json={
-        "proposal_id": "no-existe", "voter_address": ADDR_A, "vote": "for",
-    })
+    response = await _vote(client, ADDR_A, "no-existe", "for")
     assert response.json()["ok"] is False
 
 
 async def test_vote_rejects_invalid_choice(client):
+    """current_address (C-1) corre antes que la validación del body, así
+    que se necesita una sesión válida para que un `vote` inválido
+    produzca 422 en vez de 401."""
+    headers = await _headers_for(client, ADDR_A)
     response = await client.post("/api/governance/vote", json={
         "proposal_id": "x", "voter_address": ADDR_A, "vote": "maybe",
-    })
+    }, headers=headers)
     assert response.status_code == 422
+
+
+async def test_vote_rejects_acting_as_another_address(client):
+    """Autenticado como A pero reclamando votar como B: 403 (cierra C-1)."""
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    proposal_id = (await _create_proposal(client)).json()["id"]
+
+    headers = await _headers_for(client, ADDR_A)
+    response = await _vote(client, ADDR_B, proposal_id, "for", headers=headers)
+    assert response.status_code == 403
 
 
 async def test_expired_proposals_are_resolved(client):
@@ -170,14 +260,10 @@ async def test_vote_weight_includes_active_delegators(client):
     proposal_id = (await _create_proposal(client, creator=ADDR_A)).json()["id"]
 
     for delegator in (ADDR_A, ADDR_B):
-        response = await client.post("/api/governance/delegate", json={
-            "delegator_address": delegator, "delegate_address": ADDR_C,
-        })
+        response = await _delegate(client, delegator, ADDR_C)
         assert response.json()["ok"] is True
 
-    vote = await client.post("/api/governance/vote", json={
-        "proposal_id": proposal_id, "voter_address": ADDR_C, "vote": "for",
-    })
+    vote = await _vote(client, ADDR_C, proposal_id, "for")
     data = vote.json()
     assert data["ok"] is True
     assert data["weight"] == 3  # own vote + two active delegators
@@ -188,7 +274,7 @@ async def test_vote_weight_includes_active_delegators(client):
 
     # The applied weight is persisted on the vote record
     record = await votes_collection().find_one({
-        "proposal_id": proposal_id, "voter_address": ADDR_C,
+        "proposal_id": proposal_id, "voter_address": ADDR_C.lower(),
     })
     assert record["weight"] == 3
 
@@ -198,16 +284,12 @@ async def test_delegator_cannot_vote_directly(client):
     await _mint_member(client, ADDR_B)
     proposal_id = (await _create_proposal(client)).json()["id"]
 
-    await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_A, "delegate_address": ADDR_B,
-    })
+    await _delegate(client, ADDR_A, ADDR_B)
 
-    response = await client.post("/api/governance/vote", json={
-        "proposal_id": proposal_id, "voter_address": ADDR_A, "vote": "for",
-    })
+    response = await _vote(client, ADDR_A, proposal_id, "for")
     assert response.status_code == 403
     # The error must say to whom the vote was delegated
-    assert ADDR_B in response.json()["detail"]
+    assert ADDR_B.lower() in response.json()["detail"]
 
 
 async def test_revoked_delegator_adds_no_weight(client):
@@ -215,17 +297,13 @@ async def test_revoked_delegator_adds_no_weight(client):
     await _mint_member(client, ADDR_B)
     proposal_id = (await _create_proposal(client)).json()["id"]
 
-    await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_A, "delegate_address": ADDR_B,
-    })
+    await _delegate(client, ADDR_A, ADDR_B)
     # Membership revoked AFTER delegating: the delegation stops counting
     await members_collection().update_one(
-        {"wallet_address": ADDR_A}, {"$set": {"status": "revoked"}}
+        {"wallet_address": ADDR_A.lower()}, {"$set": {"status": "revoked"}}
     )
 
-    vote = await client.post("/api/governance/vote", json={
-        "proposal_id": proposal_id, "voter_address": ADDR_B, "vote": "for",
-    })
+    vote = await _vote(client, ADDR_B, proposal_id, "for")
     data = vote.json()
     assert data["ok"] is True
     assert data["weight"] == 1
@@ -236,14 +314,10 @@ async def test_vote_after_revoking_delegation(client):
     await _mint_member(client, ADDR_B)
     proposal_id = (await _create_proposal(client)).json()["id"]
 
-    await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_A, "delegate_address": ADDR_B,
-    })
-    await client.delete(f"/api/governance/delegate/{ADDR_A}")
+    await _delegate(client, ADDR_A, ADDR_B)
+    await _revoke_delegation(client, ADDR_A)
 
-    vote = await client.post("/api/governance/vote", json={
-        "proposal_id": proposal_id, "voter_address": ADDR_A, "vote": "for",
-    })
+    vote = await _vote(client, ADDR_A, proposal_id, "for")
     data = vote.json()
     assert data["ok"] is True
     assert data["weight"] == 1
@@ -253,57 +327,53 @@ async def test_vote_after_revoking_delegation(client):
 
 async def test_delegation_rejects_self(client):
     await _mint_member(client, ADDR_A)
-    response = await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_A, "delegate_address": ADDR_A,
-    })
+    response = await _delegate(client, ADDR_A, ADDR_A)
     assert response.json()["ok"] is False
 
 
 async def test_delegation_rejects_non_member_delegator(client):
     await _mint_member(client, ADDR_B)
-    response = await client.post("/api/governance/delegate", json={
-        "delegator_address": NON_MEMBER, "delegate_address": ADDR_B,
-    })
+    response = await _delegate(client, NON_MEMBER, ADDR_B)
     assert response.status_code == 403
 
 
 async def test_delegation_rejects_non_member_delegate(client):
     await _mint_member(client, ADDR_A)
-    response = await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_A, "delegate_address": NON_MEMBER,
-    })
+    response = await _delegate(client, ADDR_A, NON_MEMBER)
     data = response.json()
     assert data["ok"] is False
     assert "no es miembro activo" in data["error"]
 
 
+async def test_delegation_rejects_acting_as_another_address(client):
+    """Autenticado como B pero reclamando delegar en nombre de A: 403 (cierra C-1)."""
+    await _mint_member(client, ADDR_A)
+    headers = await _headers_for(client, ADDR_B)
+    response = await _delegate(client, ADDR_A, ADDR_B, headers=headers)
+    assert response.status_code == 403
+
+
 async def test_delegation_and_voting_power(client):
     await _mint_member(client, ADDR_A)
     await _mint_member(client, ADDR_B)
-    response = await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_A, "delegate_address": ADDR_B,
-    })
+    response = await _delegate(client, ADDR_A, ADDR_B)
     assert response.json()["ok"] is True
 
     delegation = (await client.get(f"/api/governance/delegate/{ADDR_A}")).json()
     assert delegation["delegated"] is True
-    assert delegation["delegate"] == ADDR_B
+    assert delegation["delegate"] == ADDR_B.lower()
 
     delegators = (await client.get(f"/api/governance/delegations/{ADDR_B}")).json()
-    assert delegators["delegators"] == [ADDR_A]
-    assert delegators["active_delegators"] == [ADDR_A]
+    assert delegators["delegators"] == [ADDR_A.lower()]
+    assert delegators["active_delegators"] == [ADDR_A.lower()]
     assert delegators["voting_power"] == 2
 
 
 async def test_delegation_rejects_two_way_cycle(client):
     await _mint_member(client, ADDR_A)
     await _mint_member(client, ADDR_B)
-    await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_A, "delegate_address": ADDR_B,
-    })
-    circular = await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_B, "delegate_address": ADDR_A,
-    })
+    await _delegate(client, ADDR_A, ADDR_B)
+    circular = await _delegate(client, ADDR_B, ADDR_A)
     data = circular.json()
     assert data["ok"] is False
     assert "circular" in data["error"].lower()
@@ -313,16 +383,10 @@ async def test_delegation_rejects_longer_cycle(client):
     """a->b, b->c already stored; c->a must be rejected (audit N-3)."""
     for addr in (ADDR_A, ADDR_B, ADDR_C):
         await _mint_member(client, addr)
-    assert (await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_A, "delegate_address": ADDR_B,
-    })).json()["ok"] is True
-    assert (await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_B, "delegate_address": ADDR_C,
-    })).json()["ok"] is True
+    assert (await _delegate(client, ADDR_A, ADDR_B)).json()["ok"] is True
+    assert (await _delegate(client, ADDR_B, ADDR_C)).json()["ok"] is True
 
-    circular = await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_C, "delegate_address": ADDR_A,
-    })
+    circular = await _delegate(client, ADDR_C, ADDR_A)
     data = circular.json()
     assert data["ok"] is False
     assert "circular" in data["error"].lower()
@@ -331,14 +395,23 @@ async def test_delegation_rejects_longer_cycle(client):
 async def test_revoke_delegation(client):
     await _mint_member(client, ADDR_A)
     await _mint_member(client, ADDR_B)
-    await client.post("/api/governance/delegate", json={
-        "delegator_address": ADDR_A, "delegate_address": ADDR_B,
-    })
-    revoked = (await client.delete(f"/api/governance/delegate/{ADDR_A}")).json()
+    await _delegate(client, ADDR_A, ADDR_B)
+    revoked = (await _revoke_delegation(client, ADDR_A)).json()
     assert revoked["ok"] is True
 
-    again = (await client.delete(f"/api/governance/delegate/{ADDR_A}")).json()
+    again = (await _revoke_delegation(client, ADDR_A)).json()
     assert again["ok"] is False
+
+
+async def test_revoke_delegation_rejects_acting_as_another_address(client):
+    """Autenticado como B pero reclamando revocar la delegación de A: 403 (cierra C-1)."""
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    await _delegate(client, ADDR_A, ADDR_B)
+
+    headers = await _headers_for(client, ADDR_B)
+    response = await _revoke_delegation(client, ADDR_A, headers=headers)
+    assert response.status_code == 403
 
 
 # === Treasury (honest reporting) ===

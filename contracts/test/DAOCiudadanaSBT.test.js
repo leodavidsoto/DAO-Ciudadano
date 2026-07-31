@@ -3,29 +3,39 @@ const { ethers } = require("hardhat");
 const { loadFixture, time } = require("@nomicfoundation/hardhat-toolbox/network-helpers");
 
 /**
- * Test suite for DAOCiudadanaSBT (see ROADMAP task 2.1 / audit finding C-5).
+ * Test suite for DAOCiudadanaSBT (see ROADMAP task 2.1 / audit finding C-5,
+ * migrated to AccessControl + bytes32 identity hash per ADR decision D-1).
  *
  * Covers the invariants the token's value depends on:
  * - one SBT per wallet, one SBT per identity hash
  * - soulbound (no transfers, ever)
- * - onlyOwner minting and revocation
+ * - MINTER_ROLE-gated minting, REVOKER_ROLE-gated revocation, PAUSER_ROLE-gated pause
+ * - role separation: holding one role does not grant another
  * - pause/unpause
  * - revocation lifecycle with 3-day cooldown
  * - identity hashes stay burned forever (no re-registration after revocation)
  */
 describe("DAOCiudadanaSBT", function () {
-    const IDENTITY_HASH = "a3f8b2c941d05e7f6a1b8c2d3e4f5a6b";
-    const OTHER_HASH = "ffeeddccbbaa99887766554433221100";
+    // bytes32 identity hashes — this is what app/core/identity.py's
+    // identity_hash() actually produces (HMAC-SHA256 digest), not a
+    // free-form string.
+    const IDENTITY_HASH = ethers.keccak256(ethers.toUtf8Bytes("identity-a"));
+    const OTHER_HASH = ethers.keccak256(ethers.toUtf8Bytes("identity-b"));
+    const ZERO_HASH = ethers.ZeroHash;
     const ASSURANCE_AL2 = "AL2";
     const TOKEN_URI = "ipfs://QmTestMetadata";
     const REVOCATION_COOLDOWN = 3 * 24 * 60 * 60; // 3 days in seconds
 
     async function deployFixture() {
-        const [owner, member, otherMember, stranger] = await ethers.getSigners();
+        const [admin, member, otherMember, stranger, minter] = await ethers.getSigners();
         const Factory = await ethers.getContractFactory("DAOCiudadanaSBT");
-        const sbt = await Factory.deploy();
+        const sbt = await Factory.deploy(admin.address);
         await sbt.waitForDeployment();
-        return { sbt, owner, member, otherMember, stranger };
+        const MINTER_ROLE = await sbt.MINTER_ROLE();
+        const PAUSER_ROLE = await sbt.PAUSER_ROLE();
+        const REVOKER_ROLE = await sbt.REVOKER_ROLE();
+        const DEFAULT_ADMIN_ROLE = await sbt.DEFAULT_ADMIN_ROLE();
+        return { sbt, admin, member, otherMember, stranger, minter, MINTER_ROLE, PAUSER_ROLE, REVOKER_ROLE, DEFAULT_ADMIN_ROLE };
     }
 
     async function deployWithMintedTokenFixture() {
@@ -41,10 +51,13 @@ describe("DAOCiudadanaSBT", function () {
         return { ...base, tokenId };
     }
 
-    describe("Deployment", function () {
-        it("sets deployer as owner, starts unpaused with zero supply", async function () {
-            const { sbt, owner } = await loadFixture(deployFixture);
-            expect(await sbt.owner()).to.equal(owner.address);
+    describe("Deployment / roles", function () {
+        it("grants the admin address every role, starts unpaused with zero supply", async function () {
+            const { sbt, admin, MINTER_ROLE, PAUSER_ROLE, REVOKER_ROLE, DEFAULT_ADMIN_ROLE } = await loadFixture(deployFixture);
+            expect(await sbt.hasRole(DEFAULT_ADMIN_ROLE, admin.address)).to.equal(true);
+            expect(await sbt.hasRole(MINTER_ROLE, admin.address)).to.equal(true);
+            expect(await sbt.hasRole(PAUSER_ROLE, admin.address)).to.equal(true);
+            expect(await sbt.hasRole(REVOKER_ROLE, admin.address)).to.equal(true);
             expect(await sbt.paused()).to.equal(false);
             expect(await sbt.totalSupply()).to.equal(0);
             expect(await sbt.name()).to.equal("DAO Ciudadana SBT");
@@ -52,12 +65,34 @@ describe("DAOCiudadanaSBT", function () {
             expect(await sbt.REVOCATION_COOLDOWN()).to.equal(REVOCATION_COOLDOWN);
         });
 
-        it("supports the ERC721 and ERC721Metadata interfaces", async function () {
+        it("supports the ERC721, ERC721Metadata and AccessControl interfaces", async function () {
             const { sbt } = await loadFixture(deployFixture);
             expect(await sbt.supportsInterface("0x80ac58cd")).to.equal(true);  // ERC721
             expect(await sbt.supportsInterface("0x5b5e139f")).to.equal(true);  // ERC721Metadata
             expect(await sbt.supportsInterface("0x49064906")).to.equal(true);  // ERC4906 (URIStorage)
+            expect(await sbt.supportsInterface("0x7965db0b")).to.equal(true);  // AccessControl
             expect(await sbt.supportsInterface("0xffffffff")).to.equal(false);
+        });
+
+        it("DEFAULT_ADMIN_ROLE can grant MINTER_ROLE to a different address", async function () {
+            const { sbt, admin, minter, member, MINTER_ROLE } = await loadFixture(deployFixture);
+            expect(await sbt.hasRole(MINTER_ROLE, minter.address)).to.equal(false);
+
+            await sbt.connect(admin).grantRole(MINTER_ROLE, minter.address);
+            expect(await sbt.hasRole(MINTER_ROLE, minter.address)).to.equal(true);
+
+            await expect(
+                sbt.connect(minter).mintMembership(member.address, IDENTITY_HASH, ASSURANCE_AL2, TOKEN_URI)
+            ).to.emit(sbt, "MembershipMinted");
+        });
+
+        it("holding MINTER_ROLE does not grant PAUSER_ROLE or REVOKER_ROLE (role separation, D-1)", async function () {
+            const { sbt, admin, minter, MINTER_ROLE, PAUSER_ROLE } = await loadFixture(deployFixture);
+            await sbt.connect(admin).grantRole(MINTER_ROLE, minter.address);
+
+            await expect(sbt.connect(minter).pause("attack"))
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount")
+                .withArgs(minter.address, PAUSER_ROLE);
         });
     });
 
@@ -122,21 +157,21 @@ describe("DAOCiudadanaSBT", function () {
                 .withArgs(IDENTITY_HASH);
         });
 
-        it("rejects an empty identityHash", async function () {
+        it("rejects a zero identityHash", async function () {
             const { sbt, member } = await loadFixture(deployFixture);
 
             await expect(
-                sbt.mintMembership(member.address, "", ASSURANCE_AL2, TOKEN_URI)
+                sbt.mintMembership(member.address, ZERO_HASH, ASSURANCE_AL2, TOKEN_URI)
             ).to.be.revertedWithCustomError(sbt, "InvalidIdentityHash");
         });
 
-        it("only the owner can mint", async function () {
-            const { sbt, member, stranger } = await loadFixture(deployFixture);
+        it("only an address with MINTER_ROLE can mint", async function () {
+            const { sbt, member, stranger, MINTER_ROLE } = await loadFixture(deployFixture);
 
             await expect(
                 sbt.connect(stranger).mintMembership(member.address, IDENTITY_HASH, ASSURANCE_AL2, TOKEN_URI)
-            ).to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount")
-                .withArgs(stranger.address);
+            ).to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount")
+                .withArgs(stranger.address, MINTER_ROLE);
         });
     });
 
@@ -176,20 +211,22 @@ describe("DAOCiudadanaSBT", function () {
     });
 
     describe("Pausing", function () {
-        it("only the owner can pause and unpause", async function () {
-            const { sbt, stranger } = await loadFixture(deployFixture);
+        it("only an address with PAUSER_ROLE can pause and unpause", async function () {
+            const { sbt, stranger, PAUSER_ROLE } = await loadFixture(deployFixture);
             await expect(sbt.connect(stranger).pause("attack"))
-                .to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount");
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount")
+                .withArgs(stranger.address, PAUSER_ROLE);
             await expect(sbt.connect(stranger).unpause())
-                .to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount");
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount")
+                .withArgs(stranger.address, PAUSER_ROLE);
         });
 
         it("emits ContractPaused / ContractUnpaused", async function () {
-            const { sbt, owner } = await loadFixture(deployFixture);
+            const { sbt, admin } = await loadFixture(deployFixture);
             await expect(sbt.pause("security incident"))
-                .to.emit(sbt, "ContractPaused").withArgs(owner.address, "security incident");
+                .to.emit(sbt, "ContractPaused").withArgs(admin.address, "security incident");
             await expect(sbt.unpause())
-                .to.emit(sbt, "ContractUnpaused").withArgs(owner.address);
+                .to.emit(sbt, "ContractUnpaused").withArgs(admin.address);
         });
 
         it("blocks minting while paused and restores it after unpause", async function () {
@@ -209,15 +246,18 @@ describe("DAOCiudadanaSBT", function () {
     });
 
     describe("Revocation lifecycle", function () {
-        it("only the owner can request, cancel and execute revocations", async function () {
-            const { sbt, stranger, tokenId } = await loadFixture(deployWithMintedTokenFixture);
+        it("only an address with REVOKER_ROLE can request, cancel and execute revocations", async function () {
+            const { sbt, stranger, tokenId, REVOKER_ROLE } = await loadFixture(deployWithMintedTokenFixture);
 
             await expect(sbt.connect(stranger).requestRevocation(tokenId))
-                .to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount");
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount")
+                .withArgs(stranger.address, REVOKER_ROLE);
             await expect(sbt.connect(stranger).cancelRevocation(tokenId))
-                .to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount");
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount")
+                .withArgs(stranger.address, REVOKER_ROLE);
             await expect(sbt.connect(stranger).executeRevocation(tokenId, "x"))
-                .to.be.revertedWithCustomError(sbt, "OwnableUnauthorizedAccount");
+                .to.be.revertedWithCustomError(sbt, "AccessControlUnauthorizedAccount")
+                .withArgs(stranger.address, REVOKER_ROLE);
         });
 
         it("requestRevocation reverts for a nonexistent token", async function () {
@@ -363,7 +403,7 @@ describe("DAOCiudadanaSBT", function () {
             const { sbt, stranger } = await loadFixture(deployFixture);
             expect(await sbt.hasMembership(stranger.address)).to.equal(false);
             expect(await sbt.getMembershipToken(stranger.address)).to.equal(0n);
-            expect(await sbt.isIdentityUsed("never-used-hash")).to.equal(false);
+            expect(await sbt.isIdentityUsed(ethers.keccak256(ethers.toUtf8Bytes("never-used")))).to.equal(false);
         });
     });
 
