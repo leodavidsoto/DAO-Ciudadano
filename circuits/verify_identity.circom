@@ -1,76 +1,78 @@
-pragma circom 2.1.6;
+pragma circom 2.2.0;
 
 include "circomlib/circuits/poseidon.circom";
-include "circomlib/circuits/comparators.circom";
-include "circomlib/circuits/bitify.circom";
 
-/*
- * verify_identity.circom — base del flujo ZKP de identidad soberana.
+/**
+ * Privacy-preserving DAO membership eligibility proof.
  *
- * ESTADO: PARCIAL Y NO USABLE EN PRODUCCIÓN TODAVÍA. Lee la sección
- * "Qué falta" del README de este directorio antes de tocarlo.
+ * The issuer must validate civil identity off-chain and insert at most one
+ * commitment per citizen in its Merkle tree:
  *
- * Qué prueba HOY (implementado y funcional):
- *   - Que quien genera la prueba conoce un identificador de documento y un
- *     secreto, y que el `nullifier` publicado se deriva determinísticamente
- *     de ambos. Eso da unicidad: la misma cédula produce siempre el mismo
- *     nullifier, así que el contrato puede rechazar el segundo registro
- *     (anti-Sybil), sin que el nullifier revele el RUT.
+ *   leaf = Poseidon(identitySecret, recipient, scope)
  *
- * Qué NO prueba todavía (el trabajo pesado, ver README):
- *   - Que los datos del documento estén realmente firmados por el Registro
- *     Civil. Eso exige verificar dentro del circuito la firma RSA/ECDSA de
- *     EF.SOD y el encadenamiento de hashes DG1 -> SOD. Sin eso, alguien
- *     puede inventar un documentId y obtener una prueba "válida".
+ * The identitySecret and Merkle path remain private. The nullifier excludes
+ * recipient deliberately, so moving the same identity to a different wallet
+ * cannot create a second membership:
  *
- * Por eso el circuito NO debe desplegarse como está: probaría unicidad de
- * algo no autenticado. Se marca explícito en vez de aparentar completitud.
+ *   nullifierHash = Poseidon(identitySecret, scope)
+ *
+ * Public signal order is a protocol boundary shared with
+ * DAOCiudadanaSBT.mintMembership:
+ *   [identityRoot, nullifierHash, recipient, scope]
  */
+template MembershipEligibility(levels) {
+    // Private witness.
+    signal input identitySecret;
+    signal input pathElements[levels];
+    signal input pathIndices[levels];
 
-template VerifyIdentity() {
-    // === Entradas privadas (NUNCA salen del dispositivo) ===
-    // Hash del contenido de DG1 (los datos de la MRZ leídos del chip).
-    // Se pasa ya hasheado para no meter 88+ bytes de MRZ como señales.
-    signal input documentIdHash;
-    // Secreto del usuario: impide que un tercero que conozca el RUT pueda
-    // recalcular el nullifier y rastrear a la persona.
-    signal input secret;
+    // Public inputs.
+    signal input identityRoot;
+    signal input nullifierHash;
+    signal input recipient;
+    signal input scope;
 
-    // === Entrada pública ===
-    // Identificador de la clave del registro civil contra la que se valida.
-    // Hoy solo se ata a la prueba (para que una prueba de un registro no
-    // sirva en otro); cuando se implemente la verificación de firma, este
-    // será el módulo/clave real contra el que se verifica EF.SOD.
-    signal input registryKeyId;
+    // A zero secret would create a shared, trivially predictable credential.
+    signal secretInverse;
+    secretInverse <-- 1 / identitySecret;
+    identitySecret * secretInverse === 1;
 
-    // === Salidas públicas ===
-    signal output nullifier;
-    signal output registryKeyIdOut;
+    component nullifierHasher = Poseidon(2);
+    nullifierHasher.inputs[0] <== identitySecret;
+    nullifierHasher.inputs[1] <== scope;
+    nullifierHasher.out === nullifierHash;
 
-    // Nullifier = Poseidon(documentIdHash, secret)
-    // Poseidon y no SHA-256 porque es ~100x más barato en restricciones
-    // dentro de un circuito aritmético.
-    component hasher = Poseidon(2);
-    hasher.inputs[0] <== documentIdHash;
-    hasher.inputs[1] <== secret;
-    nullifier <== hasher.out;
+    // Binding recipient into the issuer-approved leaf prevents a mempool
+    // observer from redirecting a valid proof to another wallet.
+    component leafHasher = Poseidon(3);
+    leafHasher.inputs[0] <== identitySecret;
+    leafHasher.inputs[1] <== recipient;
+    leafHasher.inputs[2] <== scope;
 
-    // Ata la clave del registro a la prueba: sin esto, el verificador no
-    // podría distinguir contra qué registro se generó.
-    registryKeyIdOut <== registryKeyId;
+    signal hashes[levels + 1];
+    signal left[levels];
+    signal right[levels];
+    component levelHashers[levels];
 
-    // Restricciones de sanidad: ninguna entrada puede ser 0. Un
-    // documentIdHash o secret en cero produciría nullifiers colisionables
-    // triviales.
-    component docNonZero = IsZero();
-    docNonZero.in <== documentIdHash;
-    docNonZero.out === 0;
+    hashes[0] <== leafHasher.out;
 
-    component secretNonZero = IsZero();
-    secretNonZero.in <== secret;
-    secretNonZero.out === 0;
+    for (var i = 0; i < levels; i++) {
+        pathIndices[i] * (pathIndices[i] - 1) === 0;
+
+        left[i] <== hashes[i]
+            + pathIndices[i] * (pathElements[i] - hashes[i]);
+        right[i] <== pathElements[i]
+            + pathIndices[i] * (hashes[i] - pathElements[i]);
+
+        levelHashers[i] = Poseidon(2);
+        levelHashers[i].inputs[0] <== left[i];
+        levelHashers[i].inputs[1] <== right[i];
+        hashes[i + 1] <== levelHashers[i].out;
+    }
+
+    hashes[levels] === identityRoot;
 }
 
-// registryKeyId es público: el contrato debe poder comprobar que la prueba
-// se generó contra la clave del registro que él considera válida.
-component main {public [registryKeyId]} = VerifyIdentity();
+// 25 levels support up to 33,554,432 issuer commitments.
+component main {public [identityRoot, nullifierHash, recipient, scope]} =
+    MembershipEligibility(25);

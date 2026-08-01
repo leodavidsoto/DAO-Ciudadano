@@ -1,0 +1,44 @@
+{
+  "protocol": "dao-ciudadana-membership-groth16-v1",
+  "productionReady": false,
+  "trustedSetup": "single-host-development-integration",
+  "circuit": {
+    "name": "MembershipEligibility",
+    "depth": 25,
+    "nonlinearConstraints": 6658,
+    "scopeBinding": "keccak256(protocolVersion, chainId, membershipContract)",
+    "publicSignals": [
+      "identityRoot",
+      "nullifierHash",
+      "recipient",
+      "scope"
+    ]
+  },
+  "toolchain": {
+    "circom2": "0.2.23",
+    "circomlib": "2.0.5",
+    "snarkjs": "0.7.6"
+  },
+  "files": {
+    "circuits/verify_identity.circom": {
+      "bytes": 2531,
+      "sha256": "e46a708c6dd0ce648735974f18b91b4384f053453afaa63bd5d35fe1085542c0"
+    },
+    "circuits/build/verify_identity_js/verify_identity.wasm": {
+      "bytes": 2244060,
+      "sha256": "4a01745294b7b8c7679374c8dfce2ce5887ced600ca277ed61e6a06fa7bd0b71"
+    },
+    "circuits/build/verify_identity_final.zkey": {
+      "bytes": 6167933,
+      "sha256": "840e7690147a34b2816f112b5378775dd3415e3fc40940f45c7b726debf300ba"
+    },
+    "circuits/build/verification_key.json": {
+      "bytes": 3480,
+      "sha256": "dba8bd8171b27bccf7fdc5c06a94ff1f3167493b906939ac089932809c290151"
+    },
+    "contracts/contracts/Verifier.sol": {
+      "bytes": 8054,
+      "sha256": "ac63f93e264e1aecad2d93286cb70d2acc706eb44401f567cdd4df4067d1883a"
+    }
+  }
+}
