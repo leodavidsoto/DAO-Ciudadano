@@ -31,7 +31,7 @@ services:
       # Dominio EXACTO del frontend, separado por comas. Nunca "*".
       # Actualizar si cambia la URL de Netlify.
       - key: CORS_ORIGINS
-        value: https://regal-dieffenbachia-6e9194.netlify.app
+        value: https://regal-dieffenbachia-6e9194.netlify.app,https://estamosdao.cl,https://www.estamosdao.cl
 
       # false en producción: true expone /docs y /redoc
       - key: DEBUG
