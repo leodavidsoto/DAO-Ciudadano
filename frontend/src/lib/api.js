@@ -80,6 +80,22 @@ export const membershipAPI = {
             assurance_level: assuranceLevel,
             doc_hash: docHash,
         }),
+    // Minteo con prueba de conocimiento cero (ADR-001, D-2). Reemplaza a
+    // `mint`: no envía `doc_hash` ni ningún dato del documento, solo el
+    // nullifier y la prueba que el navegador generó localmente.
+    //
+    // El endpoint todavía NO existe en el backend: el contrato está
+    // especificado en REQUEST_TO_CODEX.md. Hasta que Codex lo publique, esta
+    // ruta solo se usa con REACT_APP_ZK_MINT=true, que está apagado por
+    // defecto.
+    mintWithProof: ({ walletAddress, assuranceLevel, nullifier, proof, publicSignals }) =>
+        api.post('/membership/mint-zk', {
+            wallet_address: walletAddress,
+            assurance_level: assuranceLevel,
+            nullifier,
+            proof,
+            public_signals: publicSignals,
+        }),
     verify: (tokenId) => api.get(`/membership/verify/${tokenId}`),
     getByWallet: (address) => api.get(`/membership/member/${address}`),
 };

@@ -4,6 +4,13 @@
  */
 import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import { authAPI, membershipAPI, dashboardAPI } from '../lib/api';
+import {
+    generateIdentityProof,
+    verifyProofLocally,
+    checkZkAvailability,
+    isZkMintEnabled,
+    ZkNotProvisionedError,
+} from '../lib/zk';
 
 const OnboardingContext = createContext(null);
 
@@ -49,6 +56,9 @@ export const OnboardingProvider = ({ children }) => {
     const [selfie, setSelfie] = useState({});
     const [wallet, setWallet] = useState({});
     const [mint, setMint] = useState({});
+    // Prueba de conocimiento cero generada localmente (ADR-001, D-2).
+    // `status`: idle | generating | ready | unavailable | error
+    const [zk, setZk] = useState({ status: 'idle' });
     // Real figures only: null until the API responds (never seed fake numbers)
     const [stats, setStats] = useState({ total_members: null, recent_joins: null });
 
@@ -175,6 +185,76 @@ export const OnboardingProvider = ({ children }) => {
         }
     }, []);
 
+    /**
+     * Comprueba si este despliegue puede generar pruebas ZK, sin generarlas.
+     * Sirve para que la interfaz diga la verdad antes de que el ciudadano
+     * llegue al paso de minteo.
+     */
+    const refreshZkAvailability = useCallback(async () => {
+        const { ready, missing } = await checkZkAvailability();
+        setZk((prev) =>
+            prev.status === 'ready'
+                ? prev
+                : { status: ready ? 'idle' : 'unavailable', missing }
+        );
+        return ready;
+    }, []);
+
+    /**
+     * Genera la prueba de identidad LOCALMENTE (ADR-001, D-2).
+     *
+     * El identificador del documento y el secreto no salen del dispositivo:
+     * lo único que se publica es el `nullifier`, que da unicidad sin revelar
+     * de qué ciudadano proviene.
+     *
+     * Devuelve la prueba, o `null` si no se pudo generar. Nunca devuelve algo
+     * que se parezca a una prueba sin serlo.
+     */
+    const generateProof = useCallback(async () => {
+        const documentId = nfc.doc_hash;
+        if (nfc.verified !== true || !documentId) {
+            setError(
+                'No existe una lectura verificada del documento. Sin ella no hay nada que probar.'
+            );
+            return null;
+        }
+
+        setZk({ status: 'generating' });
+        setError('');
+        try {
+            const result = await generateIdentityProof({ documentId });
+
+            // Autocomprobación antes de gastar una transacción patrocinada.
+            // `null` significa "no se pudo comprobar" (falta la clave de
+            // verificación), que no es lo mismo que "es válida".
+            const selfCheck = await verifyProofLocally(result.proof, result.publicSignals);
+            if (selfCheck === false) {
+                setZk({ status: 'error' });
+                setError('La prueba generada no pasó la verificación local; no se enviará.');
+                return null;
+            }
+
+            setZk({
+                status: 'ready',
+                nullifier: result.nullifier,
+                proof: result.proof,
+                publicSignals: result.publicSignals,
+                solidity: result.solidity,
+                locallyVerified: selfCheck === true,
+            });
+            return result;
+        } catch (err) {
+            if (err instanceof ZkNotProvisionedError) {
+                setZk({ status: 'unavailable', missing: err.missing });
+                setError(err.message);
+                return null;
+            }
+            setZk({ status: 'error' });
+            setError(err.message || 'No se pudo generar la prueba de identidad.');
+            return null;
+        }
+    }, [nfc.doc_hash, nfc.verified]);
+
     const mintSBT = useCallback(async () => {
         if (!wallet.address) return;
         if (nfc.verified !== true || !nfc.doc_hash) {
@@ -187,11 +267,32 @@ export const OnboardingProvider = ({ children }) => {
         setLoading(true);
         setError('');
         try {
-            const response = await membershipAPI.mint(
-                wallet.address,
-                clave.assurance_level || 'AL1',
-                nfc.doc_hash
-            );
+            let response;
+
+            if (isZkMintEnabled()) {
+                // Ruta ZK: el documento nunca se transmite. Si la prueba no se
+                // puede generar, se aborta — no hay degradación silenciosa a
+                // enviar el hash del documento, que es justo lo que este
+                // rediseño elimina.
+                const proofResult = await generateProof();
+                if (!proofResult) {
+                    setLoading(false);
+                    return;
+                }
+                response = await membershipAPI.mintWithProof({
+                    walletAddress: wallet.address,
+                    assuranceLevel: clave.assurance_level || 'AL1',
+                    nullifier: proofResult.nullifier,
+                    proof: proofResult.solidity,
+                    publicSignals: proofResult.publicSignals,
+                });
+            } else {
+                response = await membershipAPI.mint(
+                    wallet.address,
+                    clave.assurance_level || 'AL1',
+                    nfc.doc_hash
+                );
+            }
 
             if (response.data.ok) {
                 setMint({ ...response.data, status: 'active' });
@@ -231,7 +332,15 @@ export const OnboardingProvider = ({ children }) => {
         } finally {
             setLoading(false);
         }
-    }, [wallet.address, clave.assurance_level, nfc.doc_hash, nfc.verified, fetchExistingMembership, loadStats]);
+    }, [
+        wallet.address,
+        clave.assurance_level,
+        nfc.doc_hash,
+        nfc.verified,
+        fetchExistingMembership,
+        loadStats,
+        generateProof,
+    ]);
 
 
     // File handling
@@ -262,6 +371,10 @@ export const OnboardingProvider = ({ children }) => {
         setSelfie({});
         setWallet({});
         setMint({});
+        // El secreto ZK NO se borra acá a propósito: es lo que ata al ciudadano
+        // con su nullifier. Perderlo le daría un nullifier distinto para la
+        // misma cédula. Se olvida solo con `forgetSecret()` explícito.
+        setZk({ status: 'idle' });
     }, []);
 
     const value = {
@@ -283,10 +396,16 @@ export const OnboardingProvider = ({ children }) => {
         mint, setMint,
         stats,
 
+        // Prueba ZK local (ADR-001)
+        zk,
+        zkMintEnabled: isZkMintEnabled(),
+
         // Actions
         authenticateClaveUnica,
         authenticateNFC,
         analyzeLiveness,
+        generateProof,
+        refreshZkAvailability,
         mintSBT,
         fetchExistingMembership,
         loadStats,
