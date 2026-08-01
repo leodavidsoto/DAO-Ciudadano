@@ -385,3 +385,31 @@ Todo lo siguiente se ejecutó de verdad en el árbol de trabajo, no se dedujo:
   `(False, 'Token no encontrado')` con el token presente en la colección.
 - **No ejecutado:** compilación nativa de mobile, despliegue, ninguna mutación
   contra Atlas o Sepolia, y ningún `git commit`/`push`.
+
+---
+
+## Hallazgos del rediseño cívico del interior (01-08-2026)
+
+El dashboard seguía en el tema cyberpunk mientras la portada ya era cívica. Al
+convertirlo aparecieron dos defectos funcionales que el tema oscuro escondía:
+
+| ID | Hallazgo | Ubicación | Severidad | Estado |
+|---|---|---|---|---|
+| P-48 | El modal de nueva propuesta marcaba la categoría y la duración elegidas con clases Tailwind armadas por interpolación (`bg-${cat.color}-500/20`). Tailwind purga lo que no aparece literal en el código, así que esas clases **nunca se generaron**: la opción seleccionada se veía igual que las demás y el usuario no tenía forma de saber qué había elegido | `frontend/src/components/governance/CreateProposalModal.jsx` | Media (usabilidad) | ✅ Corregido: el estado activo usa clases reales del sistema cívico y `aria-pressed` |
+| P-49 | `VoteDelegation` calculaba el poder de voto como `delegators.length + 1`, contando **todos** los delegantes. El backend solo suma los que siguen siendo miembros activos (`voting_power`), así que la interfaz mostraba un poder mayor al que realmente se aplica al votar | `frontend/src/components/governance/VoteDelegation.jsx` | Media (dato inflado) | ✅ Corregido: se usa `voting_power` de la API y los delegantes sin membresía activa se marcan como tales |
+| P-50 | El diálogo de nueva propuesta no se podía cerrar con teclado (sin `Escape`, sin `role="dialog"`), y los botones de icono del QR de membresía no tenían nombre accesible | `CreateProposalModal.jsx`; `frontend/src/components/membership/MembershipQR.jsx` | Baja (accesibilidad) | ✅ Corregido: cierre con `Escape`, `role="dialog"` + `aria-modal` y `aria-label` en los botones de icono |
+
+**Sobre el tema visual:** `styles/civic.css` es ahora la única fuente de verdad
+del interior. `.civic-onboarding` (en `App.css`) solo redefinía cuatro clases
+`cyber-*`, así que botones, insignias, campos y avisos seguían saliendo oscuros
+a mitad del flujo de `/unete` pese al rediseño anterior; la capa nueva cubre el
+vocabulario completo. El marcado de los once pasos del onboarding no se tocó, a
+propósito: ahí vive la lógica de NFC, liveness, wallet y minteo.
+
+**Verificación ejecutada:** `CI=true npm run build` correcto; las seis rutas
+(`/`, `/dashboard`, `/dashboard/{elecciones,delegacion,tesoreria}`, `/unete`)
+renderizadas en Chromium headless contra el build de producción, con capturas y
+comprobación del color computado — todas devuelven fondo claro `rgb(247,249,252)`
+y tinta `rgb(51,69,107)`. Un barrido de contraste texto/fondo sobre el flujo de
+alta no encontró combinaciones ilegibles (el único positivo es el `<noscript>`,
+que nunca se muestra con JS activo).
