@@ -4,6 +4,10 @@ Instrucciones para cualquier agente de IA que trabaje en este repositorio (Codex
 
 **Contexto completo antes de tocar código:** [`docs/HANDOFF.md`](./docs/HANDOFF.md) · [`docs/AUDIT.md`](./docs/AUDIT.md) · [`docs/ROADMAP.md`](./docs/ROADMAP.md)
 
+**Misiones Específicas por Agente (Arquitectura Vanguardia ADR-001):**
+- Si eres **Claude**, lee: [`CLAUDE_SKILLS.md`](./CLAUDE_SKILLS.md)
+- Si eres **Codex**, lee: [`CODEX_SKILLS.md`](./CODEX_SKILLS.md)
+
 ---
 
 ## Qué es este proyecto
@@ -67,7 +71,13 @@ curl -s -X POST https://ethereum-sepolia-rpc.publicnode.com \
 - **Backend:** `core` / `models` / `routers` / `services`. Pydantic v2. Los modelos de gobernanza viven inline en sus routers.
 - **Frontend:** alias `@/` configurado en `craco.config.js`. Componentes en `.jsx`, utilidades en `.js`. Cada carpeta de componentes exporta desde su `index.js`.
 - **Estado:** `OnboardingContext` para el flujo de alta. No introduzcas Redux ni Zustand.
-- **Estilos:** Tailwind con tema cyberpunk propio en `styles/premium.css`. Reutiliza las clases `cyber-*` antes de crear nuevas.
+- **Estilos:** identidad cívica en todo el sitio — fondo claro, azul `#003897`,
+  rojo `#CB2C27`, tinta `#0B2545`, Poppins (títulos) + Open Sans (texto).
+  La landing usa `styles/landing.css`; el interior (dashboard y `/unete`) usa
+  `styles/civic.css` con clases `civic-*`. Reutiliza esas antes de crear nuevas.
+  `App.css` y `styles/premium.css` conservan el tema cyberpunk histórico y sus
+  clases `cyber-*`: quedan neutralizadas dentro de `.civic-app` y **no deben
+  usarse en pantallas nuevas**.
 - **Contratos:** Solidity 0.8.20, OpenZeppelin 5, errores personalizados en lugar de strings de revert.
 - **Direcciones:** siempre normalizadas a minúsculas antes de guardar o consultar.
 

@@ -15,6 +15,13 @@ import { governanceAPI } from '@/lib/api';
 import { generateNonce } from '@/lib/security';
 import CreateProposalModal from './CreateProposalModal';
 
+const CATEGORIAS = {
+    general: 'General',
+    treasury: 'Tesorería',
+    membership: 'Membresía',
+    technical: 'Técnico',
+};
+
 const ESTADOS = {
     active: { tag: 'civic-tag-blue', label: 'En votación', icon: <Clock className="w-3 h-3" /> },
     passed: { tag: 'civic-tag-green', label: 'Aprobada', icon: <CheckCircle className="w-3 h-3" /> },
@@ -56,7 +63,9 @@ const ProposalCard = ({ proposal, walletAddress, onVote }) => {
                             {estado.icon}
                             {estado.label}
                         </span>
-                        <span className="civic-faint text-xs">{proposal.category}</span>
+                        <span className="civic-faint text-xs">
+                            {CATEGORIAS[proposal.category] || proposal.category}
+                        </span>
                     </div>
                 </div>
                 {proposal.status === 'active' && (
@@ -199,10 +208,7 @@ const ProposalsList = ({ walletAddress, signer }) => {
                     <button
                         key={f.value || 'all'}
                         onClick={() => setFilter(f.value)}
-                        className={
-                            'civic-btn civic-btn-sm ' +
-                            (filter === f.value ? 'civic-btn-ghost' : 'civic-btn-quiet')
-                        }
+                        className={'civic-filter' + (filter === f.value ? ' is-active' : '')}
                         aria-pressed={filter === f.value}
                     >
                         {f.label}

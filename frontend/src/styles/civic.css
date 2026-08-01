@@ -816,3 +816,47 @@ body:has(.civic-app)::after,
     background-color: var(--civic-fondo) !important;
     border-color: var(--civic-borde) !important;
 }
+
+/* === Filtros ===
+   Un `civic-btn-ghost` junto a un `civic-btn-quiet` se distinguían solo por el
+   tono del borde: de un vistazo no se sabía qué filtro estaba aplicado. El
+   seleccionado se rellena, igual que la pestaña activa de la navegación. */
+
+.civic-filter {
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--civic-borde-fuerte);
+    background: var(--civic-superficie);
+    color: var(--civic-suave);
+    font-family: var(--civic-titulo);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .2s ease, border-color .2s ease, color .2s ease;
+}
+
+.civic-filter:hover {
+    border-color: var(--civic-azul-borde);
+    color: var(--civic-azul);
+}
+
+.civic-filter.is-active {
+    background: var(--civic-azul);
+    border-color: var(--civic-azul);
+    color: #ffffff;
+}
+
+/* Estado deshabilitado: el tema oscuro lo pintaba de un gris sólido que sobre
+   fondo claro parece un botón roto, no uno inactivo. */
+.civic-app .cyber-button:disabled,
+.civic-app .cyber-button-premium:disabled,
+.civic-app .cyber-button[disabled],
+.civic-app .cyber-button-premium[disabled] {
+    background: var(--civic-azul) !important;
+    color: #ffffff !important;
+    opacity: .45 !important;
+    cursor: not-allowed !important;
+}

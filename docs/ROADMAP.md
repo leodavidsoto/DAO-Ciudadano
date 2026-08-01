@@ -21,10 +21,7 @@ decidir implícitamente una implementación.
 | **B. Client-side con firma** | El backend emite un voucher firmado (EIP-712); el usuario llama `mintWithVoucher` y paga su gas. Requiere modificar el contrato. | El backend nunca custodia llaves con fondos. El usuario controla su transacción. | Fricción alta: el ciudadano necesita ETH de gas. Barrera de adopción real en un proyecto cívico. |
 | **C. Híbrido con meta-transacciones** | El usuario firma un mensaje sin gas; un relayer lo ejecuta y paga. | Combina lo mejor de A y B. | Más piezas: relayer, protección contra abuso del relayer, ERC-2771. |
 
-**Recomendación provisional:** empezar con **A**, con la llave en un KMS y
-`MINTER_ROLE` separado de `DEFAULT_ADMIN_ROLE`. Cualquier opción exige desplegar
-el contrato AccessControl/bytes32 compatible; la dirección histórica no sirve.
-Ratificar la decisión en un ADR antes de desplegar.
+**Resolución (ADR-001):** Opción **C (Híbrido con meta-transacciones y Account Abstraction)**. Se usará un Paymaster (ERC-4337) o Relayer para que la barrera de adopción y el gas sea cero, sin requerir custodia server-side.
 
 ### D-2 · ¿Qué se escribe on-chain como `identityHash`?
 
@@ -34,11 +31,7 @@ HMAC-SHA256 completo para altas nuevas, pero la decisión sigue pendiente hasta
 ratificar el diseño, custodiar/rotar el pepper en KMS y migrar o purgar datos
 legacy. Alternativas:
 
-- **HMAC-SHA256(RUT, pepper)** con el pepper en KMS, nunca en el repositorio ni en la base. Simple y suficiente para impedir enumeración. **Recomendada para la Fase 1.**
-- **Compromiso Pedersen / commitment con nonce aleatorio por usuario**, guardando el nonce cifrado. Permite pruebas de pertenencia sin revelar el RUT.
-- **Prueba de conocimiento cero** (Semaphore, zk-proof de pertenencia al padrón). Es el destino correcto a largo plazo para un sistema de voto anónimo, pero no es un punto de partida realista.
-
-Sea cual sea: **usar 32 bytes completos, no 16 hex truncados**, y `bytes32` en el contrato en vez de `string` (ahorra gas y evita comparaciones de strings).
+**Resolución (ADR-001):** Se utilizará **Prueba de conocimiento cero (zk-SNARKs)** usando un nullifier on-chain como `identityHash`. Esto permite anonimato total y evita la coerción. El cliente generará la prueba ZK y el contrato la validará.
 
 ### D-3 · ¿La gobernanza es on-chain u off-chain?
 
@@ -48,10 +41,7 @@ no; producción los bloquea. Además, los totales persisten separados de las
 papeletas, por lo que todavía falta reconciliación/atomicidad antes de llamarlo
 un sistema electoral verificable.
 
-- **Off-chain con firma verificable** (estilo Snapshot): cada voto es un mensaje firmado por la wallet, se almacena el mensaje y la firma, cualquiera puede reverificar. Barato, sin gas, auditable. **Recomendado para la Fase 3.**
-- **On-chain completo** (OpenZeppelin Governor + tesorería en Safe): máxima garantía, costo de gas por voto, complejidad alta.
-
-**Recomendación:** off-chain firmado ahora, con la tesorería en un **Safe multisig real** desde el principio — una tesorería inventada es peor que no tener tesorería.
+**Resolución (ADR-001):** Off-chain firmado con **MACI (Minimal Anti-Collusion Infrastructure)** para privacidad y anti-coerción, sumado a un **Safe multisig con oráculo Reality.eth** para ejecución trustless sin gas.
 
 ---
 
