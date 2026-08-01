@@ -28,8 +28,9 @@ const WalletStep = () => {
     const [isChecking, setIsChecking] = useState(true);
     const [existingToken, setExistingToken] = useState(null);
     const [checkingMembership, setCheckingMembership] = useState(false);
+    const [membershipLookupComplete, setMembershipLookupComplete] = useState(false);
 
-    // Chain the SBT contract is deployed on (see frontend/src/contracts/SBTContract.js)
+    // The current on-chain integration, once re-enabled, targets Sepolia.
     const REQUIRED_CHAIN_ID = 11155111; // Sepolia
     const isWrongNetwork = isConnected && chainId != null && Number(chainId) !== REQUIRED_CHAIN_ID;
 
@@ -52,17 +53,35 @@ const WalletStep = () => {
     // "Ya existe un SBT para esta wallet". Detect it here and offer to
     // continue with the membership they already have.
     useEffect(() => {
-        if (!isConnected || !address) return;
+        if (!isConnected || !address) {
+            setExistingToken(null);
+            setCheckingMembership(false);
+            setMembershipLookupComplete(false);
+            return;
+        }
         let alive = true;
+        setExistingToken(null);
         setCheckingMembership(true);
+        setMembershipLookupComplete(false);
         fetchExistingMembership(address)
             .then((member) => { if (alive) setExistingToken(member); })
-            .finally(() => { if (alive) setCheckingMembership(false); });
+            .finally(() => {
+                if (alive) {
+                    setCheckingMembership(false);
+                    setMembershipLookupComplete(true);
+                }
+            });
         return () => { alive = false; };
     }, [isConnected, address, fetchExistingMembership]);
 
     const continueWithExisting = () => {
-        setMint({ ok: true, token_id: existingToken.token_id, tx_hash: existingToken.tx_hash || null });
+        if (existingToken?.status !== 'active' || existingToken?.valid !== true) return;
+        setMint({
+            ok: true,
+            token_id: existingToken.token_id,
+            tx_hash: existingToken.tx_hash || null,
+            status: 'active',
+        });
         setStep('success');
     };
 
@@ -82,8 +101,6 @@ const WalletStep = () => {
                 address: result.address,
                 chainId: result.chainId,
             });
-            // Auto advance to next step
-            setTimeout(() => setStep('mint'), 1500);
         }
     };
 
@@ -92,14 +109,19 @@ const WalletStep = () => {
         setTimeout(() => setIsChecking(false), 1000);
     };
 
-    // Already connected from context (mock or previous connection)
+    // Already connected from context or a previous connection.
     const walletConnected = isConnected || onboardingWallet.address;
     const displayAddress = address || onboardingWallet.address;
+    const activeMembership = existingToken?.status === 'active' && existingToken?.valid === true
+        ? existingToken
+        : null;
+    const inactiveMembership = existingToken && !activeMembership ? existingToken : null;
+    const membershipLookupPending = walletConnected && (checkingMembership || !membershipLookupComplete);
 
     return (
         <CyberPanel
-            title="CONEXIÓN DE WALLET BLOCKCHAIN"
-            description="Estableciendo enlace con billetera digital descentralizada"
+            title="CONEXIÓN DE WALLET"
+            description="Firma un desafío SIWE para demostrar control de la dirección"
             icon={<Wallet className="h-8 w-8" />}
         >
             <div className="flex flex-col items-center gap-6">
@@ -201,7 +223,7 @@ const WalletStep = () => {
                         {isWrongNetwork && (
                             <div className="mt-4 p-3 rounded-lg border border-yellow-500/40 bg-yellow-500/10 text-left">
                                 <p className="text-yellow-300 text-xs font-mono mb-2">
-                                    El contrato SBT vive en Sepolia. Cambia de red para continuar.
+                                    El piloto de wallet está configurado para Sepolia. Cambia de red para continuar.
                                 </p>
                                 <Button
                                     onClick={() => switchNetwork(REQUIRED_CHAIN_ID)}
@@ -212,17 +234,17 @@ const WalletStep = () => {
                             </div>
                         )}
 
-                        {checkingMembership && (
+                        {membershipLookupPending && (
                             <p className="text-xs text-gray-400 font-mono mt-4">
                                 Verificando membresía existente...
                             </p>
                         )}
 
-                        {!checkingMembership && existingToken && (
+                        {membershipLookupComplete && activeMembership && (
                             <div className="mt-4 p-3 rounded-lg border border-green-500/40 bg-green-500/10 text-left">
                                 <p className="text-green-300 text-xs font-mono mb-2">
-                                    Esta wallet ya tiene membresía (Token #{existingToken.token_id}).
-                                    No hace falta mintear de nuevo.
+                                    Esta wallet ya tiene un registro de membresía activo (#{activeMembership.token_id}).
+                                    No hace falta crear otro registro.
                                 </p>
                                 <Button onClick={continueWithExisting} className="cyber-button-premium w-full group">
                                     CONTINUAR CON MI MEMBRESÍA
@@ -231,7 +253,24 @@ const WalletStep = () => {
                             </div>
                         )}
 
-                        {!checkingMembership && !existingToken && (
+                        {membershipLookupComplete && inactiveMembership && (
+                            <div className="mt-4 p-3 rounded-lg border border-red-500/40 bg-red-500/10 text-left">
+                                <p className="text-red-300 text-xs font-mono mb-2">
+                                    La membresía #{inactiveMembership.token_id} no es válida
+                                    ({inactiveMembership.status || 'estado desconocido'}). No puede usarse como
+                                    credencial vigente ni reactivarse desde este flujo.
+                                </p>
+                                <Button
+                                    onClick={() => setStep('method')}
+                                    variant="outline"
+                                    className="w-full border-red-500/40 text-red-200"
+                                >
+                                    VOLVER A LOS RECORRIDOS
+                                </Button>
+                            </div>
+                        )}
+
+                        {membershipLookupComplete && !existingToken && (
                             <Button
                                 onClick={goToMint}
                                 disabled={isWrongNetwork}

@@ -26,6 +26,30 @@ const NETWORKS = {
     80002: { name: 'Amoy Testnet', symbol: 'MATIC' },
 };
 
+// Margen para no reutilizar un token que expira mientras el usuario completa
+// la acción que acaba de iniciar.
+const TOKEN_EXPIRY_SKEW_SECONDS = 30;
+
+// El backend firma el JWT; el cliente NO lo valida (no puede, ni debe). Solo
+// lee `exp` para decidir si vale la pena reutilizarlo. Sin esto, un token
+// vencido en localStorage hacía que connect() reportara éxito y la UI mostrara
+// la wallet conectada, mientras cada llamada real devolvía 401 y el
+// interceptor de axios borraba el token en silencio: el usuario quedaba
+// "conectado" sin poder mintear, votar ni delegar.
+const isSessionTokenUsable = (token) => {
+    try {
+        const payload = token.split('.')[1];
+        if (!payload) return false;
+        const claims = JSON.parse(
+            atob(payload.replace(/-/g, '+').replace(/_/g, '/'))
+        );
+        if (typeof claims.exp !== 'number') return false;
+        return claims.exp - TOKEN_EXPIRY_SKEW_SECONDS > Date.now() / 1000;
+    } catch {
+        return false;
+    }
+};
+
 const useWallet = () => {
     const [address, setAddress] = useState(null);
     const [balance, setBalance] = useState(null);
@@ -81,9 +105,19 @@ const useWallet = () => {
     const signInWithEthereum = useCallback(async (signerInstance, expectedAddress) => {
         const cachedAddress = localStorage.getItem('auth_address');
         const cachedToken = localStorage.getItem('auth_token');
-        if (cachedToken && cachedAddress && cachedAddress.toLowerCase() === expectedAddress.toLowerCase()) {
+        if (
+            cachedToken &&
+            cachedAddress &&
+            cachedAddress.toLowerCase() === expectedAddress.toLowerCase() &&
+            isSessionTokenUsable(cachedToken)
+        ) {
             return { token: cachedToken, reused: true };
         }
+        // Vencido o de otra wallet: se descarta antes de pedir uno nuevo, para
+        // que un fallo del challenge no deje un token muerto adjuntándose a
+        // cada request.
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('auth_address');
 
         const { data: challenge } = await walletAPI.challenge(expectedAddress);
         const signature = await signerInstance.signMessage(challenge.message);
@@ -163,6 +197,7 @@ const useWallet = () => {
             }
 
             localStorage.removeItem('auth_token');
+            localStorage.removeItem('auth_address');
             setError(errorMessage);
             return { ok: false, error: errorMessage };
         } finally {
@@ -203,11 +238,16 @@ const useWallet = () => {
     useEffect(() => {
         if (!isMetaMaskInstalled) return;
 
-        const handleAccountsChanged = (accounts) => {
+        const handleAccountsChanged = async (accounts) => {
             if (accounts.length === 0) {
                 disconnect();
-            } else if (accounts[0] !== address) {
-                setAddress(accounts[0]);
+            } else if (!address || accounts[0].toLowerCase() !== address.toLowerCase()) {
+                // A SIWE token is bound to one wallet. Never keep showing the
+                // new account with the previous account's bearer token: clear
+                // all session state and ask the new account to sign its own
+                // one-time challenge.
+                disconnect();
+                await connect();
             }
         };
 
@@ -222,7 +262,7 @@ const useWallet = () => {
             window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
             window.ethereum.removeListener('chainChanged', handleChainChanged);
         };
-    }, [address, disconnect, isMetaMaskInstalled]);
+    }, [address, connect, disconnect, isMetaMaskInstalled]);
 
     // Check if already connected on mount
     useEffect(() => {

@@ -5,10 +5,11 @@ Uses MongoDB for persistent storage
 Security: membership gating (C-3), delegated vote weight (A-5) and
 anti-fraud checks (A-4) are enforced on every mutating endpoint.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime, timezone, timedelta
+from pymongo.errors import DuplicateKeyError
 import uuid
 import logging
 import re
@@ -28,6 +29,7 @@ from ..core.security_middleware import (
 )
 from ..core.config import settings
 from ..services.governance_service import governance_service
+from ..services.membership_verifier import get_membership_verifier
 from ..services import ballot_service
 from .deps import ensure_active_member, current_address, ensure_acts_as_self
 
@@ -43,6 +45,9 @@ MIN_PROPOSAL_TITLE_LENGTH = 5
 MAX_PROPOSAL_TITLE_LENGTH = 100
 MIN_PROPOSAL_DESCRIPTION_LENGTH = 20
 MAX_PROPOSAL_DESCRIPTION_LENGTH = 5000
+# Cota superior de cualquier `limit` público. Sin ella, un solo GET con
+# ?limit=10000000 obliga al servidor a materializar la colección entera.
+MAX_PAGE_SIZE = 500
 
 
 # === Models with Validation ===
@@ -148,6 +153,21 @@ class VoteResponse(BaseModel):
     weight: Optional[int] = None  # Voting power applied to this vote
 
 
+class BallotEvidence(BaseModel):
+    proposal_id: str
+    voter_address: str
+    vote: str
+    weight: int
+    nonce: str
+    vote_hash: str
+    timestamp: datetime
+    signature: Optional[str] = None
+    signature_scheme: Optional[str] = None
+    chain_id: Optional[int] = None
+    signature_valid: bool
+    integrity_hash_valid: bool
+
+
 # === Membership dependencies (C-3) ===
 # FastAPI parses the body once; each dependency re-declares the request model
 # so the membership check runs before the endpoint body executes.
@@ -204,7 +224,10 @@ async def create_proposal(
 
 
 @router.get("/proposals", response_model=List[ProposalResponse])
-async def get_proposals(status: Optional[str] = None, limit: int = 20):
+async def get_proposals(
+    status: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
+):
     """Get all proposals, optionally filtered by status"""
     try:
         now = datetime.now(timezone.utc)
@@ -245,7 +268,7 @@ async def get_proposals(status: Optional[str] = None, limit: int = 20):
 
 
 @router.get("/ballot-schema")
-async def get_ballot_schema(chain_id: int = ballot_service.DEFAULT_CHAIN_ID):
+async def get_ballot_schema():
     """Types + domain EIP-712 para que el cliente arme y firme la papeleta
     con eth_signTypedData_v4 (MetaMask, wallet generada en la app móvil, etc).
 
@@ -255,7 +278,7 @@ async def get_ballot_schema(chain_id: int = ballot_service.DEFAULT_CHAIN_ID):
     return {
         "types": ballot_service.BALLOT_TYPES,
         "primaryType": "Ballot",
-        "domain": ballot_service.domain(chain_id),
+        "domain": ballot_service.domain(),
         "signed_ballots_required": settings.SIGNED_BALLOTS_REQUIRED,
     }
 
@@ -267,6 +290,66 @@ async def get_proposal(proposal_id: str):
     if not proposal:
         raise HTTPException(status_code=404, detail="Proposal not found")
     return ProposalResponse(**proposal)
+
+
+@router.get(
+    "/proposals/{proposal_id}/ballots",
+    response_model=List[BallotEvidence],
+)
+async def get_ballot_evidence(
+    proposal_id: str,
+    limit: int = Query(default=100, ge=1, le=MAX_PAGE_SIZE),
+):
+    """Return public, independently recomputable ballot evidence."""
+    if not await proposals_collection().find_one({"id": proposal_id}):
+        raise HTTPException(status_code=404, detail="Proposal not found")
+
+    records = await votes_collection().find(
+        {"proposal_id": proposal_id}
+    ).sort("timestamp", 1).limit(limit).to_list(limit)
+    evidence = []
+    for record in records:
+        nonce = record.get("nonce", "")
+        signature = record.get("signature")
+        chain_id = record.get("chain_id")
+        signature_valid = False
+        if signature and chain_id:
+            try:
+                recovered = ballot_service.recover_signer(
+                    proposal_id,
+                    record.get("voter_address", ""),
+                    record.get("vote", ""),
+                    nonce,
+                    signature,
+                    chain_id,
+                )
+                signature_valid = (
+                    recovered.lower() == record.get("voter_address", "").lower()
+                )
+            except Exception:
+                signature_valid = False
+
+        expected_hash = hash_vote_data(
+            proposal_id,
+            record.get("voter_address", ""),
+            record.get("vote", ""),
+            nonce,
+        )
+        evidence.append(BallotEvidence(
+            proposal_id=proposal_id,
+            voter_address=record.get("voter_address", ""),
+            vote=record.get("vote", ""),
+            weight=record.get("weight", 1),
+            nonce=nonce,
+            vote_hash=record.get("vote_hash", ""),
+            timestamp=record.get("timestamp"),
+            signature=signature,
+            signature_scheme=record.get("signature_scheme"),
+            chain_id=chain_id,
+            signature_valid=signature_valid,
+            integrity_hash_valid=record.get("vote_hash") == expected_hash,
+        ))
+    return evidence
 
 
 @router.post("/vote", response_model=VoteResponse)
@@ -286,6 +369,14 @@ async def cast_vote(
     """
     ensure_acts_as_self(request.voter_address, authenticated, "votar")
 
+    if settings.is_production and not settings.SIGNED_BALLOTS_REQUIRED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "La votación está bloqueada: producción requiere "
+                "SIGNED_BALLOTS_REQUIRED=true."
+            ),
+        )
     if settings.SIGNED_BALLOTS_REQUIRED and not request.signature:
         raise HTTPException(
             status_code=422,
@@ -320,8 +411,27 @@ async def cast_vote(
         if not proposal:
             return VoteResponse(ok=False, error="Proposal not found")
         
-        # Check if proposal is active
-        if proposal["status"] != "active":
+        # Enforce the deadline here. Relying on GET /proposals to update status
+        # allowed a write after ends_at when nobody had loaded the listing.
+        now = datetime.now(timezone.utc)
+        ends_at = proposal.get("ends_at")
+        if ends_at and ends_at.tzinfo is None:
+            ends_at = ends_at.replace(tzinfo=timezone.utc)
+        voting_ended = not ends_at or ends_at <= now
+        if proposal["status"] != "active" or voting_ended:
+            if proposal["status"] == "active" and voting_ended:
+                if proposal.get("total_votes", 0) >= proposal.get("quorum_required", 10):
+                    closed_status = (
+                        "passed"
+                        if proposal.get("votes_for", 0) > proposal.get("votes_against", 0)
+                        else "rejected"
+                    )
+                else:
+                    closed_status = "expired"
+                await proposals_collection().update_one(
+                    {"id": request.proposal_id, "status": "active"},
+                    {"$set": {"status": closed_status}},
+                )
             return VoteResponse(ok=False, error="Proposal is not active")
         
         # Check if already voted
@@ -363,9 +473,15 @@ async def cast_vote(
             "weight": weight,
             "nonce": nonce,
             "vote_hash": vote_hash,
-            "timestamp": datetime.now(timezone.utc)
+            "timestamp": now,
+            "signature": request.signature,
+            "signature_scheme": "EIP-712" if request.signature else None,
+            "chain_id": settings.SIWE_CHAIN_ID if request.signature else None,
         }
-        await votes_collection().insert_one(vote_record)
+        try:
+            await votes_collection().insert_one(vote_record)
+        except DuplicateKeyError:
+            return VoteResponse(ok=False, error="Already voted on this proposal")
         
         # Update vote counts by the applied weight, not by 1
         update_field = f"votes_{request.vote}" if request.vote in ["for", "against", "abstain"] else "votes_abstain"
@@ -477,11 +593,13 @@ async def delegate_vote(
 
         # The delegate must also be an active member: delegating to an address
         # that cannot vote would silently discard the delegator's weight.
-        delegate_member = await members_collection().find_one({
-            "wallet_address": request.delegate_address,
-            "status": "active",
-        })
-        if not delegate_member:
+        #
+        # This goes through the same MembershipVerifier as the delegator gate.
+        # A raw {status: "active"} query was weaker than the production gate,
+        # so a quarantined legacy/demo row could receive delegations it could
+        # never actually cast.
+        verifier = get_membership_verifier()
+        if not await verifier.is_member(request.delegate_address):
             return DelegationResponse(
                 ok=False,
                 error=(
@@ -637,14 +755,24 @@ async def get_treasury():
     }
 
 
-@router.get("/treasury/transactions")
-async def get_treasury_transactions(limit: int = 20, category: Optional[str] = None):
+@router.get("/treasury/transactions", response_model=List[TreasuryTransaction])
+async def get_treasury_transactions(
+    limit: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
+    category: Optional[str] = None,
+):
     """Get treasury transaction history (real records only)."""
     query = {}
     if category:
         query["category"] = category
 
-    cursor = treasury_transactions_collection().find(query).sort("timestamp", -1).limit(limit)
+    # Project out `_id`: FastAPI cannot serialize a raw ObjectId, so the first
+    # real transaction stored would have turned this endpoint into a 500.
+    cursor = (
+        treasury_transactions_collection()
+        .find(query, {"_id": 0})
+        .sort("timestamp", -1)
+        .limit(limit)
+    )
     transactions = await cursor.to_list(length=limit)
 
     return transactions

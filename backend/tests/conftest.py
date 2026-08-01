@@ -14,6 +14,8 @@ from pathlib import Path
 os.environ.setdefault("IDENTITY_PEPPER", "test-only-identity-pepper-not-for-production")
 os.environ.setdefault("PII_ENCRYPTION_KEY", "pDWj9oG8D2Ms2dcHjTCiLsQM5raWlXfiINYLooDS4Q0=")
 os.environ.setdefault("SECRET_KEY", "test-only-secret-key-not-for-production")
+os.environ.setdefault("APP_ENV", "test")
+os.environ.setdefault("MINT_MODE", "demo")
 
 import httpx
 import pytest
@@ -40,6 +42,7 @@ def _reset_rate_limiter(asgi_app):
         if hasattr(node, "failed_attempts") and hasattr(node, "requests"):
             node.requests.clear()
             node.failed_attempts.clear()
+            node.last_seen.clear()
         node = getattr(node, "app", None)
 
 
@@ -61,3 +64,4 @@ async def client():
         yield c
 
     Database.client = None
+    Database.indexes_ready = False

@@ -6,10 +6,15 @@
  *
  * The wallet address comes from useWallet, never from a form: the acting
  * address must be one the user actually controls.
+ *
+ * Identidad visual: continúa la landing pública (styles/civic.css) — fondo
+ * claro, azul #003897, rojo #CB2C27, Poppins + Open Sans. Antes era el tema
+ * cyberpunk (partículas, scanlines, cian sobre negro) y quien llegaba desde
+ * la portada sentía que había cambiado de sitio.
  */
 import React from 'react';
-import { NavLink, Outlet, useOutletContext } from 'react-router-dom';
-import { Shield, FileText, Vote, Coins, Users, Home, Wallet } from 'lucide-react';
+import { NavLink, Outlet, useOutletContext, useNavigate } from 'react-router-dom';
+import { Shield, FileText, Vote, Coins, Users, Home, Wallet, Info } from 'lucide-react';
 import { useWallet } from '@/hooks';
 import {
     ProposalsList,
@@ -18,66 +23,65 @@ import {
     ElectionsList,
     RepresentativesPanel,
 } from '@/components/governance';
-import { ParticlesBackground, ScanlineOverlay } from '@/components/effects';
+import '../styles/civic.css';
 
 const NAV = [
-    { to: '/dashboard', end: true, label: 'RESUMEN', icon: Home },
-    { to: '/dashboard/propuestas', label: 'PROPUESTAS', icon: FileText },
-    { to: '/dashboard/elecciones', label: 'ELECCIONES', icon: Vote },
-    { to: '/dashboard/delegacion', label: 'DELEGACIÓN', icon: Users },
-    { to: '/dashboard/tesoreria', label: 'TESORERÍA', icon: Coins },
+    { to: '/dashboard', end: true, label: 'Resumen', icon: Home },
+    { to: '/dashboard/propuestas', label: 'Propuestas', icon: FileText },
+    { to: '/dashboard/elecciones', label: 'Elecciones', icon: Vote },
+    { to: '/dashboard/delegacion', label: 'Delegación', icon: Users },
+    { to: '/dashboard/tesoreria', label: 'Tesorería', icon: Coins },
 ];
 
 const DashboardLayout = () => {
-    const { address, shortAddress, isConnected, connect, isConnecting } = useWallet();
+    const { address, shortAddress, signer, isConnected, connect, isConnecting } = useWallet();
+    const navigate = useNavigate();
 
     return (
-        <div className="min-h-screen relative overflow-hidden">
-            <ParticlesBackground count={25} />
-            <ScanlineOverlay opacity={0.04} />
-
-            <div className="mx-auto max-w-6xl px-4 py-8 relative z-10">
-                <header className="mb-8">
-                    <div className="flex items-center justify-between gap-4 flex-wrap mb-6">
-                        <div className="flex items-center gap-3">
-                            <div className="w-11 h-11 rounded-full bg-gradient-to-r from-cyan-400 via-purple-500 to-pink-500 flex items-center justify-center p-0.5">
-                                <div className="w-full h-full rounded-full bg-cyber-dark flex items-center justify-center">
-                                    <Shield className="h-6 w-6 text-cyan-400" />
-                                </div>
-                            </div>
-                            <div>
-                                <h1 className="cyber-title text-2xl font-black tracking-wider" data-text="DAO CIUDADANA">
-                                    DAO CIUDADANA
-                                </h1>
-                                <p className="text-cyan-400/70 font-mono text-xs tracking-wider">
-                                    GOBERNANZA CIUDADANA
-                                </p>
-                            </div>
-                        </div>
+        <div className="civic-app">
+            <header className="civic-header">
+                <div className="civic-shell">
+                    <div className="civic-header-inner">
+                        <button
+                            type="button"
+                            className="civic-brand"
+                            onClick={() => navigate('/')}
+                            aria-label="Ir a la portada de EstamosDAO"
+                        >
+                            <span className="civic-brand-mark">
+                                <Shield className="h-5 w-5" />
+                            </span>
+                            <span>
+                                <h1 className="civic-brand-name">EstamosDAO</h1>
+                                <p className="civic-brand-sub">Gobernanza ciudadana</p>
+                            </span>
+                        </button>
 
                         {isConnected ? (
-                            <div className="cyber-badge flex items-center gap-2">
-                                <Wallet className="w-3 h-3" />
-                                <span className="font-mono text-xs">{shortAddress}</span>
-                            </div>
+                            <span className="civic-wallet">
+                                <Wallet className="w-3.5 h-3.5" />
+                                {shortAddress}
+                            </span>
                         ) : (
-                            <button onClick={connect} disabled={isConnecting} className="cyber-button text-xs">
-                                {isConnecting ? 'CONECTANDO...' : 'CONECTAR WALLET'}
+                            <button
+                                onClick={connect}
+                                disabled={isConnecting}
+                                className="civic-btn civic-btn-primary civic-btn-sm"
+                            >
+                                <Wallet className="w-4 h-4" />
+                                {isConnecting ? 'Conectando…' : 'Conectar billetera'}
                             </button>
                         )}
                     </div>
 
-                    <nav className="flex flex-wrap gap-2">
+                    <nav className="civic-nav" aria-label="Secciones del panel">
                         {NAV.map(({ to, end, label, icon: Icon }) => (
                             <NavLink
                                 key={to}
                                 to={to}
                                 end={end}
                                 className={({ isActive }) =>
-                                    'flex items-center gap-2 px-4 py-2 rounded-lg font-mono text-xs tracking-wide border transition-colors ' +
-                                    (isActive
-                                        ? 'border-cyan-500/60 bg-cyan-500/10 text-cyan-300'
-                                        : 'border-gray-700 text-gray-400 hover:border-cyan-500/30 hover:text-cyan-400')
+                                    'civic-nav-item' + (isActive ? ' is-active' : '')
                                 }
                             >
                                 <Icon className="w-4 h-4" />
@@ -85,23 +89,26 @@ const DashboardLayout = () => {
                             </NavLink>
                         ))}
                     </nav>
-                </header>
+                </div>
+            </header>
 
+            <div className="civic-shell">
                 {!isConnected && (
-                    <div className="mb-6 p-4 rounded-lg border border-yellow-500/40 bg-yellow-500/10">
-                        <p className="text-yellow-300 text-xs font-mono">
-                            Conecta tu wallet para participar. Puedes leer todo sin conectarla,
-                            pero crear propuestas, votar y postularte requieren una membresía activa.
-                        </p>
+                    <div className="civic-note civic-note-info" style={{ marginTop: 24 }}>
+                        <Info className="w-4 h-4" />
+                        <span>
+                            Puedes leer todo el panel sin conectar tu billetera. Crear
+                            propuestas, votar y postularte requieren una membresía activa.
+                        </span>
                     </div>
                 )}
 
-                <main className="pb-12">
-                    <Outlet context={{ walletAddress: address }} />
+                <main style={{ padding: '28px 0 48px' }}>
+                    <Outlet context={{ walletAddress: address, signer }} />
                 </main>
 
-                <footer className="text-center text-gray-600 font-mono text-[11px] pb-6">
-                    Sistema DAO Ciudadana • Gobernanza • Código Abierto • v1.0.0
+                <footer className="civic-footer">
+                    EstamosDAO · Piloto de gobernanza ciudadana · Código abierto · v1.0.0
                 </footer>
             </div>
         </div>
@@ -111,24 +118,24 @@ const DashboardLayout = () => {
 // === Sections ===
 
 const OverviewSection = () => {
-    const { walletAddress } = useOutletContext();
+    const { walletAddress, signer } = useOutletContext();
     return (
-        <div className="space-y-8">
+        <div className="space-y-10">
             <RepresentativesPanel />
-            <ProposalsList walletAddress={walletAddress} />
+            <ProposalsList walletAddress={walletAddress} signer={signer} />
         </div>
     );
 };
 
 const ProposalsSection = () => {
-    const { walletAddress } = useOutletContext();
-    return <ProposalsList walletAddress={walletAddress} />;
+    const { walletAddress, signer } = useOutletContext();
+    return <ProposalsList walletAddress={walletAddress} signer={signer} />;
 };
 
 const ElectionsSection = () => {
     const { walletAddress } = useOutletContext();
     return (
-        <div className="space-y-8">
+        <div className="space-y-10">
             <ElectionsList walletAddress={walletAddress} />
             <RepresentativesPanel />
         </div>

@@ -3,15 +3,15 @@
  * Uses Web NFC API on Chrome Android, fallback for unsupported browsers
  */
 import React, { useEffect, useState } from 'react';
-import { Radio, Activity, AlertTriangle, Smartphone, CheckCircle, XCircle } from 'lucide-react';
+import { Radio, Activity, AlertTriangle, Smartphone, XCircle } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
-import { CyberPanel, CyberLoader, SuccessDisplay, DemoBadge } from './CyberUI';
+import { CyberPanel, CyberLoader, DemoBadge } from './CyberUI';
 import { useOnboarding } from '@/context';
 import useNFC from '@/hooks/useNFC';
 
 const NFCStep = () => {
-    const { loading, setLoading, nfc, setNFC, setStep } = useOnboarding();
+    const { loading, setLoading, nfc, setNfc, setStep } = useOnboarding();
     const {
         isSupported,
         isReading,
@@ -23,32 +23,24 @@ const NFCStep = () => {
 
     const [showInstructions, setShowInstructions] = useState(true);
 
-    // When tag is successfully read
+    // Web NFC only proves that an NDEF tag was read. It does not authenticate
+    // the protected chip of a Chilean identity card, so this result must never
+    // unlock the identity flow by itself.
     useEffect(() => {
         if (tagData && tagData.serialNumber) {
-            // Create hash from serial number
-            const encoder = new TextEncoder();
-            const data = encoder.encode(tagData.serialNumber + tagData.timestamp);
-            crypto.subtle.digest('SHA-256', data).then(hashBuffer => {
-                const hashArray = Array.from(new Uint8Array(hashBuffer));
-                const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
-                setNFC({
-                    chip_serial: tagData.serialNumber,
-                    doc_hash: hashHex,
-                    records: tagData.records,
-                    timestamp: tagData.timestamp,
-                    verified: true,
-                });
-
-                // Auto advance after 2 seconds
-                setTimeout(() => setStep('wallet'), 2000);
+            setNfc({
+                chip_serial: tagData.serialNumber,
+                records: tagData.records,
+                timestamp: tagData.timestamp,
+                verified: false,
+                verification_error: 'Web NFC detectó una etiqueta NDEF, pero no verificó una identidad.',
             });
         }
-    }, [tagData, setNFC, setStep]);
+    }, [tagData, setNfc]);
 
     const handleStartScan = async () => {
         setShowInstructions(false);
+        setNfc({});
         setLoading(true);
         await startReading();
         setLoading(false);
@@ -60,11 +52,11 @@ const NFCStep = () => {
 
     return (
         <CyberPanel
-            title="LECTURA CRIPTOGRÁFICA NFC"
-            description="Validando autenticidad del chip de identificación"
+            title="DETECCIÓN DE ETIQUETA NFC"
+            description="Lectura técnica de una etiqueta NDEF; no verifica identidad"
             icon={<Radio className="h-8 w-8" />}
         >
-            <DemoBadge label="MODO DEMO — la lectura del chip aún no está integrada en backend" />
+            <DemoBadge label="MODO DEMO — Web NFC no autentica el chip protegido de una cédula chilena" />
             <div className="flex flex-col items-center gap-6">
 
                 {/* Not supported warning */}
@@ -101,7 +93,7 @@ const NFCStep = () => {
                             <Radio className="w-8 h-8 text-cyan-400 animate-pulse" />
                         </div>
                         <p className="text-sm text-gray-400 font-mono mb-4 max-w-xs">
-                            Coloca la parte trasera del teléfono sobre el chip de tu cédula
+                            Acerca la parte trasera del teléfono a una etiqueta NFC NDEF compatible
                         </p>
                         <Button
                             onClick={handleStartScan}
@@ -120,9 +112,9 @@ const NFCStep = () => {
                         <div className="w-40 h-40 mx-auto mb-4 border-2 border-cyan-400 rounded-2xl flex flex-col items-center justify-center bg-cyan-500/10 animate-pulse">
                             <Activity className="w-16 h-16 text-cyan-400 animate-bounce" />
                         </div>
-                        <CyberLoader text="BUSCANDO CHIP NFC..." />
+                        <CyberLoader text="BUSCANDO ETIQUETA NFC..." />
                         <p className="text-xs text-gray-500 font-mono mt-2">
-                            Mantén el teléfono quieto sobre la cédula
+                            Mantén el teléfono quieto cerca de la etiqueta
                         </p>
                     </div>
                 )}
@@ -150,23 +142,33 @@ const NFCStep = () => {
                     </div>
                 )}
 
-                {/* Success state */}
-                {nfc.chip_serial && (
-                    <SuccessDisplay>
-                        <CheckCircle className="w-12 h-12 mx-auto text-green-400 mb-2" />
-                        <p className="font-mono mb-2">CHIP VALIDADO EXITOSAMENTE</p>
+                {/* Detection is intentionally not treated as identity verification. */}
+                {nfc.chip_serial && !loading && !isReading && (
+                    <div className="w-full max-w-lg rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-5 text-center">
+                        <AlertTriangle className="w-12 h-12 mx-auto text-yellow-400 mb-2" />
+                        <p className="font-mono text-yellow-300 mb-2">ETIQUETA DETECTADA • IDENTIDAD NO VERIFICADA</p>
                         <div className="flex flex-wrap justify-center gap-2">
                             <Badge className="cyber-badge">
-                                SERIAL: {nfc.chip_serial}
-                            </Badge>
-                            <Badge className="cyber-badge success">
-                                HASH: {nfc.doc_hash?.slice(0, 12)}...
+                                ID ETIQUETA: {nfc.chip_serial}
                             </Badge>
                         </div>
-                        <p className="text-xs text-gray-500 mt-2 font-mono">
-                            Avanzando a conexión de wallet...
+                        <p className="text-xs text-gray-400 mt-3 font-mono">
+                            Leer una etiqueta NDEF no demuestra que pertenezca a una cédula ni a una persona.
+                            Este resultado no habilita la creación de membresía.
                         </p>
-                    </SuccessDisplay>
+                        <div className="mt-4 flex flex-wrap justify-center gap-2">
+                            <Button onClick={handleStartScan} className="cyber-button">
+                                Leer otra etiqueta
+                            </Button>
+                            <Button
+                                onClick={() => setStep('method')}
+                                variant="outline"
+                                className="text-cyan-400 border-cyan-500/30"
+                            >
+                                Usar otro método
+                            </Button>
+                        </div>
+                    </div>
                 )}
 
                 {/* Permission denied */}

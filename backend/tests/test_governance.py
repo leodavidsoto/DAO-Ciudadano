@@ -9,12 +9,15 @@ ALSO requires the caller to be authenticated (SIWE) as the exact address it
 claims to act as: tests sign in with real eth_account keypairs and attach
 the resulting Bearer token.
 """
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from eth_account import Account
-from eth_account.messages import encode_defunct
+from eth_account.messages import encode_defunct, encode_typed_data
 
+from app.core.config import settings
 from app.core.database import members_collection, proposals_collection, votes_collection
+from app.services import ballot_service
 
 # Wallets reales derivadas de llaves privadas fijas de prueba (NO producción).
 ACCOUNT_A = Account.from_key("0x" + "1a" * 32)
@@ -178,6 +181,133 @@ async def test_vote_flow(client):
     data = duplicate.json()
     assert data["ok"] is False
     assert "Already voted" in data["error"]
+
+
+async def test_simultaneous_votes_are_counted_once(client):
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    proposal_id = (await _create_proposal(client)).json()["id"]
+    headers = await _headers_for(client, ADDR_B)
+
+    first, second = await asyncio.gather(
+        _vote(client, ADDR_B, proposal_id, "for", headers=headers),
+        _vote(client, ADDR_B, proposal_id, "for", headers=headers),
+    )
+    payloads = [first.json(), second.json()]
+
+    assert sum(payload.get("ok") is True for payload in payloads) == 1
+    assert await votes_collection().count_documents(
+        {"proposal_id": proposal_id, "voter_address": ADDR_B}
+    ) == 1
+    proposal = (await client.get(f"/api/governance/proposals/{proposal_id}")).json()
+    assert proposal["votes_for"] == 1
+    assert proposal["total_votes"] == 1
+
+
+async def test_signed_ballot_is_persisted_and_publicly_verifiable(
+    client,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", True)
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    proposal_id = (await _create_proposal(client)).json()["id"]
+    headers = await _headers_for(client, ADDR_B)
+    nonce = "audit-ballot-nonce"
+    encoded = encode_typed_data(full_message=ballot_service.typed_data(
+        proposal_id,
+        ADDR_B,
+        "for",
+        nonce,
+    ))
+    signature = ACCOUNT_B.sign_message(encoded).signature.hex()
+
+    response = await client.post(
+        "/api/governance/vote",
+        json={
+            "proposal_id": proposal_id,
+            "voter_address": ADDR_B,
+            "vote": "for",
+            "nonce": nonce,
+            "signature": signature,
+        },
+        headers=headers,
+    )
+    evidence = (
+        await client.get(f"/api/governance/proposals/{proposal_id}/ballots")
+    ).json()
+
+    assert response.json()["ok"] is True
+    assert len(evidence) == 1
+    assert evidence[0]["signature"] == signature
+    assert evidence[0]["signature_scheme"] == "EIP-712"
+    assert evidence[0]["chain_id"] == settings.SIWE_CHAIN_ID
+    assert evidence[0]["signature_valid"] is True
+    assert evidence[0]["integrity_hash_valid"] is True
+
+
+async def test_vote_endpoint_rejects_expired_proposal_without_listing_first(client):
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    proposal_id = (await _create_proposal(client)).json()["id"]
+    await proposals_collection().update_one(
+        {"id": proposal_id},
+        {"$set": {"ends_at": datetime.now(timezone.utc) - timedelta(seconds=1)}},
+    )
+
+    response = await _vote(client, ADDR_B, proposal_id, "for")
+    proposal = (await client.get(f"/api/governance/proposals/{proposal_id}")).json()
+
+    assert response.json()["ok"] is False
+    assert proposal["status"] == "expired"
+    assert await votes_collection().count_documents({"proposal_id": proposal_id}) == 0
+
+
+async def test_production_never_accepts_unsigned_proposal_vote_when_flag_is_off(
+    client,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "SIWE_DOMAIN", "estamosdao.cl")
+    monkeypatch.setattr(settings, "SIWE_URI", "https://estamosdao.cl")
+    monkeypatch.setattr(settings, "SIWE_CHAIN_ID", 11155111)
+    monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", False)
+    await members_collection().insert_one({
+        "wallet_address": ADDR_B,
+        "token_id": 99,
+        "status": "active",
+        "issuance_mode": "onchain",
+        "identity_verified": True,
+        "tx_hash": "0x" + "ab" * 32,
+    })
+    now = datetime.now(timezone.utc)
+    await proposals_collection().insert_one({
+        "id": "prod-proposal",
+        "title": "Producción segura",
+        "description": "Una propuesta que exige papeleta firmada en producción.",
+        "category": "general",
+        "creator_address": ADDR_B,
+        "status": "active",
+        "votes_for": 0,
+        "votes_against": 0,
+        "votes_abstain": 0,
+        "total_votes": 0,
+        "quorum_required": 10,
+        "created_at": now,
+        "ends_at": now + timedelta(days=1),
+    })
+    headers = await _headers_for(client, ADDR_B)
+
+    response = await _vote(
+        client,
+        ADDR_B,
+        "prod-proposal",
+        "for",
+        headers=headers,
+    )
+
+    assert response.status_code == 503
+    assert await votes_collection().count_documents({}) == 0
 
 
 async def test_vote_rejects_non_member(client):
@@ -436,3 +566,83 @@ async def test_stats_have_no_magic_numbers_when_empty(client):
     assert stats["total_proposals"] == 0
     assert stats["total_votes_cast"] == 0
     assert stats["participation_rate"] is None
+
+
+async def test_treasury_transactions_serialize_stored_records(client):
+    """A stored transaction must not turn the endpoint into a 500.
+
+    The handler returned raw Mongo documents, so the ObjectId in `_id` made
+    FastAPI's encoder fail on the first real record ever written.
+    """
+    from app.core.database import treasury_transactions_collection
+
+    await treasury_transactions_collection().insert_one({
+        "id": "tx-1",
+        "type": "income",
+        "amount": 1.5,
+        "currency": "ETH",
+        "description": "Aporte registrado",
+        "category": "operations",
+        "timestamp": datetime.now(timezone.utc),
+    })
+
+    response = await client.get("/api/governance/treasury/transactions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["id"] == "tx-1"
+    assert "_id" not in body[0]
+
+
+async def test_public_list_limits_are_bounded(client):
+    """An unauthenticated caller cannot ask for an unbounded page."""
+    for path in (
+        "/api/governance/proposals?limit=1000000",
+        "/api/governance/treasury/transactions?limit=1000000",
+        "/api/governance/elections?limit=1000000",
+        "/api/dashboard/activity?limit=1000000",
+    ):
+        assert (await client.get(path)).status_code == 422, path
+        assert (await client.get(path.replace("1000000", "0"))).status_code == 422, path
+
+
+async def test_replayed_ballot_nonce_is_rejected_as_conflict(client, monkeypatch):
+    """Reusing a (voter, nonce) pair must fail as 409, not as a storage error.
+
+    Only DuplicateKeyError means "already used"; any other Mongo failure now
+    surfaces as 503 so a transient outage is never reported to the voter as a
+    spent ballot.
+    """
+    monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", True)
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    first_proposal = (await _create_proposal(client)).json()["id"]
+    second_proposal = (await _create_proposal(client)).json()["id"]
+    headers = await _headers_for(client, ADDR_B)
+    nonce = "replayed-nonce"
+
+    def _signed(proposal_id):
+        encoded = encode_typed_data(full_message=ballot_service.typed_data(
+            proposal_id, ADDR_B, "for", nonce,
+        ))
+        return ACCOUNT_B.sign_message(encoded).signature.hex()
+
+    async def _cast(proposal_id):
+        return await client.post(
+            "/api/governance/vote",
+            json={
+                "proposal_id": proposal_id,
+                "voter_address": ADDR_B,
+                "vote": "for",
+                "nonce": nonce,
+                "signature": _signed(proposal_id),
+            },
+            headers=headers,
+        )
+
+    assert (await _cast(first_proposal)).json()["ok"] is True
+
+    replayed = await _cast(second_proposal)
+    assert replayed.status_code == 409
+    assert "ya fue usada" in replayed.json()["detail"]

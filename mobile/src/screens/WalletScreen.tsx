@@ -57,7 +57,6 @@ type ScreenState =
     | 'choose'
     | 'backup'
     | 'signing-in'
-    | 'minting'
     | 'ready'
     | 'lookup';
 
@@ -138,7 +137,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                     }
                 }
                 setState('choose');
-            } catch (e) {
+            } catch {
                 if (alive) setState('choose');
             }
         })();
@@ -183,7 +182,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
             const result = await apiService.getMembershipStatus(trimmed.toLowerCase());
             setLookupSearched(true);
             if (result.found) setLookupMember(result.member);
-        } catch (e) {
+        } catch {
             setError('No se pudo consultar el servidor. Verifica tu conexión.');
         } finally {
             setLookupLoading(false);
@@ -191,12 +190,10 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
     };
 
     // === Render: comprobando billetera existente ===
-    if (state === 'checking' || state === 'signing-in' || state === 'minting') {
+    if (state === 'checking' || state === 'signing-in') {
         const label = state === 'checking'
             ? 'VERIFICANDO BILLETERA...'
-            : state === 'signing-in'
-                ? 'FIRMANDO SESIÓN DE WALLET...'
-                : 'REGISTRANDO MEMBRESÍA...';
+            : 'FIRMANDO SESIÓN DE WALLET...';
         return (
             <SafeAreaView style={styles.container}>
                 <View style={styles.centered}>
@@ -214,7 +211,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                 <ScrollView contentContainerStyle={styles.content}>
                     <Text style={styles.title}>TU BILLETERA DIGITAL</Text>
                     <Text style={styles.subtitle}>
-                        Necesitas una wallet Ethereum para obtener tu membresía DAO
+                        Crea una wallet local para probar el acceso. Esto no otorga una membresía.
                     </Text>
 
                     <TouchableOpacity style={styles.button} onPress={handleCreateWallet}>
@@ -332,13 +329,13 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
 
                     {member ? (
                         <View style={styles.resultCard}>
-                            <Text style={styles.resultTitle}>MEMBRESÍA ACTIVA</Text>
+                            <Text style={styles.resultTitle}>REGISTRO REPORTADO POR EL SERVIDOR</Text>
                             <View style={styles.dataRow}>
                                 <Text style={styles.dataLabel}>Token ID:</Text>
                                 <Text style={styles.dataValue}>#{member.token_id}</Text>
                             </View>
                             <View style={styles.dataRow}>
-                                <Text style={styles.dataLabel}>Nivel:</Text>
+                                <Text style={styles.dataLabel}>Nivel informado:</Text>
                                 <Text style={styles.dataValue}>{member.assurance_level}</Text>
                             </View>
                             <View style={styles.dataRow}>
@@ -357,14 +354,14 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                             <Text style={styles.emptyTitle}>SIN MEMBRESÍA TODAVÍA</Text>
                             <Text style={styles.emptyText}>
                                 {idData
-                                    ? 'No se pudo completar el registro automáticamente.'
-                                    : 'Escanea tu cédula para obtener tu membresía con esta wallet.'}
+                                    ? 'La lectura NFC piloto no habilita registros ni prueba identidad.'
+                                    : 'El registro de membresía no está disponible en esta versión piloto.'}
                             </Text>
                             <TouchableOpacity
                                 style={styles.secondaryButton}
                                 onPress={() => navigation.navigate('Scan')}
                             >
-                                <Text style={styles.secondaryButtonText}>ESCANEAR CÉDULA</Text>
+                                <Text style={styles.secondaryButtonText}>PROBAR LECTOR NFC</Text>
                             </TouchableOpacity>
                         </View>
                     )}
@@ -412,13 +409,13 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
 
                 {lookupSearched && lookupMember && (
                     <View style={styles.resultCard}>
-                        <Text style={styles.resultTitle}>MEMBRESÍA ENCONTRADA</Text>
+                        <Text style={styles.resultTitle}>REGISTRO ENCONTRADO (PILOTO)</Text>
                         <View style={styles.dataRow}>
                             <Text style={styles.dataLabel}>Token ID:</Text>
                             <Text style={styles.dataValue}>#{lookupMember.token_id}</Text>
                         </View>
                         <View style={styles.dataRow}>
-                            <Text style={styles.dataLabel}>Nivel:</Text>
+                            <Text style={styles.dataLabel}>Nivel informado:</Text>
                             <Text style={styles.dataValue}>{lookupMember.assurance_level}</Text>
                         </View>
                         <View style={styles.dataRow}>

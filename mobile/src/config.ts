@@ -1,9 +1,9 @@
 /**
  * App configuration.
  *
- * The production backend on Render is suspended (HTTP 503 — AUDIT M-15),
- * so pointing at it by default would make every request fail. Default to a
- * local development backend until a live environment exists again:
+ * This experimental client deliberately defaults to a local backend. A signed
+ * release must add an explicit, allow-listed environment/base URL instead of
+ * inheriting a historical public deployment:
  * - Android emulator reaches the host machine at 10.0.2.2
  * - iOS simulator reaches it at localhost
  */

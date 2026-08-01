@@ -47,17 +47,19 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
                 </View>
 
                 <Text style={identityVerified ? styles.title : styles.titleWarning}>
-                    {identityVerified ? 'CHIP VERIFICADO' : 'CHIP DETECTADO'}
+                    {identityVerified ? 'IDENTIDAD VERIFICADA' : 'LECTURA NO VERIFICADA'}
                 </Text>
                 <Text style={styles.subtitle}>
                     {identityVerified
-                        ? 'La identificación ha sido leída y verificada'
-                        : 'Se detectó un chip NFC, pero su identidad aún no está verificada'}
+                        ? 'La identificación fue autenticada criptográficamente'
+                        : 'Se detectó un tag NFC, pero esto no acredita identidad ni autenticidad'}
                 </Text>
 
                 {/* Data Card */}
                 <View style={styles.dataCard}>
-                    <Text style={styles.cardTitle}>DATOS DEL CHIP</Text>
+                    <Text style={styles.cardTitle}>
+                        {identityVerified ? 'DATOS AUTENTICADOS' : 'DATOS DE LA LECTURA PILOTO'}
+                    </Text>
 
                     <View style={styles.dataRow}>
                         <Text style={styles.dataLabel}>Serial NFC:</Text>
@@ -90,7 +92,7 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
                     <View style={styles.hashContainer}>
                         {/* Antes decía "Hash de Verificación", pero es el serial
                             del tag recortado -- ni es un hash ni verifica nada. */}
-                        <Text style={styles.hashLabel}>Identificador del chip:</Text>
+                        <Text style={styles.hashLabel}>Identificador técnico del tag:</Text>
                         <Text style={styles.hashValue}>
                             {serialNumber.substring(0, 8)}...{serialNumber.substring(serialNumber.length - 4)}
                         </Text>
@@ -119,7 +121,9 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
             {/* Continue Button */}
             <View style={styles.buttonContainer}>
                 <TouchableOpacity style={styles.button} onPress={handleContinue}>
-                    <Text style={styles.buttonText}>CONTINUAR A MI BILLETERA</Text>
+                    <Text style={styles.buttonText}>
+                        {identityVerified ? 'CONTINUAR A MI BILLETERA' : 'CONTINUAR SIN REGISTRO'}
+                    </Text>
                 </TouchableOpacity>
             </View>
         </SafeAreaView>

@@ -1,8 +1,22 @@
 """
 Auth endpoints: RUT validation, registration, login, ClaveÚnica and NFC demos.
 """
+import base64
+
+from app.core.config import settings
+from app.core.database import Database, users_collection
+
 
 VALID_RUT = "11111111-1"  # Passes módulo-11 check digit validation
+TINY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+
+async def _identity_event_count():
+    """Legacy collection stays empty; demo flows must not create evidence."""
+    return await Database.get_db()["identity_events"].count_documents({})
 
 
 async def _register(client, rut=VALID_RUT, email="ana@example.com",
@@ -12,13 +26,16 @@ async def _register(client, rut=VALID_RUT, email="ana@example.com",
     })
 
 
-async def test_register_valid_user(client):
+async def test_register_valid_demo_user(client, monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENV", "demo")
     response = await _register(client)
     data = response.json()
     assert data["ok"] is True
     assert data["rut"] == "11.111.111-1"
     assert data["email"] == "ana@example.com"
-    assert data["assurance_level"] == "AL1"
+    assert data["subject_id"].startswith("demo:user:")
+    assert data["assurance_level"] == "DEMO_UNVERIFIED"
+    assert await _identity_event_count() == 0
 
 
 async def test_register_rejects_invalid_rut(client):
@@ -43,13 +60,16 @@ async def test_register_rejects_duplicate_rut(client):
 
 
 async def test_login_with_registered_user(client):
-    await _register(client)
+    registration = await _register(client)
     response = await client.post("/api/auth/login", json={
         "rut": VALID_RUT, "email": "ana@example.com",
     })
     data = response.json()
     assert data["ok"] is True
     assert data["rut"] == "11.111.111-1"
+    assert data["subject_id"] == registration.json()["subject_id"]
+    assert data["assurance_level"] == "DEMO_UNVERIFIED"
+    assert await _identity_event_count() == 0
 
 
 async def test_login_unknown_user_fails(client):
@@ -59,12 +79,15 @@ async def test_login_unknown_user_fails(client):
     assert response.json()["ok"] is False
 
 
-async def test_clave_unica_returns_subject(client):
+async def test_clave_unica_returns_demo_subject(client, monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENV", "demo")
     response = await client.post("/api/auth/clave-unica", json={"rut": "11111111-1"})
     data = response.json()
     assert data["ok"] is True
-    assert data["subject_id"] == "claveunica:11111111-1"
-    assert data["assurance_level"] == "AL2"
+    assert data["subject_id"].startswith("demo:clave-unica:")
+    assert "11111111-1" not in data["subject_id"]
+    assert data["assurance_level"] == "DEMO_UNVERIFIED"
+    assert await _identity_event_count() == 0
 
 
 async def test_clave_unica_rejects_short_rut(client):
@@ -76,15 +99,30 @@ async def test_nfc_generates_demo_serial_without_body(client):
     response = await client.post("/api/auth/nfc")
     data = response.json()
     assert data["ok"] is True
-    assert data["chip_serial"].startswith("NFC-CL-CH-")
+    assert data["chip_serial"].startswith("DEMO-NFC-RANDOM-")
     assert data["doc_hash"].startswith("0x")
+    assert await _identity_event_count() == 0
 
 
-async def test_nfc_uses_client_chip_serial_when_provided(client):
-    response = await client.post("/api/auth/nfc", json={"chip_serial": "REAL-SERIAL-01"})
+async def test_nfc_derives_demo_id_from_client_tag_when_provided(client):
+    response = await client.post("/api/auth/nfc", json={"chip_serial": "CLIENT-TAG-01"})
     data = response.json()
     assert data["ok"] is True
-    assert data["chip_serial"] == "REAL-SERIAL-01"
+    assert data["chip_serial"].startswith("DEMO-NFC-CLIENT-")
+    assert "CLIENT-TAG-01" not in data["chip_serial"]
+    assert await _identity_event_count() == 0
+
+
+async def test_liveness_success_is_explicitly_demo_and_not_persisted(client):
+    response = await client.post(
+        "/api/auth/liveness",
+        files={"file": ("selfie.png", TINY_PNG, "image/png")},
+    )
+    data = response.json()
+    assert data["ok"] is True
+    assert data["analysis"].startswith("DEMO:")
+    assert "no verifica presencia en vivo" in data["analysis"]
+    assert await _identity_event_count() == 0
 
 
 async def test_liveness_rejects_non_image(client):
@@ -95,3 +133,30 @@ async def test_liveness_rejects_non_image(client):
     data = response.json()
     assert data["ok"] is False
     assert "imagen" in data["error"]
+
+
+async def test_production_blocks_every_unverified_identity_flow(client, monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+
+    responses = [
+        await client.post("/api/auth/clave-unica", json={"rut": VALID_RUT}),
+        await client.post("/api/auth/nfc", json={"chip_serial": "CLIENT-TAG-01"}),
+        await client.post(
+            "/api/auth/liveness",
+            files={"file": ("selfie.png", TINY_PNG, "image/png")},
+        ),
+        await _register(client),
+        await client.post("/api/auth/login", json={
+            "rut": VALID_RUT,
+            "email": "ana@example.com",
+        }),
+    ]
+
+    for response in responses:
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert "deshabilitados en producción" in detail
+        assert "verificador de identidad real" in detail
+
+    assert await users_collection().count_documents({}) == 0
+    assert await _identity_event_count() == 0

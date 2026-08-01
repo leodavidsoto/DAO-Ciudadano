@@ -1,0 +1,818 @@
+/**
+ * Sistema visual cívico — interior del sitio (dashboard y onboarding).
+ *
+ * Continúa la identidad de la landing pública (styles/landing.css): fondo
+ * claro, azul #003897, rojo #CB2C27, tinta #0B2545, Poppins + Open Sans.
+ *
+ * Antes el interior era cyberpunk (cian sobre negro, glitch, scanlines,
+ * partículas) mientras la portada era clara y cívica: quien entraba al
+ * dashboard sentía que había cambiado de sitio. Este archivo es la única
+ * fuente de verdad del interior; `App.css` y `styles/premium.css` conservan
+ * el tema cyberpunk histórico y quedan neutralizados dentro de `.civic-app`.
+ *
+ * Convención: las clases nuevas son `civic-*`. Al final hay una capa de
+ * compatibilidad que redefine el vocabulario `cyber-*` que todavía usan
+ * algunos pasos del onboarding, para que ninguna pantalla quede oscura.
+ */
+
+.civic-app {
+    --civic-azul: #003897;
+    --civic-azul-hover: #002B75;
+    --civic-azul-suave: #EAF0FB;
+    --civic-azul-borde: #C2D2EC;
+
+    --civic-rojo: #CB2C27;
+    --civic-rojo-hover: #A9211D;
+    --civic-rojo-suave: #FBEAE8;
+
+    --civic-verde: #2E8B57;
+    --civic-verde-texto: #1F6B45;
+    --civic-verde-suave: #E9F1EC;
+
+    --civic-ambar: #B7791F;
+    --civic-ambar-suave: #FDF6E7;
+    --civic-ambar-borde: #F0DCA8;
+
+    --civic-tinta: #0B2545;
+    --civic-texto: #33456B;
+    --civic-suave: #5C7099;
+    --civic-tenue: #8090AD;
+
+    --civic-fondo: #F7F9FC;
+    --civic-superficie: #FFFFFF;
+    --civic-borde: #E5EBF5;
+    --civic-borde-fuerte: #DCE5F3;
+
+    --civic-radio: 12px;
+    --civic-radio-sm: 8px;
+    --civic-sombra: 0 4px 12px rgba(0, 56, 151, 0.04);
+    --civic-sombra-alta: 0 16px 34px rgba(11, 37, 69, 0.10);
+
+    --civic-titulo: "Poppins", system-ui, sans-serif;
+    --civic-cuerpo: "Open Sans", system-ui, sans-serif;
+
+    background: var(--civic-fondo);
+    color: var(--civic-texto);
+    font-family: var(--civic-cuerpo);
+    min-height: 100vh;
+    position: relative;
+    z-index: 1;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Neutraliza los efectos cyberpunk que App.css cuelga del body/.App: rejilla
+   animada, lluvia matrix y gradientes. Sin esto se ven por debajo del fondo
+   claro y el interior queda a medio camino entre los dos temas. */
+.civic-app::before,
+.civic-app::after,
+.civic-app ~ .matrix-rain,
+.civic-app .matrix-rain,
+.civic-app .particles-container,
+.civic-app .scanline-overlay {
+    display: none !important;
+}
+
+body:has(.civic-app) {
+    background: var(--civic-fondo) !important;
+    animation: none !important;
+}
+
+body:has(.civic-app)::before,
+body:has(.civic-app)::after,
+.App:has(.civic-app)::before,
+.App:has(.civic-app)::after {
+    display: none !important;
+}
+
+.civic-app *:focus-visible {
+    outline: 2px solid var(--civic-rojo);
+    outline-offset: 2px;
+}
+
+.civic-app h1,
+.civic-app h2,
+.civic-app h3,
+.civic-app h4 {
+    font-family: var(--civic-titulo);
+    color: var(--civic-tinta);
+    letter-spacing: normal;
+    text-transform: none;
+    text-shadow: none;
+}
+
+/* === Cascarón: encabezado, navegación, pie === */
+
+.civic-shell {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 24px;
+}
+
+.civic-header {
+    background: var(--civic-superficie);
+    border-bottom: 1px solid var(--civic-borde);
+}
+
+.civic-header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 18px 0;
+}
+
+.civic-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+}
+
+.civic-brand-mark {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    background: var(--civic-azul);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.civic-brand-name {
+    font-family: var(--civic-titulo);
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--civic-tinta);
+    line-height: 1.2;
+    margin: 0;
+}
+
+.civic-brand-sub {
+    font-family: var(--civic-cuerpo);
+    font-size: 12px;
+    color: var(--civic-suave);
+    margin: 2px 0 0;
+}
+
+.civic-nav {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    padding-bottom: 2px;
+}
+
+.civic-nav-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: var(--civic-radio-sm);
+    font-family: var(--civic-titulo);
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--civic-suave);
+    border: 1px solid transparent;
+    transition: color .2s ease, background .2s ease, border-color .2s ease;
+}
+
+.civic-nav-item:hover {
+    color: var(--civic-azul);
+    background: var(--civic-azul-suave);
+}
+
+.civic-nav-item.is-active {
+    color: var(--civic-azul);
+    background: var(--civic-azul-suave);
+    border-color: var(--civic-azul-borde);
+}
+
+.civic-footer {
+    border-top: 1px solid var(--civic-borde);
+    padding: 24px 0 32px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--civic-tenue);
+}
+
+/* === Superficies === */
+
+.civic-card {
+    background: var(--civic-superficie);
+    border: 1px solid var(--civic-borde);
+    border-radius: var(--civic-radio);
+    box-shadow: var(--civic-sombra);
+}
+
+.civic-card-pad {
+    padding: 20px;
+}
+
+.civic-card-hover {
+    transition: box-shadow .25s ease, transform .25s ease, border-color .25s ease;
+}
+
+.civic-card-hover:hover {
+    box-shadow: var(--civic-sombra-alta);
+    transform: translateY(-3px);
+    border-color: var(--civic-azul-borde);
+}
+
+.civic-section-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--civic-titulo);
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--civic-tinta);
+    margin: 0;
+}
+
+.civic-section-title svg {
+    color: var(--civic-azul);
+}
+
+.civic-eyebrow {
+    font-family: var(--civic-titulo);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--civic-suave);
+}
+
+.civic-muted { color: var(--civic-suave); }
+.civic-faint { color: var(--civic-tenue); }
+.civic-ink { color: var(--civic-tinta); }
+.civic-mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+}
+
+/* === Botones === */
+
+.civic-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-radius: var(--civic-radio-sm);
+    border: 1px solid transparent;
+    font-family: var(--civic-titulo);
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .2s ease, border-color .2s ease, color .2s ease;
+    white-space: nowrap;
+}
+
+.civic-btn:disabled {
+    opacity: .55;
+    cursor: not-allowed;
+}
+
+.civic-btn-primary {
+    background: var(--civic-azul);
+    color: #ffffff;
+}
+.civic-btn-primary:hover:not(:disabled) { background: var(--civic-azul-hover); }
+
+.civic-btn-red {
+    background: var(--civic-rojo);
+    color: #ffffff;
+}
+.civic-btn-red:hover:not(:disabled) { background: var(--civic-rojo-hover); }
+
+.civic-btn-ghost {
+    background: var(--civic-superficie);
+    border-color: var(--civic-azul-borde);
+    color: var(--civic-azul);
+}
+.civic-btn-ghost:hover:not(:disabled) { border-color: var(--civic-azul); }
+
+.civic-btn-quiet {
+    background: transparent;
+    border-color: var(--civic-borde-fuerte);
+    color: var(--civic-suave);
+}
+.civic-btn-quiet:hover:not(:disabled) {
+    border-color: var(--civic-azul-borde);
+    color: var(--civic-azul);
+}
+
+.civic-btn-sm {
+    padding: 7px 12px;
+    font-size: 12.5px;
+}
+
+/* Botones de voto: a favor / en contra / abstención */
+.civic-vote {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 9px 10px;
+    border-radius: var(--civic-radio-sm);
+    font-family: var(--civic-titulo);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid;
+    transition: background .2s ease;
+}
+.civic-vote:disabled { opacity: .55; cursor: not-allowed; }
+
+.civic-vote-for {
+    background: var(--civic-verde-suave);
+    border-color: #BFD9C9;
+    color: var(--civic-verde-texto);
+}
+.civic-vote-for:hover:not(:disabled) { background: #D8E9DF; }
+
+.civic-vote-against {
+    background: var(--civic-rojo-suave);
+    border-color: #F0C6C3;
+    color: var(--civic-rojo-hover);
+}
+.civic-vote-against:hover:not(:disabled) { background: #F6D8D6; }
+
+.civic-vote-abstain {
+    background: #F1F4F9;
+    border-color: var(--civic-borde-fuerte);
+    color: var(--civic-suave);
+}
+.civic-vote-abstain:hover:not(:disabled) { background: #E7ECF4; }
+
+/* === Etiquetas de estado === */
+
+.civic-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-family: var(--civic-titulo);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+}
+
+.civic-tag-blue   { background: var(--civic-azul-suave); color: var(--civic-azul); border-color: var(--civic-azul-borde); }
+.civic-tag-red    { background: var(--civic-rojo-suave); color: var(--civic-rojo-hover); border-color: #F0C6C3; }
+.civic-tag-green  { background: var(--civic-verde-suave); color: var(--civic-verde-texto); border-color: #BFD9C9; }
+.civic-tag-amber  { background: var(--civic-ambar-suave); color: var(--civic-ambar); border-color: var(--civic-ambar-borde); }
+.civic-tag-neutral{ background: #F1F4F9; color: var(--civic-suave); border-color: var(--civic-borde-fuerte); }
+
+/* Chip de wallet conectada */
+.civic-wallet {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: var(--civic-azul-suave);
+    border: 1px solid var(--civic-azul-borde);
+    color: var(--civic-azul);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+/* === Avisos === */
+
+.civic-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: var(--civic-radio-sm);
+    border: 1px solid;
+    font-size: 13.5px;
+    line-height: 1.55;
+}
+
+.civic-note-info  { background: var(--civic-azul-suave); border-color: var(--civic-azul-borde); color: #24406F; }
+.civic-note-warn  { background: var(--civic-ambar-suave); border-color: var(--civic-ambar-borde); color: #7A5510; }
+.civic-note-error { background: var(--civic-rojo-suave); border-color: #F0C6C3; color: var(--civic-rojo-hover); }
+.civic-note-ok    { background: var(--civic-verde-suave); border-color: #BFD9C9; color: var(--civic-verde-texto); }
+
+.civic-note svg { flex-shrink: 0; margin-top: 2px; }
+
+/* === Formularios === */
+
+.civic-label {
+    display: block;
+    font-family: var(--civic-titulo);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--civic-tinta);
+    margin-bottom: 6px;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.civic-field {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--civic-borde-fuerte);
+    border-radius: var(--civic-radio-sm);
+    font-family: var(--civic-cuerpo);
+    font-size: 14px;
+    color: var(--civic-texto);
+    background: var(--civic-superficie);
+    transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.civic-field:focus {
+    outline: none;
+    border-color: var(--civic-azul);
+    box-shadow: 0 0 0 3px rgba(0, 56, 151, 0.1);
+}
+
+.civic-field::placeholder { color: #A0B2D0; }
+
+.civic-help {
+    font-size: 12px;
+    color: var(--civic-tenue);
+    margin-top: 5px;
+}
+
+/* === Barras de progreso / resultados === */
+
+.civic-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: #EDF1F8;
+    overflow: hidden;
+    display: flex;
+}
+
+.civic-bar-for     { background: var(--civic-verde); transition: width .3s ease; }
+.civic-bar-against { background: var(--civic-rojo); transition: width .3s ease; }
+.civic-bar-blue    { background: var(--civic-azul); transition: width .3s ease; }
+
+/* === Métricas === */
+
+.civic-stat {
+    background: var(--civic-superficie);
+    border: 1px solid var(--civic-borde);
+    border-radius: var(--civic-radio);
+    padding: 18px;
+    box-shadow: var(--civic-sombra);
+}
+
+.civic-stat-value {
+    font-family: var(--civic-titulo);
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--civic-tinta);
+    line-height: 1.1;
+}
+
+.civic-stat-label {
+    font-size: 12.5px;
+    color: var(--civic-suave);
+    margin-top: 4px;
+}
+
+/* === Estado vacío ===
+   Este proyecto prohíbe rellenar la interfaz con datos inventados: cuando no
+   hay nada que mostrar, se muestra esto y no un marcador de posición. */
+
+.civic-empty {
+    text-align: center;
+    padding: 44px 24px;
+    background: var(--civic-superficie);
+    border: 1px dashed var(--civic-borde-fuerte);
+    border-radius: var(--civic-radio);
+}
+
+.civic-empty svg {
+    color: var(--civic-azul-borde);
+    margin: 0 auto 12px;
+}
+
+.civic-empty-title {
+    font-family: var(--civic-titulo);
+    font-weight: 600;
+    color: var(--civic-tinta);
+    margin-bottom: 4px;
+}
+
+.civic-empty-desc {
+    font-size: 13.5px;
+    color: var(--civic-suave);
+}
+
+/* === Carga === */
+
+.civic-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 36px;
+    color: var(--civic-suave);
+    font-size: 13.5px;
+}
+
+.civic-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--civic-azul-borde);
+    border-top-color: var(--civic-azul);
+    border-radius: 50%;
+    animation: civicSpin .7s linear infinite;
+}
+
+@keyframes civicSpin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+    .civic-spinner { animation-duration: 2s; }
+    .civic-card-hover:hover { transform: none; }
+}
+
+/* === Diálogo === */
+
+.civic-dialog {
+    background: var(--civic-superficie);
+    border: 1px solid var(--civic-borde);
+    border-radius: var(--civic-radio);
+    color: var(--civic-texto);
+    box-shadow: 0 24px 48px rgba(11, 37, 69, 0.18);
+}
+
+.civic-dialog h2,
+.civic-dialog h3 { font-family: var(--civic-titulo); color: var(--civic-tinta); }
+
+/* === Responsive === */
+
+@media (max-width: 720px) {
+    .civic-shell { padding: 0 18px; }
+    .civic-nav { gap: 2px; }
+    .civic-nav-item { padding: 9px 11px; font-size: 12.5px; }
+    .civic-section-title { font-size: 18px; }
+}
+
+/* =========================================================================
+   Capa de compatibilidad: vocabulario `cyber-*`
+   -------------------------------------------------------------------------
+   Algunos pasos del onboarding siguen escritos con estas clases. En vez de
+   reescribir su marcado (donde vive la lógica delicada de NFC, liveness,
+   wallet y minteo), se redefinen aquí en clave cívica. `!important` es
+   necesario porque App.css y premium.css declaran las mismas clases con
+   sombras, gradientes y animaciones del tema oscuro.
+   ========================================================================= */
+
+.civic-app .cyber-card,
+.civic-app .cyber-panel,
+.civic-app .cyber-stat-card,
+.civic-app .cyber-stat-card-premium {
+    background: var(--civic-superficie) !important;
+    border: 1px solid var(--civic-borde) !important;
+    border-radius: var(--civic-radio) !important;
+    box-shadow: var(--civic-sombra) !important;
+    color: var(--civic-texto) !important;
+    backdrop-filter: none !important;
+}
+
+.civic-app .cyber-title {
+    background: none !important;
+    -webkit-text-fill-color: initial !important;
+    color: var(--civic-tinta) !important;
+    font-family: var(--civic-titulo) !important;
+    text-shadow: none !important;
+    animation: none !important;
+    letter-spacing: normal !important;
+}
+
+.civic-app .cyber-title::before,
+.civic-app .cyber-title::after { display: none !important; }
+
+.civic-app .cyber-icon { color: var(--civic-azul) !important; }
+
+.civic-app .cyber-button,
+.civic-app .cyber-button-premium {
+    background: var(--civic-azul) !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: var(--civic-radio-sm) !important;
+    font-family: var(--civic-titulo) !important;
+    font-weight: 600 !important;
+    letter-spacing: normal !important;
+    text-transform: none !important;
+    box-shadow: none !important;
+    animation: none !important;
+}
+
+.civic-app .cyber-button::before,
+.civic-app .cyber-button-premium::before { display: none !important; }
+
+.civic-app .cyber-button:hover,
+.civic-app .cyber-button-premium:hover {
+    background: var(--civic-azul-hover) !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+.civic-app .cyber-badge {
+    background: var(--civic-azul-suave) !important;
+    color: var(--civic-azul) !important;
+    border: 1px solid var(--civic-azul-borde) !important;
+    border-radius: 999px !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+    font-family: var(--civic-titulo) !important;
+}
+
+.civic-app .cyber-badge.success {
+    background: var(--civic-verde-suave) !important;
+    color: var(--civic-verde-texto) !important;
+    border-color: #BFD9C9 !important;
+}
+
+.civic-app .cyber-badge.warning {
+    background: var(--civic-ambar-suave) !important;
+    color: var(--civic-ambar) !important;
+    border-color: var(--civic-ambar-borde) !important;
+}
+
+.civic-app .cyber-input,
+.civic-app .cyber-input-premium,
+.civic-app .cyber-file-input {
+    background: var(--civic-superficie) !important;
+    border: 1px solid var(--civic-borde-fuerte) !important;
+    border-radius: var(--civic-radio-sm) !important;
+    color: var(--civic-texto) !important;
+    font-family: var(--civic-cuerpo) !important;
+    box-shadow: none !important;
+}
+
+.civic-app .cyber-input:focus,
+.civic-app .cyber-input-premium:focus,
+.civic-app .cyber-file-input:focus {
+    border-color: var(--civic-azul) !important;
+    box-shadow: 0 0 0 3px rgba(0, 56, 151, 0.1) !important;
+}
+
+.civic-app .cyber-label {
+    color: var(--civic-tinta) !important;
+    font-family: var(--civic-titulo) !important;
+    text-shadow: none !important;
+    letter-spacing: normal !important;
+}
+
+.civic-app .cyber-success {
+    background: var(--civic-verde-suave) !important;
+    border: 1px solid #BFD9C9 !important;
+    color: var(--civic-verde-texto) !important;
+    box-shadow: none !important;
+}
+
+.civic-app .cyber-error {
+    background: var(--civic-rojo-suave) !important;
+    border: 1px solid #F0C6C3 !important;
+    color: var(--civic-rojo-hover) !important;
+    box-shadow: none !important;
+    animation: none !important;
+}
+
+.civic-app .cyber-progress,
+.civic-app .cyber-progress-premium {
+    background: #EDF1F8 !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.civic-app .cyber-progress-fill,
+.civic-app .cyber-progress-premium-fill {
+    background: var(--civic-azul) !important;
+    box-shadow: none !important;
+    animation: none !important;
+}
+
+.civic-app .cyber-step-number {
+    background: var(--civic-superficie) !important;
+    border: 1px solid var(--civic-borde-fuerte) !important;
+    color: var(--civic-tenue) !important;
+    box-shadow: none !important;
+    animation: none !important;
+}
+
+.civic-app .cyber-step-number.active,
+.civic-app .cyber-step-number.completed {
+    background: var(--civic-azul) !important;
+    border-color: var(--civic-azul) !important;
+    color: #ffffff !important;
+}
+
+.civic-app .cyber-step-title {
+    color: var(--civic-suave) !important;
+    text-shadow: none !important;
+    font-family: var(--civic-titulo) !important;
+}
+
+.civic-app .cyber-step-title.active,
+.civic-app .cyber-step-title.completed {
+    color: var(--civic-azul) !important;
+}
+
+.civic-app .cyber-stat-number {
+    color: var(--civic-tinta) !important;
+    font-family: var(--civic-titulo) !important;
+    text-shadow: none !important;
+    background: none !important;
+    -webkit-text-fill-color: initial !important;
+}
+
+.civic-app .cyber-stat-label { color: var(--civic-suave) !important; }
+
+.civic-app .cyber-spinner,
+.civic-app .cyber-loader-premium {
+    border-color: var(--civic-azul-borde) !important;
+    border-top-color: var(--civic-azul) !important;
+    box-shadow: none !important;
+}
+
+.civic-app .cyber-loader-dot { background: var(--civic-azul) !important; }
+
+.civic-app .cyber-tab {
+    color: var(--civic-suave) !important;
+    border-color: transparent !important;
+    background: transparent !important;
+    font-family: var(--civic-titulo) !important;
+}
+
+.civic-app .cyber-tab.active {
+    color: var(--civic-azul) !important;
+    background: var(--civic-azul-suave) !important;
+    border-color: var(--civic-azul-borde) !important;
+}
+
+.civic-app .cyber-footer {
+    background: transparent !important;
+    border-top: 1px solid var(--civic-borde) !important;
+    color: var(--civic-tenue) !important;
+}
+
+/* Superficies translúcidas heredadas del tema oscuro */
+.civic-app .glass,
+.civic-app .glass-dark {
+    background: var(--civic-superficie) !important;
+    border: 1px solid var(--civic-borde) !important;
+    backdrop-filter: none !important;
+    color: var(--civic-texto) !important;
+}
+
+/* =========================================================================
+   Utilidades Tailwind del tema oscuro, reasignadas dentro de `.civic-app`
+   -------------------------------------------------------------------------
+   Los once pasos del onboarding traen estas clases escritas en el marcado.
+   Reasignarlas acá evita editar archivos donde vive la lógica delicada de
+   NFC, liveness, wallet y minteo — el mismo criterio con el que se rediseñó
+   /unete la primera vez.
+   La lista es cerrada y corresponde exactamente a las clases que quedaban en
+   `components/onboarding/`; no es una regla general sobre Tailwind.
+   ========================================================================= */
+
+.civic-app .text-cyan-400,
+.civic-app .text-cyan-300,
+.civic-app .text-purple-400 { color: var(--civic-azul) !important; }
+
+.civic-app .text-gray-300 { color: var(--civic-texto) !important; }
+.civic-app .text-gray-400 { color: var(--civic-suave) !important; }
+.civic-app .text-gray-500 { color: var(--civic-tenue) !important; }
+.civic-app .text-white    { color: var(--civic-tinta) !important; }
+
+/* Botón fantasma cuyo hover aclaraba el texto sobre fondo oscuro: sobre
+   fondo claro dejaba la etiqueta ilegible. */
+.civic-app .hover\:text-white:hover { color: var(--civic-azul) !important; }
+
+.civic-app .border-cyan-500\/30,
+.civic-app .border-cyan-400,
+.civic-app .border-cyan-400\/50,
+.civic-app .border-purple-500,
+.civic-app .border-purple-500\/30 { border-color: var(--civic-azul-borde) !important; }
+
+.civic-app .border-gray-600 { border-color: var(--civic-borde-fuerte) !important; }
+
+.civic-app .bg-cyan-500\/5,
+.civic-app .bg-cyan-500\/10,
+.civic-app .bg-purple-500\/5 { background-color: var(--civic-azul-suave) !important; }
+
+.civic-app .bg-black\/50,
+.civic-app .bg-black\/30 {
+    background-color: var(--civic-fondo) !important;
+    border-color: var(--civic-borde) !important;
+}

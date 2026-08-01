@@ -1,28 +1,38 @@
 # Plan de implementación — DAO Ciudadana
 
-**Base:** hallazgos de [`AUDIT.md`](./AUDIT.md) sobre el commit `f2902ca`.
+**Base vigente:** `main@73f2985` + endurecimiento local en
+`codex/produccion-ci`. `f2902ca` se conserva en [`AUDIT.md`](./AUDIT.md) como
+referencia histórica.
 **Principio rector:** cada fase deja el sistema en un estado más honesto que la anterior. Nada que se muestre al usuario debe afirmar algo que el sistema no puede probar.
 
 ---
 
 ## Decisiones de arquitectura que hay que tomar antes de escribir código
 
-Estas tres decisiones bloquean todo lo demás. No son opcionales y no tienen respuesta por defecto.
+Existen implementaciones provisionales para estas tres decisiones, pero deben
+ratificarse mediante ADR antes de desplegar producción. No son detalles que deba
+decidir implícitamente una implementación.
 
 ### D-1 · ¿Quién mintea el SBT?
 
 | Opción | Cómo funciona | A favor | En contra |
 |---|---|---|---|
-| **A. Server-side (custodial)** | El backend firma con una wallet owner y llama `mintMembership`. Es lo que el contrato ya soporta (`onlyOwner`). | Cero fricción para el usuario, no necesita gas ni entender Web3. Coherente con el contrato actual. | El backend custodia una llave privada con poder de acuñar. Punto único de fallo. Exige HSM o KMS. |
+| **A. Server-side (custodial)** | El backend firma con una wallet que tenga `MINTER_ROLE` y llama `mintMembership`. El código actual lo soporta, pero aún no está desplegado. | Cero fricción para el usuario, no necesita gas ni entender Web3. | El backend custodia una llave con poder de acuñar. Exige HSM/KMS, monitoreo y reconciliación. |
 | **B. Client-side con firma** | El backend emite un voucher firmado (EIP-712); el usuario llama `mintWithVoucher` y paga su gas. Requiere modificar el contrato. | El backend nunca custodia llaves con fondos. El usuario controla su transacción. | Fricción alta: el ciudadano necesita ETH de gas. Barrera de adopción real en un proyecto cívico. |
 | **C. Híbrido con meta-transacciones** | El usuario firma un mensaje sin gas; un relayer lo ejecuta y paga. | Combina lo mejor de A y B. | Más piezas: relayer, protección contra abuso del relayer, ERC-2771. |
 
-**Recomendación:** empezar con **A** (es lo que el contrato ya permite, y desbloquea la Fase 1 sin redeploy), con la llave en un KMS gestionado y un `MINTER_ROLE` separado del `owner`. Migrar a **C** cuando haya volumen.
-Si se elige B o C hay que **redesplegar el contrato** — decidirlo ahora evita hacerlo dos veces.
+**Recomendación provisional:** empezar con **A**, con la llave en un KMS y
+`MINTER_ROLE` separado de `DEFAULT_ADMIN_ROLE`. Cualquier opción exige desplegar
+el contrato AccessControl/bytes32 compatible; la dirección histórica no sirve.
+Ratificar la decisión en un ADR antes de desplegar.
 
 ### D-2 · ¿Qué se escribe on-chain como `identityHash`?
 
-El esquema actual (`sha256(RUT)[:16]`) es reversible por fuerza bruta y no puede ir a un registro público. Alternativas:
+El esquema histórico (`sha256(RUT)[:16]`) es reversible por fuerza bruta y no
+puede ir a un registro público. La rama `codex/produccion-ci` ya usa
+HMAC-SHA256 completo para altas nuevas, pero la decisión sigue pendiente hasta
+ratificar el diseño, custodiar/rotar el pepper en KMS y migrar o purgar datos
+legacy. Alternativas:
 
 - **HMAC-SHA256(RUT, pepper)** con el pepper en KMS, nunca en el repositorio ni en la base. Simple y suficiente para impedir enumeración. **Recomendada para la Fase 1.**
 - **Compromiso Pedersen / commitment con nonce aleatorio por usuario**, guardando el nonce cifrado. Permite pruebas de pertenencia sin revelar el RUT.
@@ -32,7 +42,11 @@ Sea cual sea: **usar 32 bytes completos, no 16 hex truncados**, y `bytes32` en e
 
 ### D-3 · ¿La gobernanza es on-chain u off-chain?
 
-Hoy es 100 % off-chain en MongoDB: las propuestas, los votos y la tesorería viven en una base que el operador puede editar. Eso no es una DAO, es un formulario.
+Hoy la gobernanza sigue siendo off-chain en MongoDB. Las papeletas de propuestas
+ya llevan firma EIP-712 y pueden reverificarse, pero los votos de elecciones aún
+no; producción los bloquea. Además, los totales persisten separados de las
+papeletas, por lo que todavía falta reconciliación/atomicidad antes de llamarlo
+un sistema electoral verificable.
 
 - **Off-chain con firma verificable** (estilo Snapshot): cada voto es un mensaje firmado por la wallet, se almacena el mensaje y la firma, cualquiera puede reverificar. Barato, sin gas, auditable. **Recomendado para la Fase 3.**
 - **On-chain completo** (OpenZeppelin Governor + tesorería en Safe): máxima garantía, costo de gas por voto, complejidad alta.
@@ -73,32 +87,44 @@ Objetivo: que el repositorio sea levantable y que la UI deje de afirmar cosas fa
 
 Objetivo: cerrar C-1, C-2 y C-6. Al terminar, un SBT existe de verdad y solo lo obtiene quien se verificó.
 
+> **Estado 01-08-2026:** SIWE, autorización self y el camino técnico de minteo
+> on-chain están implementados detrás de guardrails fail-closed. Las altas nuevas
+> usan Fernet + HMAC. Siguen bloqueando producción: proveedor civil y grant de un
+> solo uso, migración de PII legacy, ADR/KMS, despliegue compatible y reconciliación
+> idempotente cadena↔Mongo.
+
 | # | Tarea | Detalle | Criterio de aceptación |
 |---|---|---|---|
-| 1.1 | **Sesión basada en firma de wallet (SIWE / EIP-4361)** | El backend emite un nonce, el usuario firma con MetaMask, el backend valida y emite un JWT con expiración corta + refresh. Sustituye el login por RUT+email. | `POST /api/auth/siwe/nonce` y `/verify` funcionando; el JWT contiene `sub = address` |
-| 1.2 | **Dependencia `require_auth` en FastAPI** | Aplicada a mint, propuestas, voto y delegación. El `voter_address` deja de venir del body: se toma del token. | Ningún endpoint mutante acepta una dirección arbitraria del cliente |
-| 1.3 | **Rehacer el hash de identidad** | `HMAC-SHA256(RUT, pepper)` con pepper en KMS. Migrar a `bytes32` en el contrato. Purgar los hashes antiguos de la base. | Ningún hash reversible por diccionario queda almacenado |
-| 1.4 | **Cifrar la PII en reposo** | RUT y email cifrados con clave gestionada; índices sobre el HMAC, no sobre el valor en claro. Definir política de retención. | Un volcado de la base no expone RUT en claro |
-| 1.5 | **Minteo real on-chain** | Implementar `BlockchainService.mint_sbt` con `web3.py`: construir, firmar y enviar la transacción; esperar el recibo; extraer `tokenId` del evento; persistir `tx_hash` y `block_number` reales. Manejar `AlreadyHasMembership` e `IdentityAlreadyUsed`. | `totalSupply()` en Sepolia aumenta con cada alta |
-| 1.6 | **Añadir `MINTER_ROLE`** | Migrar de `Ownable` a `AccessControl` para separar quién acuña de quién administra. Requiere redeploy. | El owner y el minter son direcciones distintas |
-| 1.7 | **Eliminar el mock de wallet** | Borrar `POST /api/wallet/connect` y `generate_mock_address()`. La conexión ya la hace MetaMask en el cliente. | `OnboardingContext.connectWallet` usa `useWallet`, no la API |
-| 1.8 | **Corregir la ABI del frontend** | Regenerarla desde `artifacts/` en el build en lugar de mantenerla a mano. | El evento `MembershipMinted` se parsea correctamente y `tokenId` no es `null` |
-| 1.9 | **Cablear `useSBTContract`** | O se usa en el flujo, o se elimina. No dejar código muerto que sugiera una capacidad inexistente. | Sin hooks huérfanos |
-| 1.10 | **Umbral de liveness** | Definir el mínimo (sugerido 0.75), rechazar por debajo, registrar el score. Sin API key configurada, **fallar** en vez de devolver 0.85. | Un score bajo bloquea el avance del onboarding |
+| 1.1 | 🟡 **Sesión basada en firma de wallet (SIWE / EIP-4361)** | Challenge/verify canónico, nonce de un solo uso y JWT corto implementados. Falta decidir si se necesita refresh/rotación de sesión. | `/api/wallet/challenge` y `/verify` funcionando; el JWT contiene `sub = address` |
+| 1.2 | ✅ **Dependencia `require_auth` en FastAPI** | Aplicada a mint, propuestas, voto, delegación y elecciones; cada acción debe corresponder al `sub` del token. | Ningún endpoint mutante acepta actuar como otra dirección |
+| 1.3 | 🟡 **Rehacer el hash de identidad** | HMAC-SHA256 completo implementado para datos nuevos. Falta KMS/rotación, ADR y migrar/purgar hashes antiguos. | Ningún hash reversible por diccionario queda almacenado |
+| 1.4 | 🟡 **Cifrar la PII en reposo** | Fernet + índices HMAC implementados para altas nuevas. Falta inventario, snapshot, migración y rollback de Atlas legacy, además de política de retención. | Un volcado de la base no expone RUT en claro |
+| 1.5 | 🟡 **Minteo real on-chain** | Construcción, firma, recibo, evento/lectura de `tokenId` y precondiciones de red/rol/gas implementados. Producción permanece cerrada hasta disponer de grant, contrato, custodia e idempotencia/reconciliación. | `totalSupply()` en el despliegue compatible aumenta y se reconcilia con Mongo |
+| 1.6 | 🟡 **Añadir `MINTER_ROLE`** | El contrato actual usa AccessControl y tiene tests; falta desplegarlo, verificarlo y separar/custodiar los roles. | Admin y minter son direcciones distintas y están inventariadas |
+| 1.7 | **Eliminar el mock de wallet** ✅ | Eliminados `POST /api/wallet/connect`, `generate_mock_address()` y el cliente huérfano. La conexión la hace MetaMask y la sesión usa challenge/verify SIWE. | No existe una ruta que invente una wallet; `useWallet` firma el desafío real |
+| 1.8 | **Eliminar la ABI manual del frontend** ✅ | El minteo es responsabilidad del backend; se borraron la ABI manual incompatible y la dirección legacy. La UI enlaza la transacción real recibida de la API. | Sin ABI duplicada ni dirección histórica en el bundle |
+| 1.9 | **Eliminar `useSBTContract` huérfano** ✅ | El hook no se usaba y permitía intentar minteo con el signer del usuario; fue eliminado. | Sin hooks que sugieran minteo client-side inexistente |
+| 1.10 | **Proveedor real de identidad/liveness + grant** | Sustituir las demos por un proveedor adecuado, aplicar sus garantías y emitir un permiso de alta de un solo uso. La heurística visual demo no debe promoverse a acreditación. | Sin proveedor o evidencia válida, producción falla cerrado y no puede mintear |
 | 1.11 | **Índice único** en `members.wallet_address` (✅ hecho: `Database.ensure_indexes()`) y en el hash de identidad (pendiente, depende de D-2) | migración MongoDB | Imposible crear dos membresías para la misma wallet |
-| 1.12 | Reemplazar `token_id = count + 1` por el `tokenId` devuelto por el contrato | `membership.py:32` | El ID off-chain siempre coincide con el on-chain |
+| 1.12 | ✅ Reemplazar `token_id = count + 1` por el `tokenId` del evento o la lectura del contrato | `blockchain_service.py` | El camino on-chain nunca inventa un ID local |
+| 1.13 | **Migrar la sesión web fuera de `localStorage`** | Cookie `Secure`/`HttpOnly`/`SameSite`, protección CSRF, logout y revocación coordinados con CORS | Un XSS del frontend no puede extraer el JWT SIWE |
 
 ---
 
 ## Fase 2 — Tests y CI (1–2 semanas)
 
-> ✅ **Completada** (julio 2026). 2.1: suite de `contracts/test/` (29 tests, incluye la
+> 🟡 **Parcial** (agosto 2026). 2.1: suite de `contracts/test/` (31 tests, incluye la
 > regresión del orden checks-effects-interactions en `mintMembership`). 2.2: suite de
-> `backend/tests/` con `pytest` + `mongomock` (46 tests, sin red ni Mongo real). 2.3:
+> `backend/tests/` con 157 tests, sin red ni Mongo real. 2.3:
 > `backend_test.py` y `test_result.md` eliminados. 2.4: `.github/workflows/ci.yml` corre
-> backend, contratos, slither y build del frontend en cada PR. 2.5: `slither --fail-medium
+> backend, contratos, slither, auditoría crítica de npm, `pip-audit` estricto y
+> build del frontend en cada PR; las Actions están fijadas por SHA. 2.5: `slither --fail-medium
 > --exclude-dependencies` en verde. 2.6: `requirements.txt` con versiones exactas.
-> La cobertura formal (≥90 %/≥70 %) queda por medir e imponer en CI.
+> Dependabot quedó configurado para los cinco directorios/ecosistemas. Mobile pasa
+> TypeScript, 15 tests, lint y auditoría npm localmente; el workflow incorpora esos
+> mismos gates en un nuevo job estático. Pendientes: lint backend, cobertura formal web/backend, build/release
+> nativo de mobile, branch protection, secret scanning recurrente y migración de los
+> toolchains legacy que concentran los avisos altos de dependencias.
 
 Objetivo: cerrar C-5 y hacer que las fases siguientes no rompan lo anterior.
 
@@ -107,9 +133,13 @@ Objetivo: cerrar C-5 y hacer que las fases siguientes no rompan lo anterior.
 | 2.1 | Suite de tests del contrato en `contracts/test/`: minteo, unicidad por wallet, rechazo de `identityHash` repetido, intento de transferencia (debe revertir), pausado, ciclo completo de revocación con cooldown, permisos | Cobertura ≥ 90 % en `DAOCiudadanaSBT.sol` |
 | 2.2 | Tests de integración del backend con `pytest` + `mongomock` o contenedor efímero: autenticación, mint, voto, límites de tasa | Cobertura ≥ 70 % en `routers/` y `services/` |
 | 2.3 | Reescribir `backend_test.py`, que hoy apunta a un host de preview inexistente, o eliminarlo | Sin tests que apunten a infraestructura muerta |
-| 2.4 | GitHub Actions: lint + tests de contrato + tests de backend + build del frontend en cada PR | Un PR que rompe tests no se puede mergear |
+| 2.4 | GitHub Actions: tests de contrato + tests de backend + slither + auditoría crítica npm + build estricto del frontend en cada PR; lint backend pendiente | Los checks informan cualquier regresión antes del merge |
 | 2.5 | `slither` sobre el contrato en CI | Sin hallazgos de severidad alta |
 | 2.6 | Fijar versiones exactas en `requirements.txt` | Builds reproducibles |
+| 2.7 | Configurar branch protection/ruleset en `main` y exigir los checks de CI | Un PR con checks rojos no se puede mergear |
+| 2.8 | ✅ SCA y mantenimiento: `pip-audit --strict`, npm sin críticos, Actions fijadas por SHA y Dependabot semanal | Una dependencia Python vulnerable o un crítico npm rompe CI |
+| 2.9 | ✅ Gate estático mobile: instalación reproducible, auditoría crítica, TypeScript, presupuesto de warnings ESLint y Jest | Una regresión móvil bloquea el PR antes del build nativo |
+| 2.10 | **Secret scanning recurrente y protección de push** | GitHub Secret Scanning/ruleset o scanner fijado por SHA, con procedimiento de triage | Una credencial nueva se bloquea antes de llegar a `main` |
 
 ---
 
@@ -117,22 +147,25 @@ Objetivo: cerrar C-5 y hacer que las fases siguientes no rompan lo anterior.
 
 Objetivo: cerrar C-3, A-4, A-5, A-9 y M-10.
 
+> **Estado 01-08-2026:** 3.2–3.5 y 3.7 implementados para propuestas. 3.1 usa MongoDB
+> provisionalmente y cuarentena demo/legacy en producción; el verificador on-chain
+> todavía falla cerrado con `NotImplementedError`. El módulo de elecciones de
+> representantes sigue sin papeletas EIP-712 y votar se bloquea en producción.
+> Pendientes: firma de elecciones, atomicidad/reconciliación del tally, 3.6
+> (tesorería real) y 3.8 (Redis).
+
 | # | Tarea | Criterio de aceptación |
 |---|---|---|
-> **Estado 26-07-2026:** 3.1, 3.4, 3.5 y 3.7 implementados. La verificación de membresía
-> usa MongoDB con la interfaz lista para conmutar a on-chain (`MEMBERSHIP_SOURCE`). Añadido
-> fuera de plan: módulo de elecciones de representantes. Pendientes: 3.2 (votos firmados
-> EIP-712), 3.3 (nonce anti-replay), 3.6 (tesorería real), 3.8 (Redis) y 3.9.
-
 | 3.1 | **Verificación de membresía para votar**: consultar `hasMembership(address)` on-chain (con caché corta) antes de aceptar un voto o una propuesta | Una dirección sin SBT recibe 403 |
-| 3.2 | **Votos firmados**: cada voto es un mensaje EIP-712 firmado por el votante; se almacena mensaje + firma; endpoint público de reverificación | Cualquier tercero puede recomputar el resultado sin confiar en el servidor |
-| 3.3 | **Protección de replay real**: usar el `nonce` que ya viaja en `VoteRequest` y validarlo contra los ya consumidos | Reenviar un voto firmado da error |
+| 3.2 | 🟡 **Votos firmados**: propuestas ya firman EIP-712, persisten mensaje/firma y exponen papeletas para reverificación; falta llevar el mismo esquema a elecciones | Cualquier tercero puede recomputar el resultado sin confiar en el servidor |
+| 3.3 | 🟡 **Protección de replay real**: nonce único e índice compuesto implementados para propuestas; falta elecciones | Reenviar un voto firmado da error |
 | 3.4 | **Activar el antifraude** ya escrito: llamar `check_rapid_voting` y `check_delegation_chain` desde los endpoints | Los tests de patrones sospechosos pasan |
 | 3.5 | **Peso de voto por delegación**: `cast_vote` calcula el peso real a partir de las delegaciones recibidas | Delegar cambia el resultado de forma medible |
 | 3.6 | **Tesorería real**: leer balances de un Safe multisig vía API o RPC; precio de ETH desde un oráculo o API de precios, no hardcodeado | Ningún número de tesorería es una constante en el código |
-| 3.7 | **Enrutado y montaje de la UI de gobernanza**: añadir `react-router-dom` en `App.js` con rutas `/`, `/governance`, `/treasury`, `/profile` | Los cuatro componentes huérfanos son alcanzables |
+| 3.7 | ✅ **Enrutado y montaje de la UI de gobernanza**: `/` (landing), `/unete` (onboarding) y `/dashboard/{propuestas,elecciones,delegacion,tesoreria}` | Las secciones de gobernanza son alcanzables |
 | 3.8 | Mover el rate limiter y el antifraude a Redis | Los límites sobreviven a reinicios y funcionan con varias instancias |
 | 3.9 | ✅ **Hecho (julio 2026)** — el middleware usa `asyncio.sleep`; el event loop ya no se bloquea | Sin bloqueo del event loop bajo carga |
+| 3.10 | **Tally transaccional o derivado**: evitar que una caída entre insertar la papeleta y sumar el resultado produzca divergencia | El resultado siempre puede reconstruirse desde papeletas válidas |
 
 ---
 
@@ -144,8 +177,8 @@ Objetivo: cerrar C-4 en su raíz, A-3 y A-8. Los tiempos dependen de organismos 
 |---|---|---|
 | 4.1 | **Integración real de ClaveÚnica** (OIDC): solicitar acceso al sandbox de la División de Gobierno Digital, implementar el flujo `authorization_code` + PKCE, validar `id_token`, mapear `RUN` del claim | El trámite administrativo es el camino crítico: iniciarlo en la Fase 0, no aquí |
 | 4.2 | **Lectura NFC real de la cédula**: implementar PACE (no BAC) sobre ISO-DEP; capturar CAN o MRZ por OCR; verificar la firma del SOD contra la CSCA chilena | Es la tarea de mayor dificultad técnica del proyecto. Evaluar SDK comercial vs implementación propia |
-| 4.3 | Corregir el bundling de `crypto` en React Native: `resolver.extraNodeModules` en `metro.config.js` apuntando a `react-native-quick-crypto` | Prerrequisito de 4.2 |
-| 4.4 | ✅ **Hecho (julio 2026)** — los cinco contratos de `apiService.ts` alineados con el backend, pantalla `Wallet` creada y registrada (consulta de membresía), URL base apuntando a entorno de desarrollo (el backend de producción sigue suspendido, M-15) | Sin esto la app no completa ningún flujo |
+| 4.3 | 🟡 El código ya importa `react-native-quick-crypto` directamente; validar autolinking, 3DES y rendimiento en builds/dispositivos Android e iOS reales | Prerrequisito de 4.2 |
+| 4.4 | 🟡 **Parcial** — contratos de API y pantalla Wallet existen; gates locales/CI pasan, pero faltan PACE y un build/release nativo reproducible. El backend público ejecuta una versión anterior | Mantener la app como experimental hasta cerrar P-7 |
 | 4.5 | Liveness con proveedor especializado (iProov, Onfido, FaceTec) en lugar de un LLM de visión general | Un LLM no es un sistema de detección de vida certificado; no resiste ataques de presentación |
 
 ---
@@ -154,13 +187,13 @@ Objetivo: cerrar C-4 en su raíz, A-3 y A-8. Los tiempos dependen de organismos 
 
 | # | Tarea |
 |---|---|
-| 5.1 | Migrar el `owner` del contrato de una EOA a un Safe multisig (cierra M-11) |
+| 5.1 | Asignar `DEFAULT_ADMIN_ROLE` a un Safe multisig, separar minter/pauser/revoker y retirar privilegios de la EOA |
 | 5.2 | Definir y publicar el proceso de revocación: quién puede pedirla, con qué causal, con qué apelación. El cooldown de 3 días ya existe en el contrato; falta la gobernanza que lo legitime |
-| 5.3 | Restaurar el backend en producción; evaluar si Render free tier es adecuado o migrar |
-| 5.4 | Observabilidad: Sentry para errores, métricas Prometheus (`prometheus-client` ya está en requirements y no se usa), alertas |
+| 5.3 | Publicar los guardrails actuales y evaluar si Render free tier es adecuado para un SLA real |
+| 5.4 | Observabilidad: Sentry/OpenTelemetry, métricas y alertas; elegir e instalar el stack (Prometheus no está en requirements) |
 | 5.5 | Auditoría externa del contrato antes de cualquier despliegue en mainnet |
-| 5.6 | Evaluación de impacto en protección de datos (Ley 21.719) y política de privacidad publicada |
-| 5.7 | Despliegue en mainnet (Polygon, según el README) con contrato auditado y verificado |
+| 5.6 | Evaluación de impacto en protección de datos (Ley 21.719), privacidad/términos/estatutos publicados y consentimiento versionado |
+| 5.7 | Elegir red mediante ADR y desplegar en mainnet solo con contrato auditado y verificado |
 
 ---
 
@@ -182,7 +215,10 @@ D-1, D-2, D-3  (decisiones — bloquean todo)
    Fase 5
 ```
 
-**Ruta crítica:** D-1 → 1.1 → 1.5 → 2.1. Hasta que 1.5 esté listo, el producto no hace lo que dice hacer.
+**Ruta crítica vigente:** proveedor de identidad + grant de un solo uso → ratificar
+D-1/D-2 y custodiar llaves/pepper → desplegar/verificar contrato compatible →
+minteo idempotente con reconciliación → verificador de membresía on-chain →
+despliegue de los guardrails de esta rama.
 
 **Empezar hoy en paralelo:** el trámite de acceso al sandbox de ClaveÚnica (4.1). Es el único elemento cuyo plazo no controla el equipo.
 

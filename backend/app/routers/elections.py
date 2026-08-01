@@ -8,12 +8,12 @@ Lifecycle (status is derived from dates, like expired proposals):
     voting       -> until voting_end_at (one weighted vote per member)
     closed       -> results final; top `seats` candidates become representatives
 
-Membership gating (C-3) applies to running and voting. Election creation has
-no creator field in the designed data model and therefore no address to gate;
-restricting who can open an election is an authentication concern (Fase 1,
-audit C-1).
+Every mutating action requires both an active membership and a SIWE session
+for the same wallet declared in the request body. Membership alone is not
+authentication: without the session check, an attacker could act as any
+member by copying their public address.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime, timezone, timedelta
@@ -23,6 +23,7 @@ import re
 
 from pymongo.errors import DuplicateKeyError
 
+from ..core.config import settings
 from ..core.database import (
     elections_collection,
     candidacies_collection,
@@ -31,7 +32,7 @@ from ..core.database import (
 )
 from ..core.security_middleware import fraud_detector, verify_eth_address
 from ..services.governance_service import governance_service
-from .deps import ensure_active_member
+from .deps import current_address, ensure_active_member, ensure_acts_as_self
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,9 @@ MAX_STATEMENT_LENGTH = 3000
 MAX_SEATS = 50
 MAX_PHASE_DAYS = 90
 MAX_TERM_MONTHS = 48
+MAX_PAGE_SIZE = 200
+# Cuántas elecciones se leen antes de filtrar por estado derivado de fechas.
+MAX_SCAN = 200
 
 
 # === Models ===
@@ -180,12 +184,28 @@ class RepresentativeResponse(BaseModel):
 
 # === Membership dependencies (C-3) ===
 
-async def verified_candidate(request: CandidacyCreate) -> CandidacyCreate:
+async def verified_candidate(
+    request: CandidacyCreate,
+    authenticated: str = Depends(current_address),
+) -> CandidacyCreate:
+    ensure_acts_as_self(
+        request.candidate_address,
+        authenticated,
+        "postularte a una elección",
+    )
     await ensure_active_member(request.candidate_address, "postularse a una elección")
     return request
 
 
-async def verified_election_voter(request: ElectionVoteRequest) -> ElectionVoteRequest:
+async def verified_election_voter(
+    request: ElectionVoteRequest,
+    authenticated: str = Depends(current_address),
+) -> ElectionVoteRequest:
+    ensure_acts_as_self(
+        request.voter_address,
+        authenticated,
+        "votar en una elección",
+    )
     await ensure_active_member(request.voter_address, "votar en una elección")
     return request
 
@@ -210,8 +230,35 @@ async def _election_counts(election_id: str) -> tuple[int, int]:
     return candidacy_count, vote_count
 
 
-async def _to_election_response(election: dict) -> ElectionResponse:
-    candidacy_count, vote_count = await _election_counts(election["id"])
+async def _counts_by_election(election_ids: list[str]) -> dict[str, tuple[int, int]]:
+    """Candidacy/vote totals for many elections in two aggregations.
+
+    Listing elections used to run two count_documents() per election, so a
+    page of 100 elections meant 200 round trips on a public endpoint.
+    """
+    if not election_ids:
+        return {}
+
+    async def _group(collection) -> dict[str, int]:
+        rows = await collection().aggregate([
+            {"$match": {"election_id": {"$in": election_ids}}},
+            {"$group": {"_id": "$election_id", "n": {"$sum": 1}}},
+        ]).to_list(length=len(election_ids))
+        return {row["_id"]: row["n"] for row in rows}
+
+    candidacies = await _group(candidacies_collection)
+    votes = await _group(election_votes_collection)
+    return {
+        election_id: (candidacies.get(election_id, 0), votes.get(election_id, 0))
+        for election_id in election_ids
+    }
+
+
+def _build_election_response(
+    election: dict,
+    candidacy_count: int,
+    vote_count: int,
+) -> ElectionResponse:
     return ElectionResponse(
         **{k: election[k] for k in (
             "id", "title", "description", "seats", "status",
@@ -222,13 +269,26 @@ async def _to_election_response(election: dict) -> ElectionResponse:
     )
 
 
+async def _to_election_response(election: dict) -> ElectionResponse:
+    candidacy_count, vote_count = await _election_counts(election["id"])
+    return _build_election_response(election, candidacy_count, vote_count)
+
+
 # === Election Endpoints ===
 
 @router.post("/elections", response_model=ElectionResponse)
-async def create_election(request: ElectionCreate):
+async def create_election(
+    request: ElectionCreate,
+    authenticated: str = Depends(current_address),
+):
     """Open a representative election (nominations start immediately)."""
     # Same gate as proposals: opening an election is a governance action,
     # not something any address on the internet should be able to do.
+    ensure_acts_as_self(
+        request.creator_address,
+        authenticated,
+        "convocar una elección",
+    )
     await ensure_active_member(request.creator_address, "convocar elecciones")
     now = datetime.now(timezone.utc)
     election = {
@@ -249,20 +309,30 @@ async def create_election(request: ElectionCreate):
 
 
 @router.get("/elections", response_model=List[ElectionResponse])
-async def list_elections(status: Optional[str] = None, limit: int = 20):
+async def list_elections(
+    status: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
+):
     """List elections, most recent first, with date-derived statuses."""
-    cursor = elections_collection().find({}).sort("created_at", -1).limit(100)
-    elections = await cursor.to_list(length=100)
+    cursor = elections_collection().find({}).sort("created_at", -1).limit(MAX_SCAN)
+    elections = await cursor.to_list(length=MAX_SCAN)
 
-    synced = []
+    # Status is derived from dates, so the filter can only be applied after
+    # syncing; the counts are then fetched for the selected page only.
+    selected = []
     for election in elections:
         election = await governance_service.sync_election_status(election)
         if status and election["status"] != status:
             continue
-        synced.append(await _to_election_response(election))
-        if len(synced) >= limit:
+        selected.append(election)
+        if len(selected) >= limit:
             break
-    return synced
+
+    counts = await _counts_by_election([e["id"] for e in selected])
+    return [
+        _build_election_response(election, *counts.get(election["id"], (0, 0)))
+        for election in selected
+    ]
 
 
 @router.get("/elections/{election_id}", response_model=ElectionResponse)
@@ -329,6 +399,14 @@ async def vote_in_election(
     request: ElectionVoteRequest = Depends(verified_election_voter),
 ):
     """Vote for a candidate. One ballot per member, weighted by delegations."""
+    if settings.is_production:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "El voto en elecciones está bloqueado en producción hasta "
+                "implementar y persistir papeletas EIP-712 verificables."
+            ),
+        )
     election = await _get_election_or_404(election_id)
 
     if election["status"] != "voting":
@@ -472,11 +550,14 @@ async def list_representatives():
     }).sort("votes", -1)
     reps = await cursor.to_list(length=200)
 
+    # One $in query instead of one lookup per representative.
+    election_ids = list({rep["election_id"] for rep in reps})
     titles = {}
-    for rep in reps:
-        if rep["election_id"] not in titles:
-            election = await elections_collection().find_one({"id": rep["election_id"]})
-            titles[rep["election_id"]] = election["title"] if election else None
+    if election_ids:
+        elections = await elections_collection().find(
+            {"id": {"$in": election_ids}}, {"id": 1, "title": 1}
+        ).to_list(length=len(election_ids))
+        titles = {e["id"]: e.get("title") for e in elections}
 
     return [
         RepresentativeResponse(

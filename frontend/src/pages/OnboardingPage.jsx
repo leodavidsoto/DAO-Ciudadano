@@ -1,5 +1,5 @@
 /**
- * Flujo de verificación ciudadana (/unete).
+ * Flujo piloto de registro ciudadano (/unete).
  *
  * Rediseñado para continuar la identidad visual de la landing pública
  * (styles/landing.css): azul #003897, rojo #CB2C27, Poppins + Open Sans,
@@ -9,14 +9,18 @@
  * cambiado de sitio.
  *
  * Los componentes de cada paso NO se tocaron: siguen usando su vocabulario
- * de clases `cyber-*`, que styles/onboarding-estamosdao.css redefine
- * dentro del contenedor `.estamosdao-flow`. Así el rediseño no arriesga la
- * lógica del flujo (NFC, liveness, wallet, minteo), que es la parte
- * delicada.
+ * de clases `cyber-*`, que `styles/civic.css` redefine por completo dentro
+ * del contenedor `.civic-app`. Así el rediseño no arriesga la lógica del
+ * flujo (NFC, liveness, wallet, minteo), que es la parte delicada.
+ *
+ * `.civic-onboarding` (en App.css) cubría solo cuatro de esas clases, así
+ * que botones, insignias, campos y avisos seguían saliendo oscuros a mitad
+ * del flujo. La capa completa vive ahora en `styles/civic.css`.
  */
 import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useOnboarding } from '@/context';
+import '../styles/civic.css';
 import {
     CyberStep,
     ErrorDisplay,
@@ -32,7 +36,6 @@ import {
     SuccessStep,
     DashboardStep,
 } from '@/components/onboarding';
-import '../styles/onboarding-estamosdao.css';
 
 const AZUL = '#003897';
 const TINTA = '#0B2545';
@@ -41,8 +44,8 @@ const TINTA = '#0B2545';
  *  caen en esa etapa; `after`, los que ya la dejaron atrás. */
 const ETAPAS = [
     { n: 1, title: 'Método', match: ['method', 'registro'], after: ['clave', 'nfc', 'selfie', 'consent', 'wallet', 'mint', 'success', 'dashboard'] },
-    { n: 2, title: 'Identidad', match: ['clave', 'nfc', 'selfie'], after: ['consent', 'wallet', 'mint', 'success', 'dashboard'] },
-    { n: 3, title: 'Consentimiento', match: ['consent'], after: ['wallet', 'mint', 'success', 'dashboard'] },
+    { n: 2, title: 'Prueba piloto', match: ['clave', 'nfc', 'selfie'], after: ['consent', 'wallet', 'mint', 'success', 'dashboard'] },
+    { n: 3, title: 'Limitaciones', match: ['consent'], after: ['wallet', 'mint', 'success', 'dashboard'] },
     { n: 4, title: 'Billetera', match: ['wallet'], after: ['mint', 'success', 'dashboard'] },
     { n: 5, title: 'Credencial', match: ['mint'], after: ['success', 'dashboard'] },
 ];
@@ -72,7 +75,7 @@ const OnboardingPage = ({ appearance }) => {
     };
 
     return (
-        <div className={`estamosdao-flow ${appearance === 'civic' ? 'civic-onboarding' : ''}`}>
+        <div className={`estamosdao-flow ${appearance === 'civic' ? 'civic-app civic-onboarding' : ''}`}>
             {/* ===== Cabecera: misma marca y misma altura que la landing ===== */}
             <header
                 style={{
@@ -129,19 +132,19 @@ const OnboardingPage = ({ appearance }) => {
                         fontFamily: 'Poppins, sans-serif', fontSize: 11.5, fontWeight: 500,
                         letterSpacing: '0.06em', color: '#33456B', boxShadow: '0 2px 8px rgba(11,37,69,0.05)',
                     }}>
-                        <i className="ph-bold ph-shield-check" style={{ fontSize: 14, color: AZUL }} />
-                        UNA PERSONA, UN VOTO
+                        <i className="ph-bold ph-flask" style={{ fontSize: 14, color: AZUL }} />
+                        PILOTO TÉCNICO
                     </div>
 
                     <h1 style={{
                         fontFamily: 'Poppins, sans-serif', fontWeight: 600, fontSize: 'clamp(28px, 4.4vw, 42px)',
                         lineHeight: 1.12, letterSpacing: '-0.02em', color: AZUL, margin: '18px 0 0',
                     }}>
-                        Verifica tu identidad
+                        Prueba el registro ciudadano
                     </h1>
                     <p style={{ fontSize: 16.5, lineHeight: 1.6, color: '#46536E', margin: '14px auto 0', maxWidth: 520 }}>
-                        Una sola vez. Recibes una credencial que no se puede vender ni transferir,
-                        y con ella participas en cada votación.
+                        Este recorrido demuestra la experiencia propuesta. Los métodos disponibles
+                        todavía no acreditan tu identidad ni habilitan participación oficial.
                     </p>
                 </div>
 
@@ -193,8 +196,8 @@ const OnboardingPage = ({ appearance }) => {
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
                     fontSize: 13, color: '#8090AD', textAlign: 'center', flexWrap: 'wrap',
                 }}>
-                    <i className="ph ph-lock-simple" style={{ fontSize: 15 }} />
-                    Tus datos se cifran antes de guardarse. EstamosDAO Chile · código abierto
+                    <i className="ph ph-info" style={{ fontSize: 15 }} />
+                    Piloto técnico con limitaciones abiertas · EstamosDAO Chile · código abierto
                 </footer>
             </div>
         </div>

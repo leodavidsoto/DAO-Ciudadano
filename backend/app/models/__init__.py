@@ -1,12 +1,9 @@
 # Models module
 from .schemas import (
-    StatusCheck, StatusCheckCreate,
     ClaveUnicaRequest, ClaveUnicaResponse,
-    NFCRequest, NFCResponse, LivenessResponse, IdentityEvent,
-    WalletConnectResponse,
+    NFCRequest, NFCResponse, LivenessResponse,
     MintSBTRequest, MintSBTResponse, Member,
     DashboardStats,
     Proposal, Vote,
     User, UserRegisterRequest, UserLoginRequest, UserResponse
 )
-

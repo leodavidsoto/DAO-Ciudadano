@@ -14,3 +14,6 @@ httpx==0.28.1              # AsyncClient en tests/conftest.py
 black==24.10.0
 flake8==7.1.1
 mypy==1.14.0
+
+# === Cadena de suministro ===
+pip-audit==2.10.1

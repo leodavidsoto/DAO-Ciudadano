@@ -16,17 +16,10 @@ const MembershipQR = ({
     const [copied, setCopied] = useState(false);
     const [showFullscreen, setShowFullscreen] = useState(false);
 
-    // Generate verification URL
-    const verificationUrl = `${window.location.origin}/verify/${tokenId}`;
-
-    // QR data payload
-    const qrData = JSON.stringify({
-        type: 'dao_ciudadana_member',
-        tokenId,
-        wallet: walletAddress?.slice(0, 10) + '...',
-        level: assuranceLevel,
-        v: 1, // version
-    });
+    // Point to a real backend verification endpoint. The previous payload was
+    // self-asserted JSON and linked to a frontend route that did not exist.
+    const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+    const verificationUrl = `${backendUrl}/api/membership/verify/${tokenId}`;
 
     const handleCopy = () => {
         navigator.clipboard.writeText(verificationUrl);
@@ -46,7 +39,7 @@ const MembershipQR = ({
         img.onload = () => {
             canvas.width = 400;
             canvas.height = 400;
-            ctx.fillStyle = '#0a0a0f';
+            ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, 400, 400);
             ctx.drawImage(img, 50, 50, 300, 300);
 
@@ -63,8 +56,8 @@ const MembershipQR = ({
         if (navigator.share) {
             try {
                 await navigator.share({
-                    title: 'Mi Membresía DAO Ciudadana',
-                    text: `Soy miembro verificado de DAO Ciudadana. Token #${tokenId}`,
+                    title: 'Consulta de membresía DAO Ciudadana',
+                    text: `Consulta el estado de la credencial #${tokenId}`,
                     url: verificationUrl,
                 });
             } catch (err) {
@@ -77,49 +70,55 @@ const MembershipQR = ({
 
     return (
         <>
-            <div className="membership-qr glass-dark rounded-xl p-6 text-center">
+            <div className="membership-qr civic-card civic-card-pad text-center">
                 {/* Header */}
                 <div className="flex items-center justify-center gap-2 mb-4">
-                    <QrCode className="w-5 h-5 text-cyan-400" />
-                    <h3 className="font-bold text-white">Credencial Digital</h3>
+                    <QrCode className="w-5 h-5" style={{ color: '#003897' }} />
+                    <h3 className="civic-ink font-bold" style={{ fontFamily: 'Poppins, sans-serif' }}>
+                        Credencial digital
+                    </h3>
                 </div>
 
                 {/* QR Code Container */}
                 <div
                     className="qr-container relative inline-block p-4 bg-white rounded-lg cursor-pointer hover:scale-105 transition-transform"
+                    style={{ border: '1px solid #E5EBF5' }}
                     onClick={() => setShowFullscreen(true)}
                 >
                     <QRCodeSVG
                         id="membership-qr-svg"
-                        value={qrData}
+                        value={verificationUrl}
                         size={180}
                         level="H"
                         includeMargin={false}
                         bgColor="#ffffff"
-                        fgColor="#0a0a0f"
+                        fgColor="#0B2545"
                     />
 
                     {/* Center logo overlay */}
                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                        <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center border-2 border-cyan-500">
-                            <Shield className="w-6 h-6 text-cyan-600" />
+                        <div
+                            className="w-10 h-10 bg-white rounded-lg flex items-center justify-center"
+                            style={{ border: '2px solid #003897' }}
+                        >
+                            <Shield className="w-6 h-6" style={{ color: '#003897' }} />
                         </div>
                     </div>
                 </div>
 
                 {/* Token Info */}
                 <div className="mt-4 space-y-1">
-                    <div className="text-2xl font-bold text-cyan-400 font-mono">
+                    <div className="civic-stat-value" style={{ color: '#003897' }}>
                         #{tokenId}
                     </div>
                     {memberName && (
-                        <div className="text-white font-medium">{memberName}</div>
+                        <div className="civic-ink font-medium">{memberName}</div>
                     )}
-                    <div className="text-xs text-gray-400 font-mono">
-                        {walletAddress?.slice(0, 8)}...{walletAddress?.slice(-6)}
+                    <div className="civic-mono civic-muted">
+                        {walletAddress?.slice(0, 8)}…{walletAddress?.slice(-6)}
                     </div>
-                    <div className="inline-block px-2 py-1 bg-green-500/20 text-green-400 text-xs rounded-full border border-green-500/30">
-                        Nivel {assuranceLevel}
+                    <div>
+                        <span className="civic-tag civic-tag-blue">Nivel {assuranceLevel}</span>
                     </div>
                 </div>
 
@@ -129,7 +128,8 @@ const MembershipQR = ({
                         onClick={handleCopy}
                         variant="outline"
                         size="sm"
-                        className="border-gray-600 text-gray-400 hover:text-cyan-400"
+                        className="civic-btn civic-btn-sm civic-btn-quiet"
+                        aria-label="Copiar enlace de verificación"
                     >
                         {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                     </Button>
@@ -137,7 +137,8 @@ const MembershipQR = ({
                         onClick={handleDownload}
                         variant="outline"
                         size="sm"
-                        className="border-gray-600 text-gray-400 hover:text-cyan-400"
+                        className="civic-btn civic-btn-sm civic-btn-quiet"
+                        aria-label="Descargar el código QR"
                     >
                         <Download className="w-4 h-4" />
                     </Button>
@@ -145,33 +146,35 @@ const MembershipQR = ({
                         onClick={handleShare}
                         variant="outline"
                         size="sm"
-                        className="border-gray-600 text-gray-400 hover:text-cyan-400"
+                        className="civic-btn civic-btn-sm civic-btn-quiet"
+                        aria-label="Compartir la credencial"
                     >
                         <Share2 className="w-4 h-4" />
                     </Button>
                 </div>
 
-                <p className="text-xs text-gray-500 mt-3">
-                    Escanea para verificar autenticidad
+                <p className="civic-faint text-xs mt-3">
+                    Escanea para consultar el estado de la credencial
                 </p>
             </div>
 
             {/* Fullscreen Modal */}
             {showFullscreen && (
                 <div
-                    className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-8"
+                    className="fixed inset-0 z-50 flex items-center justify-center p-8"
+                    style={{ background: 'rgba(11, 37, 69, 0.85)' }}
                     onClick={() => setShowFullscreen(false)}
                 >
                     <div className="bg-white p-8 rounded-2xl">
                         <QRCodeSVG
-                            value={qrData}
+                            value={verificationUrl}
                             size={300}
                             level="H"
                             includeMargin={true}
                             bgColor="#ffffff"
                             fgColor="#0a0a0f"
                         />
-                        <div className="text-center mt-4 text-black font-bold">
+                        <div className="text-center mt-4 font-bold" style={{ color: '#0B2545' }}>
                             Token #{tokenId}
                         </div>
                     </div>

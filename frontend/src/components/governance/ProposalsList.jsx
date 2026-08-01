@@ -1,17 +1,26 @@
 /**
  * Proposals List Component
  * Display and vote on governance proposals
+ *
+ * Estilo cívico (styles/civic.css): fondo claro, azul/rojo de la bandera.
+ * El verde solo marca resultados favorables; nunca es un color de marca.
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
     Vote, ThumbsUp, ThumbsDown, MinusCircle,
     Clock, Users, CheckCircle, XCircle, Timer,
-    PlusCircle, ChevronRight
+    PlusCircle
 } from 'lucide-react';
-import { Button } from '../ui/button';
-import { Badge } from '../ui/badge';
 import { governanceAPI } from '@/lib/api';
+import { generateNonce } from '@/lib/security';
 import CreateProposalModal from './CreateProposalModal';
+
+const ESTADOS = {
+    active: { tag: 'civic-tag-blue', label: 'En votación', icon: <Clock className="w-3 h-3" /> },
+    passed: { tag: 'civic-tag-green', label: 'Aprobada', icon: <CheckCircle className="w-3 h-3" /> },
+    rejected: { tag: 'civic-tag-red', label: 'Rechazada', icon: <XCircle className="w-3 h-3" /> },
+    expired: { tag: 'civic-tag-neutral', label: 'Expirada', icon: <Timer className="w-3 h-3" /> },
+};
 
 const ProposalCard = ({ proposal, walletAddress, onVote }) => {
     const [voting, setVoting] = useState(false);
@@ -20,19 +29,7 @@ const ProposalCard = ({ proposal, walletAddress, onVote }) => {
     const forPercent = totalVotes > 0 ? (proposal.votes_for / totalVotes) * 100 : 0;
     const againstPercent = totalVotes > 0 ? (proposal.votes_against / totalVotes) * 100 : 0;
 
-    const statusColors = {
-        active: 'bg-green-500/20 text-green-400 border-green-500/30',
-        passed: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
-        rejected: 'bg-red-500/20 text-red-400 border-red-500/30',
-        expired: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
-    };
-
-    const statusIcons = {
-        active: <Clock className="w-3 h-3" />,
-        passed: <CheckCircle className="w-3 h-3" />,
-        rejected: <XCircle className="w-3 h-3" />,
-        expired: <Timer className="w-3 h-3" />,
-    };
+    const estado = ESTADOS[proposal.status] || ESTADOS.expired;
 
     const handleVote = async (voteType) => {
         if (!walletAddress || voting) return;
@@ -48,103 +45,74 @@ const ProposalCard = ({ proposal, walletAddress, onVote }) => {
     const timeLeft = Math.max(0, Math.floor((endsAt - new Date()) / (1000 * 60 * 60 * 24)));
 
     return (
-        <div className="proposal-card glass-dark p-4 rounded-lg border border-cyan-500/20 hover:border-cyan-500/40 transition-all">
-            {/* Header */}
-            <div className="flex items-start justify-between mb-3">
-                <div className="flex-1">
-                    <h3 className="font-bold text-white text-lg mb-1">{proposal.title}</h3>
-                    <div className="flex items-center gap-2">
-                        <Badge className={`text-xs ${statusColors[proposal.status]} border`}>
-                            {statusIcons[proposal.status]}
-                            <span className="ml-1">{proposal.status.toUpperCase()}</span>
-                        </Badge>
-                        <span className="text-xs text-gray-500 font-mono">
-                            {proposal.category}
+        <article className="civic-card civic-card-pad civic-card-hover">
+            <div className="flex items-start justify-between gap-4 mb-3">
+                <div className="flex-1 min-w-0">
+                    <h3 className="civic-ink font-semibold text-base mb-2" style={{ fontFamily: 'Poppins, sans-serif' }}>
+                        {proposal.title}
+                    </h3>
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`civic-tag ${estado.tag}`}>
+                            {estado.icon}
+                            {estado.label}
                         </span>
+                        <span className="civic-faint text-xs">{proposal.category}</span>
                     </div>
                 </div>
                 {proposal.status === 'active' && (
-                    <div className="text-right">
-                        <div className="text-xs text-gray-400">Cierra en</div>
-                        <div className="text-cyan-400 font-mono font-bold">{timeLeft}d</div>
+                    <div className="text-right shrink-0">
+                        <div className="civic-faint text-xs">Cierra en</div>
+                        <div className="civic-ink font-bold" style={{ fontFamily: 'Poppins, sans-serif' }}>
+                            {timeLeft}d
+                        </div>
                     </div>
                 )}
             </div>
 
-            {/* Description */}
-            <p className="text-gray-400 text-sm mb-4 line-clamp-2">
-                {proposal.description}
-            </p>
+            <p className="civic-muted text-sm mb-4 line-clamp-2">{proposal.description}</p>
 
-            {/* Vote Progress Bar */}
             <div className="mb-4">
-                <div className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span className="text-green-400">A favor: {proposal.votes_for}</span>
-                    <span className="text-red-400">En contra: {proposal.votes_against}</span>
+                <div className="flex justify-between text-xs mb-1.5">
+                    <span style={{ color: '#1F6B45' }}>A favor: {proposal.votes_for}</span>
+                    <span style={{ color: '#A9211D' }}>En contra: {proposal.votes_against}</span>
                 </div>
-                <div className="h-2 bg-gray-800 rounded-full overflow-hidden flex">
-                    <div
-                        className="bg-green-500 transition-all"
-                        style={{ width: `${forPercent}%` }}
-                    />
-                    <div
-                        className="bg-red-500 transition-all"
-                        style={{ width: `${againstPercent}%` }}
-                    />
+                <div className="civic-bar">
+                    <div className="civic-bar-for" style={{ width: `${forPercent}%` }} />
+                    <div className="civic-bar-against" style={{ width: `${againstPercent}%` }} />
                 </div>
-                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <div className="flex justify-between civic-faint text-xs mt-1.5">
                     <span><Users className="inline w-3 h-3 mr-1" />{totalVotes} votos</span>
                     <span>Quórum: {proposal.quorum_required}</span>
                 </div>
             </div>
 
-            {/* Vote Buttons */}
             {proposal.status === 'active' && walletAddress && (
                 <div className="grid grid-cols-3 gap-2">
-                    <Button
-                        onClick={() => handleVote('for')}
-                        disabled={voting}
-                        className="bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30"
-                        size="sm"
-                    >
-                        <ThumbsUp className="w-4 h-4 mr-1" />
+                    <button onClick={() => handleVote('for')} disabled={voting} className="civic-vote civic-vote-for">
+                        <ThumbsUp className="w-4 h-4" />
                         A favor
-                    </Button>
-                    <Button
-                        onClick={() => handleVote('against')}
-                        disabled={voting}
-                        className="bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30"
-                        size="sm"
-                    >
-                        <ThumbsDown className="w-4 h-4 mr-1" />
+                    </button>
+                    <button onClick={() => handleVote('against')} disabled={voting} className="civic-vote civic-vote-against">
+                        <ThumbsDown className="w-4 h-4" />
                         En contra
-                    </Button>
-                    <Button
-                        onClick={() => handleVote('abstain')}
-                        disabled={voting}
-                        className="bg-gray-500/20 hover:bg-gray-500/30 text-gray-400 border border-gray-500/30"
-                        size="sm"
-                    >
-                        <MinusCircle className="w-4 h-4 mr-1" />
+                    </button>
+                    <button onClick={() => handleVote('abstain')} disabled={voting} className="civic-vote civic-vote-abstain">
+                        <MinusCircle className="w-4 h-4" />
                         Abstener
-                    </Button>
+                    </button>
                 </div>
             )}
-        </div>
+        </article>
     );
 };
 
-const ProposalsList = ({ walletAddress }) => {
+const ProposalsList = ({ walletAddress, signer }) => {
     const [proposals, setProposals] = useState([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState(null);
     const [showCreateModal, setShowCreateModal] = useState(false);
 
-    useEffect(() => {
-        loadProposals();
-    }, [filter]);
-
-    const loadProposals = async () => {
+    const loadProposals = useCallback(async () => {
         setLoading(true);
         try {
             const response = await governanceAPI.getProposals(filter);
@@ -154,11 +122,39 @@ const ProposalsList = ({ walletAddress }) => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [filter]);
+
+    useEffect(() => {
+        loadProposals();
+    }, [loadProposals]);
 
     const handleVote = async (proposalId, vote) => {
+        if (!signer) {
+            alert('Conecta y firma la sesión de tu wallet antes de votar.');
+            return;
+        }
         try {
-            const response = await governanceAPI.vote(proposalId, walletAddress, vote);
+            const { data: schema } = await governanceAPI.getBallotSchema();
+            const nonce = generateNonce();
+            const ballotTypes = { ...schema.types };
+            delete ballotTypes.EIP712Domain;
+            const signature = await signer.signTypedData(
+                schema.domain,
+                ballotTypes,
+                {
+                    proposalId,
+                    voter: walletAddress,
+                    choice: vote,
+                    nonce,
+                }
+            );
+            const response = await governanceAPI.vote(
+                proposalId,
+                walletAddress,
+                vote,
+                nonce,
+                signature
+            );
             if (response.data.ok) {
                 loadProposals(); // Reload to show updated counts
             } else {
@@ -166,70 +162,76 @@ const ProposalsList = ({ walletAddress }) => {
             }
         } catch (err) {
             console.error('Vote error:', err);
+            alert(
+                err.response?.data?.detail ||
+                (err.code === 4001 ? 'Firma rechazada por el usuario.' : 'No fue posible firmar o registrar el voto.')
+            );
         }
     };
 
     const filters = [
         { value: null, label: 'Todas' },
-        { value: 'active', label: 'Activas' },
+        { value: 'active', label: 'En votación' },
         { value: 'passed', label: 'Aprobadas' },
         { value: 'rejected', label: 'Rechazadas' },
     ];
 
     return (
-        <div className="proposals-list">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-2">
-                    <Vote className="w-6 h-6 text-cyan-400" />
-                    <h2 className="text-xl font-bold text-white">Propuestas</h2>
-                </div>
+        <section>
+            <div className="flex items-center justify-between gap-4 flex-wrap mb-5">
+                <h2 className="civic-section-title">
+                    <Vote className="w-5 h-5" />
+                    Propuestas
+                </h2>
                 {walletAddress && (
-                    <Button
+                    <button
                         onClick={() => setShowCreateModal(true)}
-                        className="cyber-button-premium"
-                        size="sm"
+                        className="civic-btn civic-btn-primary civic-btn-sm"
                     >
-                        <PlusCircle className="w-4 h-4 mr-1" />
-                        Nueva Propuesta
-                    </Button>
+                        <PlusCircle className="w-4 h-4" />
+                        Nueva propuesta
+                    </button>
                 )}
             </div>
 
-            {/* Filters */}
-            <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
+            <div className="flex gap-2 mb-5 overflow-x-auto pb-1">
                 {filters.map(f => (
-                    <Button
+                    <button
                         key={f.value || 'all'}
                         onClick={() => setFilter(f.value)}
-                        variant={filter === f.value ? 'default' : 'outline'}
-                        size="sm"
-                        className={filter === f.value
-                            ? 'bg-cyan-500/30 text-cyan-400 border-cyan-500'
-                            : 'border-gray-600 text-gray-400'}
+                        className={
+                            'civic-btn civic-btn-sm ' +
+                            (filter === f.value ? 'civic-btn-ghost' : 'civic-btn-quiet')
+                        }
+                        aria-pressed={filter === f.value}
                     >
                         {f.label}
-                    </Button>
+                    </button>
                 ))}
             </div>
 
-            {/* Proposals Grid */}
             {loading ? (
-                <div className="text-center py-8 text-gray-400">
-                    <div className="animate-spin w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full mx-auto mb-2" />
-                    Cargando propuestas...
+                <div className="civic-loading">
+                    <span className="civic-spinner" />
+                    Cargando propuestas…
                 </div>
             ) : proposals.length === 0 ? (
-                <div className="text-center py-12 glass-dark rounded-lg">
-                    <Vote className="w-12 h-12 mx-auto text-gray-500 mb-3" />
-                    <p className="text-gray-400">No hay propuestas {filter ? `${filter}s` : ''}</p>
+                <div className="civic-empty">
+                    <Vote className="w-10 h-10" />
+                    <p className="civic-empty-title">Todavía no hay propuestas</p>
+                    <p className="civic-empty-desc">
+                        {filter
+                            ? 'Ninguna propuesta coincide con este filtro.'
+                            : 'Cuando alguien presente la primera, aparecerá aquí.'}
+                    </p>
                     {walletAddress && (
-                        <Button
+                        <button
                             onClick={() => setShowCreateModal(true)}
-                            className="mt-4 cyber-button"
+                            className="civic-btn civic-btn-primary civic-btn-sm"
+                            style={{ marginTop: 18 }}
                         >
                             Crear la primera propuesta
-                        </Button>
+                        </button>
                     )}
                 </div>
             ) : (
@@ -245,14 +247,13 @@ const ProposalsList = ({ walletAddress }) => {
                 </div>
             )}
 
-            {/* Create Proposal Modal */}
             <CreateProposalModal
                 isOpen={showCreateModal}
                 onClose={() => setShowCreateModal(false)}
                 walletAddress={walletAddress}
                 onSuccess={loadProposals}
             />
-        </div>
+        </section>
     );
 };
 

@@ -29,9 +29,6 @@ async function main() {
     console.log("Add this to your backend .env (see readiness.py):");
     console.log(`SBT_CONTRACT_ADDRESS=${address}`);
     console.log("");
-    console.log("Add this to your frontend .env:");
-    console.log(`REACT_APP_SBT_CONTRACT_ADDRESS=${address}`);
-    console.log("");
     console.log("If the backend mints with a DIFFERENT key than the deployer,");
     console.log("grant it MINTER_ROLE:");
     console.log(`  contract.grantRole(await contract.MINTER_ROLE(), "<backend minter address>")`);

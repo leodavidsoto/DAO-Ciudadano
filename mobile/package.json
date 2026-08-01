@@ -8,6 +8,7 @@
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest",
+    "typecheck": "tsc --noEmit",
     "postinstall": "patch-package"
   },
   "dependencies": {
@@ -20,7 +21,6 @@
     "lottie-react-native": "^7.0.0",
     "react": "19.2.0",
     "react-native": "0.83.0",
-    "react-native-crypto": "^2.2.0",
     "react-native-gesture-handler": "^2.20.0",
     "react-native-get-random-values": "^1.11.0",
     "react-native-keychain": "^9.2.2",
@@ -35,9 +35,9 @@
     "@babel/core": "^7.25.2",
     "@babel/preset-env": "^7.25.3",
     "@babel/runtime": "^7.25.0",
-    "@react-native-community/cli": "20.0.0",
-    "@react-native-community/cli-platform-android": "20.0.0",
-    "@react-native-community/cli-platform-ios": "20.0.0",
+    "@react-native-community/cli": "20.2.0",
+    "@react-native-community/cli-platform-android": "20.2.0",
+    "@react-native-community/cli-platform-ios": "20.2.0",
     "@react-native/babel-preset": "0.83.0",
     "@react-native/eslint-config": "0.83.0",
     "@react-native/metro-config": "0.83.0",
@@ -53,6 +53,6 @@
     "typescript": "^5.8.3"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19.4"
   }
 }

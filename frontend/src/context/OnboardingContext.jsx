@@ -7,6 +7,17 @@ import { authAPI, membershipAPI, dashboardAPI } from '../lib/api';
 
 const OnboardingContext = createContext(null);
 
+const apiErrorMessage = (err, connectionFallback, rejectionLabel) => {
+    const apiMessage = err.response?.data?.detail || err.response?.data?.error;
+    if (typeof apiMessage === 'string' && apiMessage.trim()) {
+        return apiMessage;
+    }
+    if (err.response) {
+        return `${rejectionLabel} (HTTP ${err.response.status}).`;
+    }
+    return connectionFallback;
+};
+
 // All steps in order
 export const STEPS = [
     'method',
@@ -49,7 +60,11 @@ export const OnboardingProvider = ({ children }) => {
 
     // === API Actions ===
 
-    const authenticateClaveUnica = useCallback(async () => {
+    const authenticateClaveUnica = useCallback(async (processingAccepted = false) => {
+        if (!processingAccepted) {
+            setError('Confirma la advertencia de tratamiento antes de enviar el RUT al backend.');
+            return;
+        }
         setLoading(true);
         setError('');
         try {
@@ -61,7 +76,11 @@ export const OnboardingProvider = ({ children }) => {
                 setError(response.data.error || 'Error en ClaveÚnica');
             }
         } catch (err) {
-            setError('Error de conexión con ClaveÚnica');
+            setError(apiErrorMessage(
+                err,
+                'No fue posible contactar al servicio de ClaveÚnica simulado.',
+                'El servicio rechazó la simulación de ClaveÚnica'
+            ));
         } finally {
             setLoading(false);
         }
@@ -79,13 +98,21 @@ export const OnboardingProvider = ({ children }) => {
                 setError(response.data.error || 'Error en lectura NFC');
             }
         } catch (err) {
-            setError('Error de conexión con NFC');
+            setError(apiErrorMessage(
+                err,
+                'No fue posible contactar al servicio NFC simulado.',
+                'El servicio rechazó la simulación NFC'
+            ));
         } finally {
             setLoading(false);
         }
     }, []);
 
-    const analyzeLiveness = useCallback(async () => {
+    const analyzeLiveness = useCallback(async (processingAccepted = false) => {
+        if (!processingAccepted) {
+            setError('Confirma la advertencia de tratamiento antes de enviar la imagen al backend.');
+            return;
+        }
         if (!selectedFile) {
             setError('Por favor selecciona una imagen');
             return;
@@ -102,7 +129,11 @@ export const OnboardingProvider = ({ children }) => {
                 setError(response.data.error || 'Error en detección de vida');
             }
         } catch (err) {
-            setError('Error de conexión en análisis de selfie');
+            setError(apiErrorMessage(
+                err,
+                'No fue posible contactar al servicio de análisis de imagen.',
+                'El servicio rechazó el análisis de imagen'
+            ));
         } finally {
             setLoading(false);
         }
@@ -146,6 +177,12 @@ export const OnboardingProvider = ({ children }) => {
 
     const mintSBT = useCallback(async () => {
         if (!wallet.address) return;
+        if (nfc.verified !== true || !nfc.doc_hash) {
+            setError(
+                'No existe una verificación de identidad válida. La lectura Web NFC del piloto no basta para crear una membresía.'
+            );
+            return;
+        }
 
         setLoading(true);
         setError('');
@@ -153,31 +190,48 @@ export const OnboardingProvider = ({ children }) => {
             const response = await membershipAPI.mint(
                 wallet.address,
                 clave.assurance_level || 'AL1',
-                nfc.doc_hash || '0xDOC'
+                nfc.doc_hash
             );
 
             if (response.data.ok) {
-                setMint(response.data);
+                setMint({ ...response.data, status: 'active' });
                 await loadStats();
                 setStep('success');
             } else {
                 // The wallet may already hold an SBT (backend rejects duplicates).
                 // Recover it and continue instead of dead-ending on the error.
                 const existing = await fetchExistingMembership(wallet.address);
-                if (existing) {
-                    setMint({ ok: true, token_id: existing.token_id, tx_hash: existing.tx_hash || null });
+                if (existing?.status === 'active' && existing?.valid === true) {
+                    setMint({
+                        ok: true,
+                        token_id: existing.token_id,
+                        tx_hash: existing.tx_hash || null,
+                        status: 'active',
+                    });
                     await loadStats();
                     setStep('success');
+                } else if (existing) {
+                    setError(
+                        `La membresía #${existing.token_id} no es válida (${existing.status || 'estado desconocido'}). ` +
+                        'No puede presentarse ni reutilizarse como una membresía vigente.'
+                    );
                 } else {
-                    setError(response.data.error || 'Error minteando SBT');
+                    setError(response.data.error || 'Error creando la credencial');
                 }
             }
         } catch (err) {
-            setError('Error de conexión en mint');
+            const apiMessage = err.response?.data?.detail || err.response?.data?.error;
+            if (typeof apiMessage === 'string' && apiMessage.trim()) {
+                setError(apiMessage);
+            } else if (err.response) {
+                setError(`El servicio rechazó la creación de la credencial (HTTP ${err.response.status}).`);
+            } else {
+                setError('No fue posible contactar al servicio de membresía.');
+            }
         } finally {
             setLoading(false);
         }
-    }, [wallet.address, clave.assurance_level, nfc.doc_hash, fetchExistingMembership, loadStats]);
+    }, [wallet.address, clave.assurance_level, nfc.doc_hash, nfc.verified, fetchExistingMembership, loadStats]);
 
 
     // File handling

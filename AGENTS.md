@@ -10,15 +10,22 @@ Instrucciones para cualquier agente de IA que trabaje en este repositorio (Codex
 
 Plataforma de membresía ciudadana chilena: verificación de identidad que emite un Soulbound Token no transferible como credencial de participación en una DAO, con gobernanza (propuestas, votos, delegación, elecciones de representantes).
 
-**Estado:** a mitad de camino entre simulado y real. Léelo en `HANDOFF.md` antes de asumir capacidades.
+**Estado:** piloto técnico endurecido, todavía no apto para identidad civil ni
+minteo de producción. Léelo en `HANDOFF.md` antes de asumir capacidades.
 
 ---
 
-## Los tres hechos que definen el estado actual
+## Los cuatro hechos que definen el estado actual
 
-1. **`totalSupply()` del contrato en Sepolia = 0.** Ningún SBT se ha minteado on-chain. Las "membresías" son documentos de MongoDB.
-2. **Ningún endpoint exige autenticación.** Hay control de membresía en gobernanza, pero no de identidad: el backend cree la dirección que le manden en el cuerpo de la petición.
-3. **La verificación de identidad es simulada.** ClaveÚnica, NFC y liveness devuelven datos fabricados.
+1. **`totalSupply()` del contrato histórico en Sepolia = 0.** Esa dirección usa
+   otra ABI y no debe configurarse; aún no hay despliegue compatible.
+2. **Minteo y acciones mutantes de gobernanza exigen SIWE y actuar como la propia wallet.** En
+   producción solo se confía en membresías on-chain verificadas; el verificador
+   on-chain aún no está implementado y por eso falla cerrado.
+3. **La identidad civil real sigue pendiente.** ClaveÚnica, NFC, liveness y
+   RUT/email son demos explícitas y devuelven 503 con `APP_ENV=production`.
+4. **Hay una llave de proveedor expuesta en el historial Git público.** No copies
+   su valor: debe revocarse/rotarse y auditarse según `docs/SECURITY_RUNBOOK.md`.
 
 Verifícalo tú mismo:
 
@@ -72,32 +79,40 @@ curl -s -X POST https://ethereum-sepolia-rpc.publicnode.com \
 # Backend
 cd backend && pip install -r requirements-dev.txt
 uvicorn main:app --reload --port 8000
-pytest -q                                   # 72 tests
+pytest -q                                   # 157 tests
+python -m pip_audit -r requirements.txt --strict
 
 # Frontend
-cd frontend && npm install --legacy-peer-deps
+cd frontend && npm ci
 npm start
 npm run build
 
 # Contratos
-cd contracts && npm install
-npx hardhat test                            # 29 tests
+cd contracts && npm ci
+npx hardhat test                            # 31 tests
 npx hardhat coverage
 ```
 
 **Dependencias:** `requirements.txt` es solo producción y está mínimo a propósito (Render free: 512 MB y arranque en frío). `requirements-dev.txt` añade tests y linters, y es lo que instala el CI. `python-multipart` y `pymongo` no aparecen en ningún `import` pero son obligatorias — están documentadas en el propio archivo.
 
-**CI:** GitHub Actions con 4 jobs (backend pytest, contratos hardhat, slither, build del frontend). Debe quedar en verde antes de mergear.
+**CI:** GitHub Actions con 5 jobs (backend pytest + `pip-audit`, contratos
+Hardhat + auditoría npm, slither, build estricto del frontend + auditoría npm y
+gates estáticos/test/auditoría de mobile).
+Las Actions están fijadas por SHA. Debe quedar en verde antes de mergear; además
+falta configurar un ruleset de `main` que haga obligatorios esos checks.
 
 ---
 
 ## Antes de escribir código nuevo
 
-Hay tres decisiones de arquitectura sin resolver que bloquean la Fase 1 (autenticación y minteo real). Detalle en `docs/ROADMAP.md`:
+Hay tres decisiones de arquitectura con implementaciones provisionales que deben
+ratificarse por ADR antes de producción. Detalle en `docs/ROADMAP.md`:
 
 - **D-1** ¿quién mintea el SBT — backend custodial, voucher firmado por el usuario, o relayer?
-- **D-2** ¿qué se escribe on-chain como `identityHash`? El esquema actual es reversible por fuerza bruta.
-- **D-3** ¿la gobernanza es on-chain o off-chain con firmas verificables?
+- **D-2** ¿qué se escribe on-chain como `identityHash`? HMAC-SHA256 completo está
+  implementado para altas nuevas, pero falta KMS/rotación y migración legacy.
+- **D-3** ¿la gobernanza es on-chain o off-chain con firmas verificables? Las
+  propuestas usan EIP-712; elecciones y tally transaccional siguen pendientes.
 
 No son decisiones que un agente deba tomar solo: definen custodia de llaves privadas y qué se publica de forma permanente sobre cada ciudadano. Consúltalas con el dueño del proyecto y deja un ADR en `docs/`.
 
@@ -107,9 +122,9 @@ No son decisiones que un agente deba tomar solo: definen custodia de llaves priv
 
 ```
 Fase 0  Higiene y verdad          ✅ completa
-Fase 1  Auth + minteo real        ❌ bloqueante — requiere D-1 y D-2
-Fase 2  Tests y CI                ✅ completa
-Fase 3  Gobernanza verificable    🟡 3.1, 3.4, 3.5, 3.7 hechos · faltan 3.2, 3.3, 3.6, 3.8
+Fase 1  Auth + minteo real        🟡 SIWE/código listos; faltan identidad, ADR, despliegue y reconciliación
+Fase 2  Tests y CI                🟡 gates principales listos; faltan coverage/lint, release nativo y ruleset
+Fase 3  Gobernanza verificable    🟡 propuestas EIP-712; faltan elecciones firmadas, tally, on-chain, tesorería y Redis
 Fase 4  Identidad real            ❌ limitada por terceros (ClaveÚnica, PACE)
 Fase 5  Descentralización         ❌ pendiente
 ```

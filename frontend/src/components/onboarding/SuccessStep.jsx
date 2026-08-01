@@ -13,6 +13,7 @@ const SuccessStep = () => {
     const { mint, wallet, clave, setStep, loadStats } = useOnboarding();
     const [showCard, setShowCard] = useState(false);
     const [showQR, setShowQR] = useState(false);
+    const isOnChain = Boolean(mint.tx_hash);
 
     useEffect(() => {
         // Animate card entrance
@@ -48,62 +49,75 @@ const SuccessStep = () => {
 
     return (
         <CyberPanel
-            title="MEMBRESÍA DAO ACTIVADA"
-            description="Ciudadanía digital verificada • NFT registrado en blockchain"
+            title={isOnChain ? 'SBT CONFIRMADO EN BLOCKCHAIN' : 'REGISTRO DE PILOTO CREADO'}
+            description={isOnChain
+                ? 'La transacción on-chain puede verificarse de forma independiente'
+                : 'Guardado en el backend • sin NFT ni transacción blockchain'}
             icon={<CheckCircle2 className="h-8 w-8" />}
         >
             <div className="flex flex-col items-center gap-8">
-                {/* Holographic NFT Card and QR Code side by side */}
-                <div className="grid md:grid-cols-2 gap-6 w-full">
-                    <div
-                        className={`transition-all duration-700 ${showCard
-                            ? 'opacity-100 transform translate-y-0'
-                            : 'opacity-0 transform translate-y-8'
-                            }`}
-                    >
-                        <HolographicCard
-                            tokenId={mint.token_id}
-                            walletAddress={wallet.address}
-                            assuranceLevel="AL2"
-                        />
-                    </div>
+                {isOnChain ? (
+                    /* Holographic SBT card and verifiable QR side by side */
+                    <div className="grid md:grid-cols-2 gap-6 w-full">
+                        <div
+                            className={`transition-all duration-700 ${showCard
+                                ? 'opacity-100 transform translate-y-0'
+                                : 'opacity-0 transform translate-y-8'
+                                }`}
+                        >
+                            <HolographicCard
+                                tokenId={mint.token_id}
+                                walletAddress={wallet.address}
+                                assuranceLevel={clave?.assurance_level || 'AL1'}
+                            />
+                        </div>
 
-                    <div
-                        className={`transition-all duration-700 delay-200 ${showQR
-                            ? 'opacity-100 transform translate-y-0'
-                            : 'opacity-0 transform translate-y-8'
-                            }`}
-                    >
-                        <MembershipQR
-                            tokenId={mint.token_id}
-                            walletAddress={wallet.address}
-                            assuranceLevel={clave?.assurance_level || 'AL1'}
-                            memberName={clave?.nombre}
-                        />
+                        <div
+                            className={`transition-all duration-700 delay-200 ${showQR
+                                ? 'opacity-100 transform translate-y-0'
+                                : 'opacity-0 transform translate-y-8'
+                                }`}
+                        >
+                            <MembershipQR
+                                tokenId={mint.token_id}
+                                walletAddress={wallet.address}
+                                assuranceLevel={clave?.assurance_level || 'AL1'}
+                                memberName={clave?.nombre}
+                            />
+                        </div>
                     </div>
-                </div>
+                ) : (
+                    <div className="w-full rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-6 text-center">
+                        <Shield className="mx-auto mb-3 h-9 w-9 text-yellow-400" />
+                        <p className="font-semibold text-yellow-300">Membresía de piloto, no credencial blockchain</p>
+                        <p className="mt-2 text-sm text-gray-400">
+                            El identificador #{mint.token_id} existe solo en la base de datos del servicio.
+                            No se generó un token y no debe presentarse como prueba verificable.
+                        </p>
+                    </div>
+                )}
 
                 {/* Stats Grid */}
                 <div className="grid md:grid-cols-3 gap-4 w-full">
                     <StatCard
                         icon={Leaf}
                         color="from-cyan-500/10 to-blue-500/10 border-cyan-500/30 text-cyan-400"
-                        title="NFT CIUDADANO"
+                        title={isOnChain ? 'SBT ON-CHAIN' : 'REGISTRO PILOTO'}
                         value={`#${mint.token_id || '—'}`}
                     />
                     <StatCard
                         icon={Vote}
                         color="from-purple-500/10 to-pink-500/10 border-purple-500/30 text-purple-400"
-                        title="DERECHOS"
-                        value="ACTIVO"
+                        title="ENTORNO"
+                        value={isOnChain ? 'SEPOLIA' : 'OFF-CHAIN'}
                         items={['Propuestas', 'Votaciones', 'Tesorería']}
                     />
                     <StatCard
                         icon={Shield}
                         color="from-green-500/10 to-teal-500/10 border-green-500/30 text-green-400"
-                        title="PRIVACIDAD"
-                        value="100%"
-                        items={['Hash público', 'PII protegida', 'Auditable']}
+                        title="EVIDENCIA"
+                        value={isOnChain ? 'TX REAL' : 'SIN TX'}
+                        items={isOnChain ? ['Hash de transacción', 'Consulta pública'] : ['No verificable on-chain']}
                     />
                 </div>
 

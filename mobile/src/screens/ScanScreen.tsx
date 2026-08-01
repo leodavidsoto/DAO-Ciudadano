@@ -1,5 +1,5 @@
 /**
- * NFC Scanner Screen - Main screen for reading Chilean ID cards
+ * NFC Scanner Screen - experimental NDEF tag reader
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -9,12 +9,10 @@ import {
     StyleSheet,
     TouchableOpacity,
     Animated,
-    Platform,
     Alert,
-    Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import nfcService, { NFCReadResult, ChileanIDData } from '../services/nfcService';
+import nfcService from '../services/nfcService';
 
 interface ScanScreenProps {
     navigation: any;
@@ -23,26 +21,10 @@ interface ScanScreenProps {
 const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
     const [isScanning, setIsScanning] = useState(false);
     const [nfcEnabled, setNfcEnabled] = useState(false);
-    const [scanResult, setScanResult] = useState<NFCReadResult | null>(null);
     const [error, setError] = useState<string | null>(null);
     const pulseAnim = React.useRef(new Animated.Value(1)).current;
 
-    useEffect(() => {
-        checkNFCStatus();
-        return () => {
-            nfcService.stopReading();
-        };
-    }, []);
-
-    useEffect(() => {
-        if (isScanning) {
-            startPulseAnimation();
-        } else {
-            pulseAnim.setValue(1);
-        }
-    }, [isScanning]);
-
-    const checkNFCStatus = async () => {
+    const checkNFCStatus = useCallback(async () => {
         const initialized = await nfcService.initialize();
         if (initialized) {
             const enabled = await nfcService.isEnabled();
@@ -58,9 +40,9 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                 );
             }
         }
-    };
+    }, []);
 
-    const startPulseAnimation = () => {
+    const startPulseAnimation = useCallback(() => {
         Animated.loop(
             Animated.sequence([
                 Animated.timing(pulseAnim, {
@@ -75,7 +57,22 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                 }),
             ])
         ).start();
-    };
+    }, [pulseAnim]);
+
+    useEffect(() => {
+        checkNFCStatus();
+        return () => {
+            nfcService.stopReading();
+        };
+    }, [checkNFCStatus]);
+
+    useEffect(() => {
+        if (isScanning) {
+            startPulseAnimation();
+        } else {
+            pulseAnim.setValue(1);
+        }
+    }, [isScanning, pulseAnim, startPulseAnimation]);
 
     const handleStartScan = async () => {
         if (!nfcEnabled) {
@@ -85,8 +82,6 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
 
         setIsScanning(true);
         setError(null);
-        setScanResult(null);
-
         try {
             // OJO: readSimpleTag() lee cualquier tag NFC y NO verifica
             // identidad (identityVerified siempre false). La lectura
@@ -95,8 +90,6 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
             // hardware NFC responde, no para registrar a nadie.
             const result = await nfcService.readSimpleTag();
 
-            setScanResult(result);
-
             if (result.success && result.data) {
                 navigation.navigate('Success', {
                     idData: result.data,
@@ -104,7 +97,7 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                     identityVerified: result.identityVerified,
                 });
             } else {
-                setError(result.error || 'Error al leer la tarjeta');
+                setError(result.error || 'Error al leer el tag NFC');
             }
         } catch (err: any) {
             setError(err.message || 'Error inesperado');
@@ -122,9 +115,9 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
         <SafeAreaView style={styles.container}>
             {/* Header */}
             <View style={styles.header}>
-                <Text style={styles.title}>ESCANEO NFC</Text>
+                <Text style={styles.title}>PRUEBA DE LECTOR NFC</Text>
                 <Text style={styles.subtitle}>
-                    Coloca el chip de tu cédula cerca del teléfono
+                    Detecta un tag NDEF; no autentica una cédula ni verifica identidad
                 </Text>
             </View>
 
@@ -155,10 +148,10 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                     1. Asegúrate de que NFC esté habilitado
                 </Text>
                 <Text style={styles.instructionText}>
-                    2. Coloca la cédula en la parte trasera del teléfono
+                    2. Acerca un tag NFC compatible a la parte trasera del teléfono
                 </Text>
                 <Text style={styles.instructionText}>
-                    3. Mantén quieto hasta que se complete la lectura
+                    3. Mantén el tag quieto hasta que se complete la lectura
                 </Text>
             </View>
 

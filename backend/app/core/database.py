@@ -11,13 +11,25 @@ logger = logging.getLogger(__name__)
 
 class Database:
     """Database connection manager"""
-    
+
     client: Optional[AsyncIOMotorClient] = None
-    
+    db = None
+    indexes_ready: bool = False
+
+    # The driver default is 30 s. With a wrong MONGO_URL that turns startup
+    # into a 30 s stall on the first index call before the app becomes
+    # reachable at all; 5 s still tolerates an Atlas cold start while making
+    # a misconfiguration visible in the logs almost immediately.
+    SERVER_SELECTION_TIMEOUT_MS = 5000
+
     @classmethod
     def connect(cls, mongo_url: str, db_name: str):
         """Initialize database connection"""
-        cls.client = AsyncIOMotorClient(mongo_url)
+        cls.indexes_ready = False
+        cls.client = AsyncIOMotorClient(
+            mongo_url,
+            serverSelectionTimeoutMS=cls.SERVER_SELECTION_TIMEOUT_MS,
+        )
         cls.db = cls.client[db_name]
         logger.info(f"Connected to MongoDB database: {db_name}")
         return cls.db
@@ -28,6 +40,7 @@ class Database:
         if cls.client:
             cls.client.close()
             logger.info("Disconnected from MongoDB")
+        cls.indexes_ready = False
     
     @classmethod
     def get_db(cls):
@@ -43,9 +56,16 @@ class Database:
         The unique index on members.wallet_address is what actually prevents
         two memberships for the same wallet under concurrency (ROADMAP 1.11).
         """
+        cls.indexes_ready = False
         try:
             await cls.get_db()["members"].create_index("wallet_address", unique=True)
-            await cls.get_db()["members"].create_index("token_id")
+            await cls.get_db()["members"].create_index("token_id", unique=True)
+            # Governance: the application-level "already voted" lookup gives
+            # a friendly response, but only this compound unique index closes
+            # the race between simultaneous requests from the same member.
+            await cls.get_db()["votes"].create_index(
+                [("proposal_id", 1), ("voter_address", 1)], unique=True
+            )
             # Elections: one candidacy and one vote per member per election.
             # The unique indexes are what actually enforce this under
             # concurrency; the router checks only produce friendlier errors.
@@ -71,10 +91,11 @@ class Database:
             await cls.get_db()["ballot_nonces"].create_index(
                 [("voter_address", 1), ("nonce", 1)], unique=True
             )
+            cls.indexes_ready = True
         except Exception as e:
             # A pre-existing duplicate in the collection blocks unique index
             # creation; keep the app bootable and surface it in the logs.
-            logger.warning(f"Could not create members indexes: {e}")
+            logger.warning(f"Could not create required database indexes: {e}")
 
 
 # Collections helpers
@@ -86,14 +107,6 @@ def get_collection(name: str):
 # Convenience accessors
 def members_collection():
     return get_collection("members")
-
-
-def identity_events_collection():
-    return get_collection("identity_events")
-
-
-def status_checks_collection():
-    return get_collection("status_checks")
 
 
 def users_collection():
@@ -138,4 +151,3 @@ def siwe_nonces_collection():
 
 def ballot_nonces_collection():
     return get_collection("ballot_nonces")
-

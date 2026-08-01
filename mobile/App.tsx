@@ -14,8 +14,24 @@ import HomeScreen from './src/screens/HomeScreen';
 import ScanScreen from './src/screens/ScanScreen';
 import SuccessScreen from './src/screens/SuccessScreen';
 import WalletScreen from './src/screens/WalletScreen';
+import type { ChileanIDData } from './src/services/nfcService';
 
-const Stack = createNativeStackNavigator();
+type RootStackParamList = {
+  Home: undefined;
+  Scan: undefined;
+  Success: {
+    idData: ChileanIDData;
+    serialNumber: string;
+    identityVerified?: boolean;
+  };
+  Wallet: {
+    idData?: ChileanIDData;
+    serialNumber?: string;
+    identityVerified?: boolean;
+  } | undefined;
+};
+
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
 /**
  * DIAGNÓSTICO TEMPORAL: en vez de dejar que un error de render tumbe
@@ -139,7 +155,13 @@ function App(): React.JSX.Element {
           <Stack.Screen
             name="Success"
             component={SuccessScreen}
-            options={{ title: 'VERIFICADO' }}
+            options={({ route }) => {
+              return {
+                title: route.params?.identityVerified === true
+                  ? 'IDENTIDAD VERIFICADA'
+                  : 'LECTURA NO VERIFICADA',
+              };
+            }}
           />
           <Stack.Screen
             name="Wallet"

@@ -76,14 +76,14 @@ const FILTROS = ['Todas', 'En votación', 'En debate'];
 const PASOS = [
     { icon: 'ph-note-pencil', n: 1, title: 'Presenta tu idea', desc: 'Redacta la propuesta y define presupuesto y comuna.', color: AZUL },
     { icon: 'ph-chats-circle', n: 2, title: 'Debatamos en red', desc: 'Siete días de discusión abierta y enmiendas de la comunidad.', color: AZUL },
-    { icon: 'ph-check-square-offset', n: 3, title: 'Vota con transparencia', desc: 'Un voto por ciudadano verificado, registrado en cadena.', color: ROJO },
-    { icon: 'ph-gear-six', n: 4, title: 'Ejecutemos el cambio', desc: 'Los fondos se liberan por hitos verificables y públicos.', color: ROJO },
+    { icon: 'ph-check-square-offset', n: 3, title: 'Prueba la votación', desc: 'El piloto registra votos de miembros autenticados en su backend.', color: ROJO },
+    { icon: 'ph-gear-six', n: 4, title: 'Audita el avance', desc: 'Resultados, financiamiento y ejecución on-chain siguen en desarrollo.', color: ROJO },
 ];
 
 const PILARES = [
-    { icon: 'ph-users-three', bg: '#EAF0FB', fg: AZUL, title: 'Decisión colectiva', desc: 'Todos los miembros verificados tienen voz y voto en las propuestas que afectan a su comuna.' },
-    { icon: 'ph-cube-transparent', bg: '#FBEAE8', fg: ROJO, title: 'Transparencia blockchain', desc: 'Cada voto y cada peso asignado queda inmutable y auditable por cualquier ciudadano.' },
-    { icon: 'ph-buildings', bg: '#EAF0FB', fg: AZUL, title: 'Acción comunitaria', desc: 'Los proyectos aprobados se ejecutan con fondos liberados por la propia comunidad.' },
+    { icon: 'ph-users-three', bg: '#EAF0FB', fg: AZUL, title: 'Decisión colectiva', desc: 'El piloto permite explorar propuestas y participación de miembros activos.' },
+    { icon: 'ph-cube-transparent', bg: '#FBEAE8', fg: ROJO, title: 'Transparencia verificable', desc: 'La trazabilidad on-chain es un objetivo del proyecto, no una capacidad disponible hoy.' },
+    { icon: 'ph-buildings', bg: '#EAF0FB', fg: AZUL, title: 'Acción comunitaria', desc: 'La ejecución y liberación de fondos todavía requieren una fuente real y controles de gobernanza.' },
 ];
 
 const fmt = (n) => (typeof n === 'number' ? n.toLocaleString('es-CL') : '—');
@@ -124,7 +124,7 @@ const LandingPage = () => {
     const irAUnirse = () => navigate('/unete');
 
     const kpis = [
-        { valor: fmt(stats?.miembros), etiqueta: 'ciudadanos verificados' },
+        { valor: fmt(stats?.miembros), etiqueta: 'membresías activas del piloto' },
         { valor: fmt(stats?.propuestas), etiqueta: 'propuestas presentadas' },
         { valor: fmt(stats?.aprobadas), etiqueta: 'propuestas aprobadas' },
         { valor: fmt(stats?.votos), etiqueta: 'votos emitidos' },
@@ -186,7 +186,7 @@ const LandingPage = () => {
                             borderRadius: 999, boxShadow: '0 6px 16px rgba(0,56,151,0.22)',
                         }}
                     >
-                        ÚNETE A LA RED
+                        EXPLORAR EL PILOTO
                     </button>
                 </header>
 
@@ -232,7 +232,7 @@ const LandingPage = () => {
                                 letterSpacing: '0.06em', color: '#33456B', boxShadow: '0 2px 8px rgba(11,37,69,0.05)',
                             }}>
                                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: ROJO }} />
-                                GOBERNANZA CIUDADANA EN CADENA · CONTENIDO DE EJEMPLO
+                                PILOTO TÉCNICO · CONTENIDO DE EJEMPLO · SIN REGISTRO ON-CHAIN
                             </div>
 
                             <h1
@@ -246,8 +246,7 @@ const LandingPage = () => {
                             </h1>
 
                             <p style={{ fontSize: 18.5, lineHeight: 1.6, color: '#46536E', maxWidth: 560, margin: '22px 0 0' }}>
-                                La primera DAO Ciudadana, construida para y por todos los chilenos.
-                                Tu voz, tu decisión, tu país.
+                                Un piloto abierto de herramientas para participación y gobernanza ciudadana.
                             </p>
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 34, flexWrap: 'wrap' }}>
@@ -262,7 +261,7 @@ const LandingPage = () => {
                                         boxShadow: '0 8px 20px rgba(203,44,39,0.26)',
                                     }}
                                 >
-                                    ÚNETE A LA RED <i className="ph-bold ph-arrow-right" style={{ fontSize: 15 }} />
+                                    EXPLORAR EL PILOTO <i className="ph-bold ph-arrow-right" style={{ fontSize: 15 }} />
                                 </button>
                                 <a
                                     href="#como"
@@ -279,7 +278,7 @@ const LandingPage = () => {
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 30, fontSize: 13.5, color: '#6B7894' }}>
                                 <i className="ph-bold ph-shield-check" style={{ fontSize: 17, color: AZUL }} />
-                                Identidad verificada con Cédula chilena · una persona, un voto
+                                Este piloto todavía no acredita identidad civil ni registra votos on-chain
                             </div>
                         </div>
 
@@ -575,8 +574,8 @@ const LandingPage = () => {
                                 Súmate a la red ciudadana
                             </h2>
                             <p style={{ fontSize: 16.5, lineHeight: 1.62, color: '#46536E', margin: '14px 0 0', maxWidth: 460 }}>
-                                Verifica tu identidad una sola vez con tu Cédula y participa en cada votación
-                                desde tu teléfono.
+                                Explora el flujo piloto. La verificación de identidad civil y la credencial
+                                on-chain todavía no están habilitadas para producción.
                             </p>
                             <div style={{ display: 'flex', gap: 12, marginTop: 28, flexWrap: 'wrap' }}>
                                 <button
@@ -589,7 +588,7 @@ const LandingPage = () => {
                                         padding: '16px 28px', borderRadius: 999, boxShadow: '0 8px 20px rgba(0,56,151,0.22)',
                                     }}
                                 >
-                                    ÚNETE A LA RED
+                                    EXPLORAR EL PILOTO
                                 </button>
                                 <button
                                     type="button"
@@ -669,9 +668,8 @@ const LandingPage = () => {
                                 LEGAL
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 11, marginTop: 16, fontSize: 14 }}>
-                                <a href="#inicio" className="landing-footer-link">Términos de uso</a>
-                                <a href="#inicio" className="landing-footer-link">Privacidad de datos</a>
-                                <a href="#inicio" className="landing-footer-link">Estatutos de la DAO</a>
+                                <span>Documentos legales pendientes de publicación</span>
+                                <span>El piloto no sustituye una identidad oficial</span>
                             </div>
                         </div>
                     </div>

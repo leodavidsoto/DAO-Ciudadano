@@ -15,7 +15,7 @@ uvicorn[standard]==0.51.0
 # === Validación y configuración ===
 pydantic==2.13.4
 pydantic-settings==2.14.2
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 
 # === Base de datos ===
 motor==3.6.0
@@ -24,14 +24,14 @@ pymongo==4.9.2             # motor 3.6 exige >=4.9,<4.10; además se importa dir
 # === Formularios / archivos ===
 # NO aparece en ningún import, pero FastAPI lo exige para UploadFile/File(...)
 # en /api/auth/liveness. Quitarlo rompe ese endpoint en runtime.
-python-multipart==0.0.20
+python-multipart==0.0.32
 
 # === Procesamiento de imágenes ===
-pillow==11.0.0             # validación de imágenes en el flujo de liveness
+pillow==12.3.0             # validación de imágenes en el flujo de liveness
 
 # === Autenticación e identidad (tarea 1.1 del ROADMAP) ===
-cryptography==44.0.0       # Fernet: cifrado de PII en reposo (app/core/crypto.py)
-PyJWT==2.10.1               # JWT de sesión emitido tras verificar SIWE
+cryptography==48.0.1       # Fernet: cifrado de PII en reposo (app/core/crypto.py)
+PyJWT==2.13.0               # JWT de sesión emitido tras verificar SIWE
 eth-account==0.13.7        # recuperar firmante de personal_sign y de firmas EIP-712
 web3==7.16.0                # minteo real on-chain (app/services/chain_service.py)
 

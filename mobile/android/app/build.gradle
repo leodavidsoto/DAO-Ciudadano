@@ -72,6 +72,23 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+// Release credentials must live outside the repository. A release build is
+// rejected unless every value is present; it must never fall back to the
+// public debug keystore or its standard credentials.
+def releaseSigningEnv = [
+    DAO_ANDROID_KEYSTORE_FILE: System.getenv("DAO_ANDROID_KEYSTORE_FILE"),
+    DAO_ANDROID_KEYSTORE_PASSWORD: System.getenv("DAO_ANDROID_KEYSTORE_PASSWORD"),
+    DAO_ANDROID_KEY_ALIAS: System.getenv("DAO_ANDROID_KEY_ALIAS"),
+    DAO_ANDROID_KEY_PASSWORD: System.getenv("DAO_ANDROID_KEY_PASSWORD"),
+]
+def missingReleaseSigningEnv = releaseSigningEnv.findAll { key, value ->
+    value == null || value.trim().isEmpty()
+}.keySet()
+def releaseSigningConfigured = missingReleaseSigningEnv.isEmpty()
+def releaseKeystoreFile = releaseSigningConfigured
+    ? file(releaseSigningEnv.DAO_ANDROID_KEYSTORE_FILE)
+    : null
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -92,18 +109,43 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        if (releaseSigningConfigured) {
+            release {
+                storeFile releaseKeystoreFile
+                storePassword releaseSigningEnv.DAO_ANDROID_KEYSTORE_PASSWORD
+                keyAlias releaseSigningEnv.DAO_ANDROID_KEY_ALIAS
+                keyPassword releaseSigningEnv.DAO_ANDROID_KEY_PASSWORD
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
+    }
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def releaseTaskPresent = taskGraph.allTasks.any { task ->
+        task.project == project && task.name.toLowerCase().contains("release")
+    }
+    if (releaseTaskPresent && !releaseSigningConfigured) {
+        throw new GradleException(
+            "Release signing is not configured. Missing environment variables: " +
+            missingReleaseSigningEnv.join(", ")
+        )
+    }
+    if (releaseTaskPresent && !releaseKeystoreFile.isFile()) {
+        throw new GradleException(
+            "DAO_ANDROID_KEYSTORE_FILE does not point to a readable keystore file."
+        )
     }
 }
 

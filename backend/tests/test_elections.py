@@ -6,18 +6,21 @@ proposal-expiry tests use).
 """
 from datetime import datetime, timedelta, timezone
 
+import jwt
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
+from app.core.config import settings
 from app.core.database import (
     candidacies_collection,
     elections_collection,
+    members_collection,
     representatives_collection,
 )
 
 # Wallets reales derivadas de llaves privadas fijas de prueba (NO producción).
-# Necesarias porque POST /api/membership/mint exige una sesión de wallet
-# (SIWE, C-1) aunque los endpoints de elecciones en sí no lo exijan todavía.
+# Necesarias porque todos los endpoints mutantes prueban control de la wallet
+# mediante una sesión SIWE, además de comprobar la membresía activa.
 _ACCOUNT_A = Account.from_key("0x" + "1a" * 32)
 _ACCOUNT_B = Account.from_key("0x" + "2b" * 32)
 _ACCOUNT_C = Account.from_key("0x" + "3c" * 32)
@@ -53,6 +56,18 @@ async def _sign_in(client, account):
     return {"Authorization": f"Bearer {verify.json()['token']}"}
 
 
+_SESSION_HEADERS = {}
+
+
+async def _headers_for(client, address):
+    """Reuse a valid stateless JWT within a test to keep the suite fast."""
+    normalized = address.lower()
+    key = (id(client), normalized)
+    if key not in _SESSION_HEADERS:
+        _SESSION_HEADERS[key] = await _sign_in(client, _ACCOUNTS_BY_ADDRESS[normalized])
+    return _SESSION_HEADERS[key]
+
+
 async def _mint_member(client, address):
     headers = await _sign_in(client, _ACCOUNTS_BY_ADDRESS[address])
     response = await client.post("/api/membership/mint", json={
@@ -67,7 +82,13 @@ async def _mint_member(client, address):
 async def _create_election(client, title="Elección de prueba",
                            description="Elegimos representantes para el próximo período.",
                            seats=1, nominations_days=7, voting_days=7, term_months=12,
-                           creator_address=ADDR_A):
+                           creator_address=ADDR_A, authenticated_address=None,
+                           include_auth=True):
+    headers = {}
+    if include_auth:
+        headers = await _headers_for(
+            client, authenticated_address or creator_address
+        )
     return await client.post("/api/governance/elections", json={
         "title": title,
         "description": description,
@@ -76,21 +97,29 @@ async def _create_election(client, title="Elección de prueba",
         "voting_days": voting_days,
         "term_months": term_months,
         "creator_address": creator_address,
-    })
+    }, headers=headers)
 
 
-async def _nominate(client, election_id, address, statement=None):
+async def _nominate(client, election_id, address, statement=None,
+                    authenticated_address=None, include_auth=True):
+    headers = {}
+    if include_auth:
+        headers = await _headers_for(client, authenticated_address or address)
     return await client.post(f"/api/governance/elections/{election_id}/candidacies", json={
         "candidate_address": address,
         "statement": statement or "Mi programa: participación, transparencia y rendición de cuentas.",
-    })
+    }, headers=headers)
 
 
-async def _vote(client, election_id, voter, candidate):
+async def _vote(client, election_id, voter, candidate,
+                authenticated_address=None, include_auth=True):
+    headers = {}
+    if include_auth:
+        headers = await _headers_for(client, authenticated_address or voter)
     return await client.post(f"/api/governance/elections/{election_id}/vote", json={
         "voter_address": voter,
         "candidate_address": candidate,
-    })
+    }, headers=headers)
 
 
 async def _open_voting(election_id):
@@ -130,6 +159,64 @@ async def test_create_election(client):
     assert listing[0]["id"] == data["id"]
 
 
+async def test_create_election_requires_own_wallet_session(client):
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+
+    missing = await _create_election(client, include_auth=False)
+    assert missing.status_code == 401
+
+    impersonated = await _create_election(
+        client,
+        creator_address=ADDR_A,
+        authenticated_address=ADDR_B,
+    )
+    assert impersonated.status_code == 403
+    assert "otra dirección" in impersonated.json()["detail"]
+
+
+async def test_public_development_key_cannot_forge_election_session(
+    client,
+    monkeypatch,
+):
+    """An unconfigured deployment must not trust the repository's known key."""
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "DEBUG", False)
+    monkeypatch.setattr(settings, "SECRET_KEY", "dev-secret-key")
+    await members_collection().insert_one({
+        "wallet_address": ADDR_A,
+        "status": "active",
+    })
+    now = datetime.now(timezone.utc)
+    forged = jwt.encode(
+        {
+            "sub": ADDR_A,
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(minutes=10)).timestamp()),
+        },
+        "dev-secret-key",
+        algorithm="HS256",
+    )
+
+    response = await client.post(
+        "/api/governance/elections",
+        json={
+            "title": "Elección que no debe existir",
+            "description": "Este intento usa una llave pública de desarrollo.",
+            "seats": 1,
+            "nominations_days": 7,
+            "voting_days": 7,
+            "term_months": 12,
+            "creator_address": ADDR_A,
+        },
+        headers={"Authorization": f"Bearer {forged}"},
+    )
+
+    assert response.status_code == 503
+    assert "SECRET_KEY" in response.json()["detail"]
+    assert await elections_collection().count_documents({}) == 0
+
+
 async def test_create_election_rejects_non_member(client):
     """Opening an election is a governance action, not open to any address."""
     response = await _create_election(client, creator_address=NON_MEMBER)
@@ -147,6 +234,37 @@ async def test_get_missing_election_returns_404(client):
     assert response.status_code == 404
 
 
+async def test_production_election_vote_is_blocked_until_ballots_are_signed(
+    client,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "SIWE_DOMAIN", "estamosdao.cl")
+    monkeypatch.setattr(settings, "SIWE_URI", "https://estamosdao.cl")
+    monkeypatch.setattr(settings, "SIWE_CHAIN_ID", 11155111)
+    await members_collection().insert_one({
+        "wallet_address": ADDR_A,
+        "token_id": 99,
+        "status": "active",
+        "issuance_mode": "onchain",
+        "identity_verified": True,
+        "tx_hash": "0x" + "cd" * 32,
+    })
+    headers = await _sign_in(client, _ACCOUNT_A)
+
+    response = await client.post(
+        "/api/governance/elections/prod-election/vote",
+        json={
+            "voter_address": ADDR_A,
+            "candidate_address": ADDR_B,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 503
+    assert "EIP-712" in response.json()["detail"]
+
+
 # === Candidacies ===
 
 async def test_candidacy_rejects_non_member(client):
@@ -155,6 +273,24 @@ async def test_candidacy_rejects_non_member(client):
     response = await _nominate(client, election_id, NON_MEMBER)
     assert response.status_code == 403
     assert "miembros activos" in response.json()["detail"]
+
+
+async def test_candidacy_requires_own_wallet_session(client):
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    election_id = (await _create_election(client)).json()["id"]
+
+    missing = await _nominate(client, election_id, ADDR_A, include_auth=False)
+    assert missing.status_code == 401
+
+    impersonated = await _nominate(
+        client,
+        election_id,
+        ADDR_A,
+        authenticated_address=ADDR_B,
+    )
+    assert impersonated.status_code == 403
+    assert "otra dirección" in impersonated.json()["detail"]
 
 
 async def test_candidacy_flow_and_duplicate(client):
@@ -197,6 +333,31 @@ async def test_election_vote_rejects_non_member(client):
 
     response = await _vote(client, election_id, NON_MEMBER, ADDR_A)
     assert response.status_code == 403
+
+
+async def test_election_vote_requires_own_wallet_session(client):
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    election_id = (await _create_election(client)).json()["id"]
+    await _nominate(client, election_id, ADDR_A)
+    await _open_voting(election_id)
+
+    missing = await _vote(client, election_id, ADDR_B, ADDR_A, include_auth=False)
+    assert missing.status_code == 401
+
+    impersonated = await _vote(
+        client,
+        election_id,
+        ADDR_B,
+        ADDR_A,
+        authenticated_address=ADDR_A,
+    )
+    assert impersonated.status_code == 403
+    assert "otra dirección" in impersonated.json()["detail"]
+
+    valid = await _vote(client, election_id, ADDR_B, ADDR_A)
+    assert valid.status_code == 200
+    assert valid.json()["ok"] is True
 
 
 async def test_election_vote_rejected_outside_voting(client):

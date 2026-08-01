@@ -3,7 +3,7 @@ Pydantic Models for DAO Ciudadana
 Data validation and serialization schemas
 """
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime, timezone
 import uuid
 
@@ -14,18 +14,6 @@ class TimestampMixin(BaseModel):
     """Mixin for timestamp fields"""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = None
-
-
-# === Status Models ===
-
-class StatusCheckCreate(BaseModel):
-    client_name: str
-
-
-class StatusCheck(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # === Identity Models ===
@@ -61,15 +49,6 @@ class LivenessResponse(BaseModel):
     score: Optional[float] = None
     analysis: Optional[str] = None
     error: Optional[str] = None
-
-
-class IdentityEvent(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    user_id: str
-    event_type: str  # "clave_unica", "nfc", "liveness", "rut_email"
-    hash_value: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    verifier: str
 
 
 # === User Models (RUT + Email registration) ===
@@ -121,14 +100,6 @@ class UserResponse(BaseModel):
     error: Optional[str] = None
 
 
-# === Wallet Models ===
-
-class WalletConnectResponse(BaseModel):
-    ok: bool
-    address: Optional[str] = None
-    error: Optional[str] = None
-
-
 # === Membership Models ===
 
 class MintSBTRequest(BaseModel):
@@ -151,6 +122,12 @@ class Member(BaseModel):
     doc_hash: str
     assurance_level: str
     status: str = "active"
+    # Explicit provenance keeps demo/legacy rows from becoming trusted merely
+    # because the same MongoDB database is later promoted to production.
+    issuance_mode: Literal["demo", "onchain", "legacy_unverified"] = "legacy_unverified"
+    # No current flow is allowed to set this to True. It will only become true
+    # once a server-issued, one-time identity grant is implemented.
+    identity_verified: bool = False
     tx_hash: Optional[str] = None  # None en modo demo; hash real si se minteó on-chain (task 1.5)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

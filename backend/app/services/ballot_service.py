@@ -13,14 +13,18 @@ hexadecimal) y el backend recupera el firmante y lo compara contra
 voter_address. El schema se sirve desde /governance/ballot-schema para
 que frontend/móvil nunca mantengan una copia manual desincronizada.
 """
+import logging
 from typing import Optional
 
 from eth_account import Account
 from eth_account.messages import encode_typed_data
 from fastapi import HTTPException
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from ..core.config import settings
 from ..core.database import ballot_nonces_collection
+
+logger = logging.getLogger(__name__)
 
 BALLOT_TYPES = {
     "EIP712Domain": [
@@ -38,14 +42,24 @@ BALLOT_TYPES = {
 
 DOMAIN_NAME = "DAO Ciudadana"
 DOMAIN_VERSION = "1"
-DEFAULT_CHAIN_ID = 11155111  # Sepolia
 
 
-def domain(chain_id: int = DEFAULT_CHAIN_ID) -> dict:
-    return {"name": DOMAIN_NAME, "version": DOMAIN_VERSION, "chainId": chain_id}
+def domain(chain_id: Optional[int] = None) -> dict:
+    effective_chain_id = settings.SIWE_CHAIN_ID if chain_id is None else chain_id
+    return {
+        "name": DOMAIN_NAME,
+        "version": DOMAIN_VERSION,
+        "chainId": effective_chain_id,
+    }
 
 
-def typed_data(proposal_id: str, voter: str, choice: str, nonce: str, chain_id: int = DEFAULT_CHAIN_ID) -> dict:
+def typed_data(
+    proposal_id: str,
+    voter: str,
+    choice: str,
+    nonce: str,
+    chain_id: Optional[int] = None,
+) -> dict:
     return {
         "types": BALLOT_TYPES,
         "primaryType": "Ballot",
@@ -59,7 +73,14 @@ def typed_data(proposal_id: str, voter: str, choice: str, nonce: str, chain_id: 
     }
 
 
-def recover_signer(proposal_id: str, voter: str, choice: str, nonce: str, signature: str, chain_id: int = DEFAULT_CHAIN_ID) -> str:
+def recover_signer(
+    proposal_id: str,
+    voter: str,
+    choice: str,
+    nonce: str,
+    signature: str,
+    chain_id: Optional[int] = None,
+) -> str:
     data = typed_data(proposal_id, voter, choice, nonce, chain_id)
     encoded = encode_typed_data(full_message=data)
     return Account.recover_message(encoded, signature=signature)
@@ -84,14 +105,28 @@ async def verify(proposal_id: str, voter_address: str, choice: str, nonce: str, 
     # Anti-replay: un (voter_address, nonce) solo se puede usar una vez.
     # El índice único en ballot_nonces es lo que realmente lo garantiza
     # bajo concurrencia; esta comprobación solo da un mensaje más claro.
+    #
+    # Solo DuplicateKeyError significa "nonce repetido". Un fallo de red o de
+    # Mongo tiene que propagarse como indisponibilidad: decirle al votante que
+    # su papeleta ya se usó lo haría firmar una nueva que fallaría igual, y
+    # dejaría un voto legítimo sin registrar bajo una explicación falsa.
     try:
         await ballot_nonces_collection().insert_one({
             "voter_address": voter_address.lower(),
             "nonce": nonce,
             "proposal_id": proposal_id,
         })
-    except Exception:
+    except DuplicateKeyError:
         raise HTTPException(
             status_code=409,
             detail="Esta papeleta ya fue usada (nonce repetido). Genera una nueva.",
         )
+    except PyMongoError as exc:
+        logger.error("No se pudo registrar el nonce de la papeleta: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No se pudo registrar la papeleta por un problema de "
+                "almacenamiento. Tu voto NO quedó emitido; intenta de nuevo."
+            ),
+        ) from exc

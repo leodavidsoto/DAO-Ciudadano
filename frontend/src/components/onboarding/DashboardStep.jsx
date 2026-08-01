@@ -8,16 +8,18 @@ import { Button } from '../ui/button';
 import { CyberPanel } from './CyberUI';
 import { useOnboarding } from '@/context';
 import { AnimatedCounter } from '@/components/effects';
-import { SBT_CONTRACT_ADDRESSES } from '@/contracts/SBTContract';
 
 const DashboardStep = () => {
     const navigate = useNavigate();
     const { stats, mint } = useOnboarding();
+    const isOnChain = Boolean(mint.tx_hash);
 
     return (
         <CyberPanel
-            title="DASHBOARD CIUDADANO ACTIVO"
-            description="Métricas en tiempo real • Datos agregados de blockchain"
+            title={isOnChain ? 'DASHBOARD CIUDADANO ON-CHAIN' : 'DASHBOARD DEL PILOTO'}
+            description={isOnChain
+                ? 'Métricas del servicio • membresía confirmada con transacción'
+                : 'Métricas del backend • membresía todavía no registrada en blockchain'}
             icon={<Activity className="h-8 w-8 icon-pulse" />}
         >
             <div className="grid md:grid-cols-3 gap-6 mb-8">
@@ -35,7 +37,9 @@ const DashboardStep = () => {
                                 <span>—</span>
                             )}
                         </div>
-                        <div className="cyber-stat-label">MIEMBROS ACTIVOS</div>
+                        <div className="cyber-stat-label">
+                            {isOnChain ? 'MEMBRESÍAS VÁLIDAS' : 'REGISTROS DEL PILOTO'}
+                        </div>
                     </div>
                 </div>
 
@@ -71,24 +75,31 @@ const DashboardStep = () => {
                                 />
                             ) : '—'}
                         </div>
-                        <div className="cyber-stat-label">TU NFT ID</div>
+                        <div className="cyber-stat-label">TU MEMBRESÍA ID</div>
                     </div>
                 </div>
             </div>
 
             <div className="grid md:grid-cols-2 gap-4">
-                <Button
-                    variant="outline"
-                    className="cyber-button-premium hover-glow"
-                    onClick={() => window.open(
-                        `https://sepolia.etherscan.io/address/${SBT_CONTRACT_ADDRESSES[11155111]}`,
-                        '_blank',
-                        'noopener,noreferrer'
-                    )}
-                >
-                    <Globe className="w-4 h-4 mr-2" />
-                    EXPLORAR BLOCKCHAIN
-                </Button>
+                {isOnChain ? (
+                    <Button
+                        variant="outline"
+                        className="cyber-button-premium hover-glow"
+                        onClick={() => window.open(
+                            `https://sepolia.etherscan.io/tx/${mint.tx_hash}`,
+                            '_blank',
+                            'noopener,noreferrer'
+                        )}
+                    >
+                        <Globe className="w-4 h-4 mr-2" />
+                        VER TRANSACCIÓN EN SEPOLIA
+                    </Button>
+                ) : (
+                    <Button variant="outline" className="cyber-button-premium" disabled>
+                        <Globe className="w-4 h-4 mr-2" />
+                        SIN CONTRATO PARA ESTE REGISTRO
+                    </Button>
+                )}
                 <Button
                     variant="outline"
                     className="cyber-button-premium hover-glow"
@@ -104,7 +115,9 @@ const DashboardStep = () => {
                     <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
                     <p className="text-xs text-cyan-400 font-mono">
                         <Terminal className="inline w-3 h-3 mr-2" />
-                        Sistema operativo • Datos sincronizados con red blockchain
+                        {isOnChain
+                            ? 'Transacción on-chain confirmada'
+                            : 'Modo piloto • datos del backend, sin sincronización blockchain'}
                     </p>
                 </div>
             </div>

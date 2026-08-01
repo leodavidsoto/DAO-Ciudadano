@@ -1,8 +1,8 @@
 # Render Blueprint — DAO Ciudadana API
 #
 # Despliegue: Render → New → Blueprint → conectar el repositorio.
-# MONGO_URL es la única variable con `sync: false`: hay que definirla a mano en
-# el dashboard, precisamente para que la cadena de conexión no viva en el repo.
+# Las variables con `sync: false` deben definirse en el dashboard para que
+# secretos y cadenas de conexión no vivan en el repositorio.
 services:
   - type: web
     name: dao-ciudadana-api
@@ -11,7 +11,7 @@ services:
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    healthCheckPath: /health/ready
     envVars:
       # Python 3.11 — misma versión que usa el CI
       - key: PYTHON_VERSION
@@ -24,18 +24,45 @@ services:
       - key: DB_NAME
         value: dao_ciudadana
 
+      # Este blueprint mantiene el sitio público como piloto explícito. Para
+      # APP_ENV=production el backend falla cerrado hasta que exista un grant
+      # de identidad de un solo uso y minteo on-chain compatible.
+      - key: APP_ENV
+        value: demo
+      - key: MINT_MODE
+        value: demo
+      - key: MEMBERSHIP_SOURCE
+        value: mongo
+      - key: SIGNED_BALLOTS_REQUIRED
+        value: "false"
+
       # Generada por Render, nunca commiteada
       - key: SECRET_KEY
         generateValue: true
 
+      - key: IDENTITY_PEPPER
+        sync: false
+      - key: PII_ENCRYPTION_KEY
+        sync: false
+
+      # Datos incluidos en el mensaje EIP-4361 que firma la wallet.
+      - key: SIWE_DOMAIN
+        value: estamosdao.cl
+      - key: SIWE_URI
+        value: https://estamosdao.cl
+      - key: SIWE_CHAIN_ID
+        value: "11155111"
+
       # Dominio EXACTO del frontend, separado por comas. Nunca "*".
-      # Actualizar si cambia la URL de Netlify.
+      # Solo el host canónico puede iniciar SIWE. Los alias deben redirigir a
+      # este host antes de cargar la app, no ejecutar el flujo desde otro origen.
       - key: CORS_ORIGINS
-        value: https://regal-dieffenbachia-6e9194.netlify.app,https://estamosdao.cl,https://www.estamosdao.cl
+        value: https://estamosdao.cl
 
       # false en producción: true expone /docs y /redoc
       - key: DEBUG
         value: "false"
 
-      - key: SBT_CONTRACT_ADDRESS
-        value: "0x813fd379F715107b2451553d97f29408d8185f0e"
+      # No configurar SBT_CONTRACT_ADDRESS/RPC/MINTER aquí hasta redesplegar
+      # el contrato AccessControl/bytes32. La dirección histórica 0x813f...
+      # usa una ABI incompatible y no debe reutilizarse.

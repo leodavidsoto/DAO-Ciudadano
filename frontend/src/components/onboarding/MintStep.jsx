@@ -3,6 +3,7 @@
  */
 import React, { useState, useEffect } from 'react';
 import { Cpu, Zap, Sparkles } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { CyberPanel, CyberLoader, SuccessDisplay, DemoBadge } from './CyberUI';
@@ -10,11 +11,11 @@ import { HolographicCard } from '@/components/effects';
 import { useOnboarding } from '@/context';
 
 const MINT_STAGES = [
-    { text: 'VERIFICANDO IDENTIDAD...', progress: 20 },
-    { text: 'PREPARANDO TRANSACCIÓN...', progress: 40 },
-    { text: 'FIRMANDO CONTRATO...', progress: 60 },
-    { text: 'MINTEANDO SBT...', progress: 80 },
-    { text: 'CONFIRMANDO EN BLOCKCHAIN...', progress: 95 },
+    { text: 'VALIDANDO SOLICITUD...', progress: 20 },
+    { text: 'COMPROBANDO MEMBRESÍA...', progress: 40 },
+    { text: 'PREPARANDO REGISTRO...', progress: 60 },
+    { text: 'ESPERANDO RESPUESTA...', progress: 80 },
+    { text: 'VERIFICANDO RESULTADO...', progress: 95 },
 ];
 
 // Confetti burst effect
@@ -100,10 +101,12 @@ const MintProgressRing = ({ progress, stage }) => {
 };
 
 const MintStep = () => {
-    const { loading, mint, wallet, mintSBT } = useOnboarding();
+    const navigate = useNavigate();
+    const { loading, mint, wallet, clave, nfc, mintSBT, setStep } = useOnboarding();
     const [mintProgress, setMintProgress] = useState(0);
     const [currentStage, setCurrentStage] = useState('');
     const [showConfetti, setShowConfetti] = useState(false);
+    const hasVerifiedIdentity = nfc.verified === true && Boolean(nfc.doc_hash);
 
     // Simulate minting stages
     useEffect(() => {
@@ -135,11 +138,12 @@ const MintStep = () => {
 
     return (
         <CyberPanel
-            title="GENERACIÓN DE NFT CIUDADANO"
-            description="Minteando Soulbound Token • Contrato inteligente ejecutándose"
+            title={hasVerifiedIdentity ? 'CREACIÓN DE CREDENCIAL CIUDADANA' : 'LÍMITE DEL PILOTO ALCANZADO'}
+            description={hasVerifiedIdentity
+                ? 'El resultado indicará si existe una transacción on-chain verificable'
+                : 'Los recorridos disponibles no acreditan identidad y no habilitan una membresía nueva'}
             icon={<Cpu className="h-8 w-8" />}
         >
-            <DemoBadge label="MODO DEMO — el SBT aún no se mintea on-chain (registro solo en base de datos)" />
             <Confetti show={showConfetti} />
 
             <div className="flex flex-col items-center gap-6">
@@ -149,16 +153,39 @@ const MintStep = () => {
                         <div className="w-40 h-40 mx-auto mb-6 border-2 border-yellow-500/50 rounded-2xl flex items-center justify-center bg-gradient-to-br from-yellow-500/10 to-orange-500/10 hover-glow transition-all duration-300">
                             <Zap className="w-16 h-16 text-yellow-400 animate-pulse" />
                         </div>
-                        <p className="text-gray-400 text-sm mb-6 font-mono">
-                            Tu SBT ciudadano será mintado en la blockchain
-                        </p>
-                        <Button
-                            onClick={mintSBT}
-                            className="cyber-button-premium group"
-                        >
-                            <Sparkles className="w-4 h-4 mr-2 group-hover:animate-spin" />
-                            MINTEAR SBT CIUDADANO
-                        </Button>
+                        {hasVerifiedIdentity ? (
+                            <>
+                                <p className="text-gray-400 text-sm mb-6 font-mono">
+                                    Se solicitará tu membresía sin asumir que existe en blockchain
+                                </p>
+                                <Button onClick={mintSBT} className="cyber-button-premium group">
+                                    <Sparkles className="w-4 h-4 mr-2 group-hover:animate-spin" />
+                                    CREAR CREDENCIAL
+                                </Button>
+                            </>
+                        ) : (
+                            <div className="max-w-xl rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-5">
+                                <p className="font-mono text-sm font-semibold text-yellow-300">
+                                    Demostración completada hasta el límite seguro disponible.
+                                </p>
+                                <p className="mt-3 text-sm text-gray-400">
+                                    No se creó una membresía, NFT ni transacción. Para continuar haría falta
+                                    una verificación de identidad real emitida por el servidor; este cliente no la simula.
+                                </p>
+                                <div className="mt-5 flex flex-wrap justify-center gap-3">
+                                    <Button
+                                        onClick={() => setStep('method')}
+                                        variant="outline"
+                                        className="border-yellow-500/40 text-yellow-200"
+                                    >
+                                        ELEGIR OTRO RECORRIDO
+                                    </Button>
+                                    <Button onClick={() => navigate('/')} className="cyber-button-premium">
+                                        FINALIZAR Y VOLVER AL INICIO
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -170,11 +197,15 @@ const MintStep = () => {
                 {/* Success state with holographic card */}
                 {mint.token_id && !loading && (
                     <div className="flex flex-col items-center gap-6">
-                        <HolographicCard
-                            tokenId={mint.token_id}
-                            walletAddress={wallet.address}
-                            assuranceLevel="AL2"
-                        />
+                        {mint.tx_hash ? (
+                            <HolographicCard
+                                tokenId={mint.token_id}
+                                walletAddress={wallet.address}
+                                assuranceLevel={clave?.assurance_level || 'AL1'}
+                            />
+                        ) : (
+                            <DemoBadge label="REGISTRO PILOTO OFF-CHAIN — no es un NFT ni un SBT en blockchain" />
+                        )}
 
                         <SuccessDisplay>
                             <div className="flex flex-wrap justify-center gap-2 mt-2">

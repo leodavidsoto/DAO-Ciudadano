@@ -6,8 +6,8 @@ Copy this to .env and fill in your values:
 SEPOLIA_RPC_URL=https://rpc.sepolia.org
 # Or use Alchemy: https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY
 
-## Mumbai Testnet (Polygon)
-MUMBAI_RPC_URL=https://rpc-mumbai.maticvigil.com
+## Polygon Mainnet (opcional; no implica una decisión de red)
+POLYGON_RPC_URL=https://polygon-rpc.com
 
 ## Deployer wallet private key (WITHOUT 0x prefix)
 ## NEVER commit this with real funds!

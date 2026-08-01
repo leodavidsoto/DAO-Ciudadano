@@ -8,6 +8,8 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from pathlib import Path
+from datetime import datetime, timezone
+import asyncio
 import logging
 import os
 
@@ -21,6 +23,7 @@ from app.core.database import Database
 from app.core import readiness
 from app.core.security_middleware import (
     RateLimitMiddleware,
+    RequestBodyLimitMiddleware,
     SecurityHeadersMiddleware,
     RequestValidationMiddleware
 )
@@ -59,13 +62,15 @@ async def lifespan(app: FastAPI):
 
 
 # Create FastAPI application
+DOCS_ENABLED = settings.DEBUG and not settings.is_production
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="Sistema de membresía digital ciudadana basado en blockchain - Secured",
+    description="API piloto de membresía y gobernanza ciudadana",
     lifespan=lifespan,
-    docs_url="/docs" if settings.DEBUG else None,  # Disable docs in production
-    redoc_url="/redoc" if settings.DEBUG else None,
+    docs_url="/docs" if DOCS_ENABLED else None,
+    redoc_url="/redoc" if DOCS_ENABLED else None,
 )
 
 
@@ -75,17 +80,25 @@ app = FastAPI(
 # 1. Rate Limiting (outermost - first line of defense)
 app.add_middleware(
     RateLimitMiddleware,
-    requests_per_minute=100,
-    sensitive_paths_limit=10
+    requests_per_minute=settings.RATE_LIMIT_REQUESTS,
+    # El bucket sensible ahora agrega challenge/verify/mint/votos por IP. Treinta
+    # permite un flujo legítimo con más de una wallet sin recuperar el bypass
+    # anterior por ruta o election_id.
+    sensitive_paths_limit=settings.RATE_LIMIT_SENSITIVE_REQUESTS,
+    window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
+    trusted_proxy_ips=settings.TRUSTED_PROXY_IPS,
 )
 
 # 2. Request Validation
 app.add_middleware(RequestValidationMiddleware)
 
-# 3. Security Headers
+# 3. Request body limit (counts actual ASGI chunks, not only Content-Length)
+app.add_middleware(RequestBodyLimitMiddleware)
+
+# 4. Security Headers
 app.add_middleware(SecurityHeadersMiddleware)
 
-# 4. CORS (innermost)
+# 5. CORS (innermost)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -118,7 +131,9 @@ async def root():
         "name": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "status": "operational",
-        "docs": "/docs"
+        # Must mirror docs_url above: advertising /docs while FastAPI has it
+        # disabled sends callers to a 404.
+        "docs": "/docs" if DOCS_ENABLED else None,
     }
 
 
@@ -137,8 +152,20 @@ app.include_router(governance_router, prefix="/api")
 app.include_router(elections_router, prefix="/api")
 
 
-# Health check endpoint
+# Process liveness: no external dependency checks. Orchestrators can use this
+# only to decide whether the process itself should be restarted.
+@app.get("/health/live")
+async def liveness_check():
+    return {
+        "status": "alive",
+        "version": settings.APP_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# Deployment readiness. `/health` remains as a backwards-compatible alias.
 @app.get("/health")
+@app.get("/health/ready")
 async def health_check():
     """Health check endpoint for monitoring.
 
@@ -148,19 +175,34 @@ async def health_check():
     """
     from fastapi.responses import JSONResponse
 
-    configuration = readiness.status()
+    onchain_runtime = None
+    if settings.MINT_MODE == "onchain":
+        from app.services import chain_service
+
+        if chain_service.is_configured():
+            onchain_runtime = await asyncio.to_thread(chain_service.runtime_status)
+    configuration = readiness.status(onchain_runtime)
     db_healthy = True
     try:
         await Database.get_db().command("ping")
     except Exception:
         db_healthy = False
 
-    healthy = db_healthy
+    indexes_ready = Database.indexes_ready
+    healthy = db_healthy and indexes_ready and configuration["ready"]
+    status_label = (
+        "healthy"
+        if healthy and configuration["production_ready"]
+        else "operational"
+        if healthy
+        else "degraded"
+    )
     body = {
-        "status": "healthy" if healthy else "degraded",
+        "status": status_label,
         "version": settings.APP_VERSION,
-        "timestamp": __import__('datetime').datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "database": {"healthy": db_healthy},
+        "indexes": {"ready": indexes_ready},
         "configuration": configuration,
     }
     return JSONResponse(status_code=200 if healthy else 503, content=body)
@@ -174,4 +216,3 @@ if __name__ == "__main__":
         port=8000,
         reload=True
     )
-

@@ -1,4 +1,10 @@
-# Getting Started with Create React App
+# Frontend del piloto DAO Ciudadana
+
+> Un build exitoso solo demuestra que el bundle compila. El producto sigue en
+> modo piloto: identidad civil y membresía on-chain de producción están
+> bloqueadas. Consulta [`../docs/AUDIT.md`](../docs/AUDIT.md) antes de desplegar.
+
+## Desarrollo con Create React App
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
@@ -25,7 +31,21 @@ Builds the app for production to the `build` folder.\
 It correctly bundles React in production mode and optimizes the build for the best performance.
 
 The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+El bundle queda listo para validación en un entorno de preview; esto no equivale
+a readiness funcional del sistema completo.
+
+## Nota de seguridad de sesión
+
+El JWT corto emitido después de SIWE se conserva actualmente en `localStorage`
+y se envía como Bearer. Esto mantiene compatibilidad con la API existente, pero
+un XSS ejecutado en el mismo origen podría leerlo. La CSP de `netlify.toml`
+reduce esa superficie y no sustituye una cookie `Secure`, `HttpOnly` y
+`SameSite`.
+
+Migrar a esa cookie no es un cambio aislado del frontend: el backend debe emitir
+y revocar la cookie, aceptar credenciales CORS y definir protección CSRF. Por
+eso no se implementa parcialmente aquí; debe hacerse como cambio coordinado y
+con pruebas de challenge, logout, expiración y solicitudes cross-site.
 
 See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
 

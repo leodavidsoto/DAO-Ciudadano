@@ -18,6 +18,7 @@ poner el wallet_address de otra persona en el body y actuar como ella.
 from fastapi import HTTPException, Header
 from typing import Optional
 
+from ..core import readiness
 from ..services.membership_verifier import get_membership_verifier
 from ..services import siwe_service
 
@@ -49,6 +50,11 @@ async def current_address(authorization: Optional[str] = Header(default=None)) -
             status_code=401,
             detail="Falta iniciar sesión con tu wallet (encabezado Authorization: Bearer <token>).",
         )
+    # Never decode a caller-controlled JWT with an absent, public or weak
+    # signing key. A deployment with unsafe auth configuration fails closed
+    # even if an attacker already knows the repository's development key.
+    readiness.require("SECRET_KEY", "validar la sesión de wallet")
+    readiness.require_siwe_configuration()
     token = authorization.split(" ", 1)[1].strip()
     address = siwe_service.read_token(token)
     if not address:

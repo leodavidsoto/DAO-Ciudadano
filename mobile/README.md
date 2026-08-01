@@ -1,10 +1,16 @@
-# DAO Ciudadana - Mobile App
+# DAO Ciudadana - Mobile App (experimental)
 
-App móvil React Native para lectura de chip NFC de cédula chilena.
+> **No distribuir como release.** La lectura PACE/ISO-DEP de la cédula no está
+> implementada y CI solo valida TypeScript, lint, tests y dependencias: todavía
+> no produce un artefacto nativo. La lectura NDEF actual detecta tags, pero no
+> verifica identidad. Configurar una firma Android
+> tampoco convierte este piloto en una aplicación lista para producción.
+
+Prototipo React Native para investigar el flujo móvil y NFC.
 
 ## Requisitos
 
-- Node.js 20+
+- Node.js 20.19.4+
 - Android Studio (para Android)
 - Xcode (para iOS)
 - Dispositivo con NFC
@@ -32,6 +38,26 @@ npm run android
 npm run ios
 ```
 
+## Firma de Android release
+
+`release` nunca usa la llave debug. El build falla de forma explícita si falta
+alguna de estas variables o si la ruta no apunta a un keystore legible:
+
+```bash
+export DAO_ANDROID_KEYSTORE_FILE=/ruta/privada/dao-ciudadana-release.jks
+export DAO_ANDROID_KEYSTORE_PASSWORD='...'
+export DAO_ANDROID_KEY_ALIAS='...'
+export DAO_ANDROID_KEY_PASSWORD='...'
+
+cd android
+./gradlew assembleRelease
+```
+
+El keystore y sus contraseñas deben guardarse en un gestor de secretos, fuera
+del repositorio. Los formatos `*.keystore`, `*.jks` y `*.p12` están ignorados.
+La firma permite producir un artefacto instalable, pero no elimina los bloqueos
+funcionales y de seguridad descritos al inicio.
+
 ## Permisos NFC
 
 ### Android
@@ -57,8 +83,11 @@ mobile/
 
 ## Backend API
 
-La app se conecta a: `https://dao-ciudadana-api.onrender.com`
+Esta rama apunta al backend local: `10.0.2.2:8000/api` desde el emulador Android
+y `localhost:8000/api` desde el simulador iOS. Todavía no existe una selección
+de entorno/base URL apta para un release; debe resolverse antes de publicar.
 
 ## Smart Contract
 
-Contrato SBT en Sepolia: `0x813fd379F715107b2451553d97f29408d8185f0e`
+No hay un contrato compatible configurado. La dirección Sepolia histórica usa
+otra ABI y no debe reutilizarse.

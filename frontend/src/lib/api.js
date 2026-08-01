@@ -66,14 +66,10 @@ export const authAPI = {
 
 // === Wallet API ===
 export const walletAPI = {
-    // DEPRECADO: dirección inventada por el servidor, no autentica nada.
-    // Se mantiene solo por compatibilidad; el flujo real es challenge+verify.
-    connect: () => api.post('/wallet/connect'),
     // Sesión de wallet real (SIWE, ver services/siwe_service.py en el backend).
     challenge: (address) => api.post('/wallet/challenge', { address }),
     verify: (address, nonce, signature) =>
         api.post('/wallet/verify', { address, nonce, signature }),
-    getBalance: (address) => api.get(`/wallet/balance/${address}`),
 };
 
 // === Membership API ===
@@ -96,9 +92,10 @@ export const dashboardAPI = {
 
 // === Governance API ===
 export const governanceAPI = {
-    // Proposals
+    // Proposals — los filtros van como `params` para que axios los codifique;
+    // interpolarlos en la URL rompe cualquier valor con `&`, `#` o espacios.
     getProposals: (status = null) =>
-        api.get(`/governance/proposals${status ? `?status=${status}` : ''}`),
+        api.get('/governance/proposals', { params: status ? { status } : {} }),
     getProposal: (id) => api.get(`/governance/proposals/${id}`),
     createProposal: (title, description, category, creatorAddress, durationDays = 7) =>
         api.post('/governance/proposals', {
@@ -110,11 +107,15 @@ export const governanceAPI = {
         }),
 
     // Voting
-    vote: (proposalId, voterAddress, vote) =>
+    getBallotSchema: () => api.get('/governance/ballot-schema'),
+    getBallots: (proposalId) => api.get(`/governance/proposals/${proposalId}/ballots`),
+    vote: (proposalId, voterAddress, vote, nonce, signature) =>
         api.post('/governance/vote', {
             proposal_id: proposalId,
             voter_address: voterAddress,
             vote,
+            nonce,
+            signature,
         }),
 
     // Delegation
@@ -130,7 +131,9 @@ export const governanceAPI = {
     // Treasury
     getTreasury: () => api.get('/governance/treasury'),
     getTreasuryTransactions: (limit = 20, category = null) =>
-        api.get(`/governance/treasury/transactions?limit=${limit}${category ? `&category=${category}` : ''}`),
+        api.get('/governance/treasury/transactions', {
+            params: { limit, ...(category ? { category } : {}) },
+        }),
     getTreasuryAnalytics: () => api.get('/governance/treasury/analytics'),
 
     // Stats
@@ -140,7 +143,7 @@ export const governanceAPI = {
 // === Elections API ===
 export const electionsAPI = {
     list: (status = null) =>
-        api.get(`/governance/elections${status ? `?status=${status}` : ''}`),
+        api.get('/governance/elections', { params: status ? { status } : {} }),
     get: (id) => api.get(`/governance/elections/${id}`),
     create: ({ title, description, seats, nominationsDays, votingDays, termMonths, creatorAddress }) =>
         api.post('/governance/elections', {

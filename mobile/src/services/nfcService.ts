@@ -1,23 +1,13 @@
 /**
- * NFC Service - Chilean ID Card Reading with PACE Protocol
- * 
- * This module handles reading the NFC chip from Chilean ID cards (Cédula de Identidad)
- * using the PACE (Password Authenticated Connection Establishment) protocol.
+ * NFC service for the mobile pilot.
+ *
+ * Simple NDEF detection is available. BAC key derivation exists, but the
+ * authenticated APDU exchange and EF.SOD validation required to verify a
+ * Chilean identity document are not implemented yet.
  */
 
 import NfcManager, { NfcTech, Ndef } from 'react-native-nfc-manager';
 import { deriveBACKeys as deriveBACKeysICAO, MRZKeyData } from './bacCrypto';
-
-// APDU Commands for eID reading
-const APDU_COMMANDS = {
-    SELECT_MF: [0x00, 0xA4, 0x00, 0x0C, 0x02, 0x3F, 0x00],
-    SELECT_EF_COM: [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x01, 0x1E],
-    SELECT_EF_SOD: [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x01, 0x1D],
-    SELECT_EF_DG1: [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x01, 0x01], // MRZ data
-    SELECT_EF_DG2: [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x01, 0x02], // Photo
-    SELECT_EF_DG11: [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x01, 0x0B], // Additional details
-    READ_BINARY: [0x00, 0xB0, 0x00, 0x00, 0x00],
-};
 
 /**
  * Derivación de llaves BAC. Delega en bacCrypto.ts, que está verificado
@@ -190,10 +180,10 @@ class NFCService {
             if (tag?.ndefMessage) {
                 ndefRecords = tag.ndefMessage.map((record: any) => {
                     if (record.tnf === Ndef.TNF_WELL_KNOWN) {
-                        if (Ndef.isType(record, Ndef.RTD_TEXT)) {
+                        if (Ndef.isType(record, Ndef.TNF_WELL_KNOWN, Ndef.RTD_TEXT)) {
                             return { type: 'text', value: Ndef.text.decodePayload(record.payload) };
                         }
-                        if (Ndef.isType(record, Ndef.RTD_URI)) {
+                        if (Ndef.isType(record, Ndef.TNF_WELL_KNOWN, Ndef.RTD_URI)) {
                             return { type: 'uri', value: Ndef.uri.decodePayload(record.payload) };
                         }
                     }

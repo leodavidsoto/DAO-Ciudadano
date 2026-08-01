@@ -2,10 +2,11 @@
 Authentication Router
 Handles ClaveÚnica, NFC, and Liveness detection endpoints
 """
-from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
 from typing import Optional
 import logging
 import asyncio
+import re
 import uuid
 import base64
 import io
@@ -13,15 +14,44 @@ from PIL import Image
 
 from ..models import (
     ClaveUnicaRequest, ClaveUnicaResponse,
-    NFCRequest, NFCResponse, LivenessResponse, IdentityEvent
+    NFCRequest, NFCResponse, LivenessResponse,
+    User, UserRegisterRequest, UserLoginRequest, UserResponse,
 )
-from ..core.security import generate_short_hash
-from ..core.database import identity_events_collection
+from ..core import readiness
 from ..core.config import settings
+from ..core.crypto import encrypt, decrypt
+from ..core.database import users_collection
+from ..core.identity import lookup_key
+from ..core.security import generate_short_hash
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+DEMO_ASSURANCE_LEVEL = "DEMO_UNVERIFIED"
+
+
+def require_non_production_identity_demo() -> None:
+    """Fail closed when a simulated identity flow reaches production.
+
+    None of these routes currently authenticates civil identity: ClaveUnica
+    and NFC are simulations, a single-image LLM is not a liveness verifier,
+    and RUT + email only proves knowledge of submitted data. A router-level
+    dependency runs before endpoint logic and before any database mutation.
+    """
+    if settings.is_production:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Los flujos de identidad de este piloto están deshabilitados "
+                "en producción hasta integrar un verificador de identidad real."
+            ),
+        )
+
+
+router = APIRouter(
+    prefix="/auth",
+    tags=["Authentication"],
+    dependencies=[Depends(require_non_production_identity_demo)],
+)
 
 
 async def mock_delay(seconds: float = 0.1):
@@ -43,27 +73,19 @@ async def authenticate_clave_unica(request: ClaveUnicaRequest):
         if not request.rut or len(request.rut) < 8:
             return ClaveUnicaResponse(ok=False, error="RUT inválido")
         
-        # Mock successful authentication
-        subject_id = f"claveunica:{request.rut}"
-        
-        # Store identity event
-        event = IdentityEvent(
-            user_id=request.rut,
-            event_type="clave_unica",
-            hash_value=generate_short_hash(request.rut),
-            verifier="claveunica_gov"
-        )
-        await identity_events_collection().insert_one(event.model_dump())
+        # Ephemeral demo identifier: deliberately neither stable nor derived
+        # from the RUT, and impossible to mistake for a government identifier.
+        subject_id = f"demo:clave-unica:{uuid.uuid4()}"
         
         return ClaveUnicaResponse(
             ok=True,
             subject_id=subject_id,
-            assurance_level="AL2"
+            assurance_level=DEMO_ASSURANCE_LEVEL,
         )
         
     except Exception as e:
         logger.error(f"Error in ClaveÚnica auth: {e}")
-        return ClaveUnicaResponse(ok=False, error=str(e))
+        return ClaveUnicaResponse(ok=False, error="No se pudo completar la autenticación.")
 
 
 @router.post("/nfc", response_model=NFCResponse)
@@ -72,26 +94,21 @@ async def authenticate_nfc(request: Optional[NFCRequest] = None):
     Authenticate using NFC chip in Chilean ID card
 
     DEMO MODE: no cryptographic verification of the chip happens yet
-    (real PACE reading is ROADMAP task 4.2). If the client sends the chip
-    serial it captured, it is used as-is; otherwise a demo serial is generated.
+    (real PACE reading is ROADMAP task 4.2). If the client sends a tag serial,
+    the API derives a non-sensitive demo identifier from it; otherwise a random
+    demo identifier is generated. Neither result proves the tag is a cédula.
     """
     try:
         await mock_delay(0.16)
 
         if request and request.chip_serial:
-            chip_serial = request.chip_serial
+            chip_serial = (
+                "DEMO-NFC-CLIENT-"
+                + generate_short_hash(request.chip_serial, length=12).upper()
+            )
         else:
-            chip_serial = f"NFC-CL-CH-{uuid.uuid4().hex[:8].upper()}"
+            chip_serial = f"DEMO-NFC-RANDOM-{uuid.uuid4().hex[:8].upper()}"
         doc_hash = f"0x{generate_short_hash('nfc_doc_' + chip_serial)}"
-        
-        # Store identity event
-        event = IdentityEvent(
-            user_id=chip_serial,
-            event_type="nfc",
-            hash_value=doc_hash,
-            verifier="chile_gov_nfc"
-        )
-        await identity_events_collection().insert_one(event.model_dump())
         
         return NFCResponse(
             ok=True,
@@ -101,16 +118,17 @@ async def authenticate_nfc(request: Optional[NFCRequest] = None):
         
     except Exception as e:
         logger.error(f"Error in NFC auth: {e}")
-        return NFCResponse(ok=False, error=str(e))
+        return NFCResponse(ok=False, error="No se pudo completar la lectura NFC.")
 
 
 @router.post("/liveness", response_model=LivenessResponse)
 async def analyze_liveness(file: UploadFile = File(...)):
     """
-    Analyze uploaded image for liveness detection
-    
-    Uses AI vision to determine if the image shows a real person
-    taking a live selfie vs a photo, video, or deepfake.
+    Run a demo-only visual heuristic over an uploaded image.
+
+    A single still image cannot prove liveness. This route stays useful for
+    interface testing outside production, but its result is not identity
+    evidence and is never persisted as one.
     """
     try:
         if not file.content_type or not file.content_type.startswith('image/'):
@@ -133,10 +151,16 @@ async def analyze_liveness(file: UploadFile = File(...)):
         # Check for API key
         api_key = settings.EMERGENT_LLM_KEY
         if not api_key:
-            # Return mock response if no API key
-            logger.warning("No EMERGENT_LLM_KEY configured, using mock liveness")
-            score = 0.85
-            analysis = "Mock liveness detection: imagen parece ser genuina (API key no configurada)"
+            # No provider, no score. Returning a fixed 0.85 here is exactly the
+            # fabricated-value pattern AGENTS.md forbids: the client cannot
+            # tell it apart from a real measurement, and this project already
+            # shipped that number to production once.
+            logger.warning("No EMERGENT_LLM_KEY configured; liveness returns no score")
+            score = None
+            analysis = (
+                "DEMO: no hay proveedor de análisis configurado, así que no se "
+                "calculó ningún puntaje. Este flujo no verifica presencia en vivo."
+            )
         else:
             # Real LLM analysis
             try:
@@ -145,27 +169,21 @@ async def analyze_liveness(file: UploadFile = File(...)):
                 chat = LlmChat(
                     api_key=api_key,
                     session_id=f"liveness_{uuid.uuid4()}",
-                    system_message="""Eres un experto en detección de vida (liveness detection). 
-                    Analiza esta imagen y determina si muestra una persona real en vivo o si es una foto/video/deepfake.
-                    
-                    Evalúa:
-                    1. Naturalidad de la pose y expresión
-                    2. Calidad de la imagen (¿parece tomada en vivo?)
-                    3. Signos de vida como micro-movimientos o inconsistencias de deepfake
-                    4. Contexto y fondo
-                    
-                    Responde con un score de 0.0 a 1.0 donde:
-                    - 0.0-0.3: Definitivamente no es una persona real
-                    - 0.4-0.6: Dudoso, posible foto o video
-                    - 0.7-0.9: Probablemente una persona real
-                    - 0.9-1.0: Definitivamente una persona real en vivo
-                    
+                    system_message="""Evalúa solo indicios visuales en esta imagen.
+                    Una imagen estática no permite verificar presencia en vivo,
+                    así que no afirmes que la identidad o el liveness están
+                    verificados. El score representa únicamente qué tan
+                    consistente parece la imagen con un selfie normal.
+
                     Formato: "SCORE: 0.85 | ANÁLISIS: [tu análisis detallado]" """
                 ).with_model("openai", "gpt-4o")
                 
                 image_content = ImageContent(image_base64=base64_image)
                 user_message = UserMessage(
-                    text="Analiza esta imagen para detección de vida (liveness detection). ¿Es una persona real tomándose un selfie ahora mismo?",
+                    text=(
+                        "Describe indicios visuales de un selfie sin afirmar que "
+                        "la presencia en vivo está verificada."
+                    ),
                     file_contents=[image_content]
                 )
                 
@@ -181,26 +199,32 @@ async def analyze_liveness(file: UploadFile = File(...)):
                         score = float(score_part)
                         if "|" in response:
                             analysis = response.split("|", 1)[1].replace("ANÁLISIS:", "").strip()
-                    except:
+                    except (ValueError, IndexError):
                         pass
                         
             except ImportError:
-                logger.warning("emergentintegrations not available, using mock")
-                score = 0.85
-                analysis = "Mock liveness: biblioteca no disponible"
+                logger.warning("emergentintegrations not available; liveness returns no score")
+                score = None
+                analysis = (
+                    "DEMO: la biblioteca de análisis no está disponible, así "
+                    "que no se calculó ningún puntaje. Este flujo no verifica "
+                    "presencia en vivo."
+                )
             except Exception as e:
+                # Never surface the provider's error text (it can carry URLs,
+                # model ids or key fragments) as if it were an analysis result.
                 logger.error(f"LLM error: {e}")
-                score = 0.5
-                analysis = f"Error en análisis: {str(e)}"
-        
-        # Store identity event
-        event = IdentityEvent(
-            user_id=generate_short_hash(base64_image[:100]),
-            event_type="liveness",
-            hash_value=generate_short_hash(f"liveness_{score}"),
-            verifier="llm_vision_ai"
-        )
-        await identity_events_collection().insert_one(event.model_dump())
+                score = None
+                analysis = (
+                    "DEMO: el análisis falló; no se calculó ningún puntaje. "
+                    "Este flujo no verifica presencia en vivo."
+                )
+
+        if not analysis.startswith("DEMO:"):
+            analysis = (
+                "DEMO: heurística sobre una sola imagen; no constituye una "
+                f"verificación de presencia en vivo. {analysis}"
+            )
         
         return LivenessResponse(
             ok=True,
@@ -210,17 +234,10 @@ async def analyze_liveness(file: UploadFile = File(...)):
         
     except Exception as e:
         logger.error(f"Error in liveness detection: {e}")
-        return LivenessResponse(ok=False, error=f"Error en análisis: {str(e)}")
+        return LivenessResponse(ok=False, error="No se pudo procesar la imagen.")
 
 
 # === RUT + Email Authentication (Simple registration while awaiting ClaveÚnica sandbox) ===
-
-from ..models import User, UserRegisterRequest, UserLoginRequest, UserResponse
-from ..core.database import users_collection
-from ..core import readiness
-from ..core.crypto import encrypt, decrypt
-from ..core.identity import lookup_key
-import re
 
 
 def validate_rut(rut: str) -> bool:
@@ -326,16 +343,6 @@ async def register_user(request: UserRegisterRequest):
 
         await users_collection().insert_one(user.model_dump())
 
-        # Store identity event -- usa el hash de identidad (D-2), no un
-        # sha256 sin sal sobre RUT+email en texto plano
-        event = IdentityEvent(
-            user_id=rut_key,
-            event_type="rut_email",
-            hash_value=generate_short_hash(rut_key + email_key),
-            verifier="dao_ciudadana_registration"
-        )
-        await identity_events_collection().insert_one(event.model_dump())
-
         logger.info(f"New user registered (rut_key={rut_key[:8]}...)")
 
         return UserResponse(
@@ -344,8 +351,8 @@ async def register_user(request: UserRegisterRequest):
             rut=formatted_rut,
             email=normalized_email,
             nombre=request.nombre,
-            subject_id=f"rut:{rut_key}",
-            assurance_level="AL1"  # Lower assurance since not verified with ClaveÚnica
+            subject_id=f"demo:user:{user.id}",
+            assurance_level=DEMO_ASSURANCE_LEVEL,
         )
 
     except HTTPException:
@@ -385,14 +392,6 @@ async def login_user(request: UserLoginRequest):
         if user_doc.get("status") != "active":
             return UserResponse(ok=False, error="Cuenta desactivada")
 
-        event = IdentityEvent(
-            user_id=rut_key,
-            event_type="rut_email_login",
-            hash_value=generate_short_hash(f"login_{rut_key}"),
-            verifier="dao_ciudadana_login"
-        )
-        await identity_events_collection().insert_one(event.model_dump())
-
         logger.info(f"User logged in (rut_key={rut_key[:8]}...)")
 
         try:
@@ -406,8 +405,8 @@ async def login_user(request: UserLoginRequest):
             rut=formatted_rut,
             email=normalized_email,
             nombre=nombre,
-            subject_id=f"rut:{rut_key}",
-            assurance_level="AL1"
+            subject_id=f"demo:user:{user_doc.get('id')}",
+            assurance_level=DEMO_ASSURANCE_LEVEL,
         )
 
     except HTTPException:
@@ -415,4 +414,3 @@ async def login_user(request: UserLoginRequest):
     except Exception as e:
         logger.error(f"Error in login: {e}")
         return UserResponse(ok=False, error="No se pudo iniciar sesión. Intenta de nuevo.")
-

@@ -8,7 +8,6 @@ import {
     Text,
     StyleSheet,
     TouchableOpacity,
-    Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -26,7 +25,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
                     <Text style={styles.logoSubtext}>CIUDADANA</Text>
                 </View>
                 <Text style={styles.tagline}>
-                    Identidad Digital Soberana en Blockchain
+                    Piloto técnico de lectura NFC y wallet
                 </Text>
             </View>
 
@@ -34,25 +33,25 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             <View style={styles.content}>
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🪪</Text>
-                    <Text style={styles.featureTitle}>Verificación NFC</Text>
+                    <Text style={styles.featureTitle}>Lectura NFC experimental</Text>
                     <Text style={styles.featureDesc}>
-                        Lee el chip de tu cédula chilena para verificar tu identidad de forma segura
+                        Detecta tags compatibles. Esta versión no autentica una cédula ni verifica identidad.
                     </Text>
                 </View>
 
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🔗</Text>
-                    <Text style={styles.featureTitle}>Blockchain</Text>
+                    <Text style={styles.featureTitle}>Integración en desarrollo</Text>
                     <Text style={styles.featureDesc}>
-                        Tu identidad se almacena como un token Soulbound en Ethereum
+                        El piloto no almacena tu identidad en blockchain ni emite una membresía verificada.
                     </Text>
                 </View>
 
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🗳️</Text>
-                    <Text style={styles.featureTitle}>Gobernanza</Text>
+                    <Text style={styles.featureTitle}>Gobernanza piloto</Text>
                     <Text style={styles.featureDesc}>
-                        Participa en decisiones democráticas con voto verificado
+                        Las funciones de participación móvil todavía no están habilitadas para producción.
                     </Text>
                 </View>
             </View>
@@ -63,21 +62,21 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
                     style={styles.primaryButton}
                     onPress={() => navigation.navigate('Scan')}
                 >
-                    <Text style={styles.primaryButtonText}>ESCANEAR CÉDULA</Text>
+                    <Text style={styles.primaryButtonText}>PROBAR LECTOR NFC</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                     style={styles.secondaryButton}
                     onPress={() => navigation.navigate('Wallet')}
                 >
-                    <Text style={styles.secondaryButtonText}>YA TENGO MEMBRESÍA</Text>
+                    <Text style={styles.secondaryButtonText}>CONSULTAR UN REGISTRO</Text>
                 </TouchableOpacity>
             </View>
 
             {/* Footer */}
             <View style={styles.footer}>
                 <Text style={styles.footerText}>
-                    Powered by Ethereum • Sepolia Testnet
+                    PILOTO • SIN VERIFICACIÓN DE IDENTIDAD
                 </Text>
             </View>
         </SafeAreaView>

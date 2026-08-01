@@ -3,7 +3,7 @@ Core Configuration Module
 Centralized configuration using Pydantic Settings
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional, List
+from typing import Optional, List, Literal, cast
 from functools import lru_cache
 import os
 
@@ -14,6 +14,16 @@ class Settings(BaseSettings):
     # App
     APP_NAME: str = "DAO Ciudadana API"
     APP_VERSION: str = "1.0.0"
+    # Safe defaults: an unconfigured server is production-like and cannot
+    # create memberships. Local/demo environments must opt in explicitly.
+    APP_ENV: Literal["development", "test", "demo", "production"] = cast(
+        Literal["development", "test", "demo", "production"],
+        os.environ.get("APP_ENV", "production"),
+    )
+    MINT_MODE: Literal["disabled", "demo", "onchain"] = cast(
+        Literal["disabled", "demo", "onchain"],
+        os.environ.get("MINT_MODE", "disabled"),
+    )
     # Safe default: production-off. Enable locally with DEBUG=true (exposes /docs).
     DEBUG: bool = os.environ.get('DEBUG', 'false').lower() == 'true'
     
@@ -42,6 +52,10 @@ class Settings(BaseSettings):
 
     # Segundos de validez de una sesión de wallet (JWT emitido tras SIWE).
     SESSION_TOKEN_EXPIRE_SECONDS: int = int(os.environ.get('SESSION_TOKEN_EXPIRE_SECONDS', '3600'))
+    SIWE_CHALLENGE_EXPIRE_SECONDS: int = int(os.environ.get('SIWE_CHALLENGE_EXPIRE_SECONDS', '300'))
+    SIWE_DOMAIN: str = os.environ.get('SIWE_DOMAIN', 'localhost')
+    SIWE_URI: str = os.environ.get('SIWE_URI', 'http://localhost:3000')
+    SIWE_CHAIN_ID: int = int(os.environ.get('SIWE_CHAIN_ID', '11155111'))
 
     # Si es True, /governance/vote rechaza votos sin firma EIP-712 válida.
     # Se deja en False por defecto para no romper el flujo actual hasta
@@ -62,11 +76,23 @@ class Settings(BaseSettings):
     # "mongo": members collection is the source of truth (current state).
     # "onchain": hasMembership() on the SBT contract (ROADMAP Fase 1.5,
     # not implemented yet — selecting it fails loudly instead of simulating).
-    MEMBERSHIP_SOURCE: str = os.environ.get('MEMBERSHIP_SOURCE', 'mongo')
+    MEMBERSHIP_SOURCE: Literal["mongo", "onchain"] = cast(
+        Literal["mongo", "onchain"],
+        os.environ.get('MEMBERSHIP_SOURCE', 'mongo'),
+    )
     
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 100
+    RATE_LIMIT_SENSITIVE_REQUESTS: int = 30
     RATE_LIMIT_WINDOW_SECONDS: int = 60
+    # Lista explícita de IP/CIDR de proxies autorizados a aportar
+    # X-Forwarded-For. Vacía por defecto: el peer TCP es la única identidad
+    # confiable y un cliente no puede evadir límites inventando la cabecera.
+    TRUSTED_PROXY_IPS: str = os.environ.get('TRUSTED_PROXY_IPS', '')
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV == "production"
     
     @property
     def cors_origins_list(self) -> List[str]:
@@ -90,4 +116,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-

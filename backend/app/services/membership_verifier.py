@@ -43,11 +43,43 @@ class MongoMembershipVerifier(MembershipVerifier):
     async def is_member(self, address: str) -> bool:
         if not address:
             return False
-        member = await members_collection().find_one({
+        query = {
             "wallet_address": address.lower(),
             "status": "active",
-        })
+        }
+        if settings.is_production:
+            # Legacy documents have neither field and are therefore
+            # quarantined automatically. Demo rows also remain ineligible even
+            # if the same MongoDB database is promoted to production.
+            query.update({
+                "issuance_mode": "onchain",
+                "identity_verified": True,
+                "tx_hash": {"$type": "string", "$ne": ""},
+            })
+        member = await members_collection().find_one(query)
         return member is not None
+
+
+def membership_is_onchain(member: dict) -> bool:
+    """True only for explicit on-chain provenance with a stored transaction."""
+    return member.get("issuance_mode") == "onchain" and bool(member.get("tx_hash"))
+
+
+def membership_is_valid(member: dict) -> bool:
+    """Whether a stored membership is eligible in the current environment.
+
+    Non-production environments retain pilot behavior for active demo rows.
+    Production uses the same provenance requirements as the governance gate.
+    Missing fields are intentionally treated as legacy/unverified.
+    """
+    if member.get("status") != "active":
+        return False
+    if not settings.is_production:
+        return True
+    return (
+        membership_is_onchain(member)
+        and member.get("identity_verified") is True
+    )
 
 
 class OnChainMembershipVerifier(MembershipVerifier):

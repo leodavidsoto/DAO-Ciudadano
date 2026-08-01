@@ -1,28 +1,28 @@
 /**
  * Vote Delegation Component
  * Delegate your voting power to another member
+ *
+ * El poder de voto se toma de `voting_power` que devuelve la API, no de
+ * `delegators.length + 1`: el backend solo cuenta delegantes que siguen
+ * siendo miembros activos, así que contarlos todos acá mostraba un poder
+ * mayor al que realmente se aplica al votar.
  */
-import React, { useState, useEffect } from 'react';
-import { Users, ArrowRight, X, Check, AlertCircle, Zap } from 'lucide-react';
-import { Button } from '../ui/button';
-import { Badge } from '../ui/badge';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Users, ArrowRight, X, Check, AlertCircle, Info } from 'lucide-react';
 import { governanceAPI } from '@/lib/api';
 
 const VoteDelegation = ({ walletAddress }) => {
     const [delegation, setDelegation] = useState(null);
     const [delegators, setDelegators] = useState([]);
+    const [activeDelegators, setActiveDelegators] = useState([]);
+    const [votingPower, setVotingPower] = useState(null);
     const [delegateInput, setDelegateInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
 
-    useEffect(() => {
-        if (walletAddress) {
-            loadDelegation();
-        }
-    }, [walletAddress]);
-
-    const loadDelegation = async () => {
+    const loadDelegation = useCallback(async () => {
+        if (!walletAddress) return;
         try {
             const [delegationRes, delegatorsRes] = await Promise.all([
                 governanceAPI.getDelegation(walletAddress),
@@ -30,10 +30,16 @@ const VoteDelegation = ({ walletAddress }) => {
             ]);
             setDelegation(delegationRes.data);
             setDelegators(delegatorsRes.data.delegators || []);
+            setActiveDelegators(delegatorsRes.data.active_delegators || []);
+            setVotingPower(delegatorsRes.data.voting_power ?? null);
         } catch (err) {
             console.error('Error loading delegation:', err);
         }
-    };
+    }, [walletAddress]);
+
+    useEffect(() => {
+        loadDelegation();
+    }, [loadDelegation]);
 
     // Validate Ethereum address format
     const isValidAddress = (address) => {
@@ -65,7 +71,7 @@ const VoteDelegation = ({ walletAddress }) => {
         try {
             const response = await governanceAPI.delegate(walletAddress, trimmedInput);
             if (response.data.ok) {
-                setSuccess('¡Voto delegado exitosamente!');
+                setSuccess('Voto delegado correctamente.');
                 setDelegateInput('');
                 loadDelegation();
             } else {
@@ -85,7 +91,7 @@ const VoteDelegation = ({ walletAddress }) => {
         try {
             const response = await governanceAPI.revokeDelegation(walletAddress);
             if (response.data.ok) {
-                setSuccess('Delegación revocada');
+                setSuccess('Delegación revocada.');
                 loadDelegation();
             } else {
                 setError(response.data.error);
@@ -97,122 +103,125 @@ const VoteDelegation = ({ walletAddress }) => {
         }
     };
 
-    const votingPower = delegators.length + 1;
+    const inactivos = delegators.length - activeDelegators.length;
 
     return (
-        <div className="vote-delegation glass-dark rounded-xl p-6 border border-purple-500/20">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                    <Users className="w-6 h-6 text-purple-400" />
-                    <h3 className="text-lg font-bold text-white">Delegación de Voto</h3>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Zap className="w-4 h-4 text-yellow-400" />
-                    <span className="text-yellow-400 font-bold">
-                        Poder de voto: {votingPower}x
-                    </span>
-                </div>
+        <section className="civic-card civic-card-pad">
+            <div className="flex items-center justify-between gap-4 flex-wrap mb-5">
+                <h2 className="civic-section-title">
+                    <Users className="w-5 h-5" />
+                    Delegación de voto
+                </h2>
+                <span className="civic-tag civic-tag-blue">
+                    Poder de voto: {votingPower ?? '—'}
+                </span>
             </div>
 
-            {/* Current Delegation Status */}
             {delegation?.delegated ? (
-                <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 mb-6">
-                    <div className="flex items-center justify-between">
+                <div className="civic-note civic-note-info mb-5">
+                    <div className="flex items-center justify-between gap-4 flex-wrap w-full">
                         <div>
-                            <div className="text-sm text-gray-400 mb-1">Tu voto está delegado a:</div>
-                            <div className="flex items-center gap-2">
-                                <code className="text-purple-400 text-sm">
-                                    {delegation.delegate?.slice(0, 10)}...{delegation.delegate?.slice(-8)}
-                                </code>
-                                <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30">
-                                    Activo
-                                </Badge>
-                            </div>
+                            <div className="civic-muted text-xs mb-1">Tu voto está delegado a:</div>
+                            <code className="civic-mono civic-ink font-semibold">
+                                {delegation.delegate?.slice(0, 10)}…{delegation.delegate?.slice(-8)}
+                            </code>
                         </div>
-                        <Button
+                        <button
                             onClick={handleRevoke}
-                            variant="outline"
-                            size="sm"
                             disabled={loading}
-                            className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                            className="civic-btn civic-btn-sm civic-btn-quiet"
                         >
-                            <X className="w-4 h-4 mr-1" />
+                            <X className="w-4 h-4" />
                             Revocar
-                        </Button>
+                        </button>
                     </div>
                 </div>
             ) : (
-                /* Delegate Form */
-                <div className="mb-6">
-                    <label className="text-sm text-gray-400 mb-2 block">
-                        Delegar mi voto a:
+                <div className="mb-5">
+                    <label htmlFor="delegate-address" className="civic-label">
+                        Delegar mi voto a
                     </label>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 flex-wrap">
                         <input
+                            id="delegate-address"
                             type="text"
                             value={delegateInput}
                             onChange={(e) => setDelegateInput(e.target.value)}
-                            placeholder="0x..."
-                            className="cyber-input flex-1"
+                            placeholder="0x…"
+                            className="civic-field"
+                            style={{ flex: '1 1 240px' }}
                         />
-                        <Button
+                        <button
                             onClick={handleDelegate}
                             disabled={loading || !delegateInput}
-                            className="cyber-button-premium"
+                            className="civic-btn civic-btn-primary"
                         >
                             {loading ? (
-                                <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                                <span className="civic-spinner" style={{ borderTopColor: '#fff', borderColor: 'rgba(255,255,255,.4)' }} />
                             ) : (
                                 <>
-                                    <ArrowRight className="w-4 h-4 mr-1" />
+                                    <ArrowRight className="w-4 h-4" />
                                     Delegar
                                 </>
                             )}
-                        </Button>
+                        </button>
                     </div>
                 </div>
             )}
 
-            {/* Messages */}
             {error && (
-                <div className="flex items-center gap-2 text-red-400 text-sm mb-4">
+                <div className="civic-note civic-note-error mb-4">
                     <AlertCircle className="w-4 h-4" />
                     {error}
                 </div>
             )}
             {success && (
-                <div className="flex items-center gap-2 text-green-400 text-sm mb-4">
+                <div className="civic-note civic-note-ok mb-4">
                     <Check className="w-4 h-4" />
                     {success}
                 </div>
             )}
 
-            {/* Delegators List */}
             {delegators.length > 0 && (
-                <div>
-                    <div className="text-sm text-gray-400 mb-2">
-                        Miembros que te han delegado su voto:
-                    </div>
+                <div className="mb-5">
+                    <p className="civic-eyebrow mb-2">Miembros que te delegaron su voto</p>
                     <div className="space-y-2">
-                        {delegators.map((addr, i) => (
-                            <div key={i} className="flex items-center gap-2 text-sm">
-                                <div className="w-2 h-2 rounded-full bg-cyan-400" />
-                                <code className="text-cyan-400">
-                                    {addr.slice(0, 10)}...{addr.slice(-6)}
-                                </code>
-                            </div>
-                        ))}
+                        {delegators.map((addr) => {
+                            const activo = activeDelegators.includes(addr);
+                            return (
+                                <div key={addr} className="flex items-center gap-2 text-sm">
+                                    <span
+                                        className="w-2 h-2 rounded-full shrink-0"
+                                        style={{ background: activo ? '#2E8B57' : '#C2D2EC' }}
+                                    />
+                                    <code className="civic-mono civic-ink">
+                                        {addr.slice(0, 10)}…{addr.slice(-6)}
+                                    </code>
+                                    {!activo && (
+                                        <span className="civic-tag civic-tag-neutral">Sin membresía activa</span>
+                                    )}
+                                </div>
+                            );
+                        })}
                     </div>
+                    {inactivos > 0 && (
+                        <p className="civic-help">
+                            {inactivos} delegación(es) no suman poder de voto porque quien delegó
+                            ya no es miembro activo.
+                        </p>
+                    )}
                 </div>
             )}
 
-            {/* Info */}
-            <div className="mt-4 p-3 bg-black/30 rounded-lg text-xs text-gray-500">
-                <p>💡 Al delegar, tu representante votará por ti en todas las propuestas.</p>
-                <p className="mt-1">Puedes revocar la delegación en cualquier momento.</p>
+            <div className="civic-note civic-note-info">
+                <Info className="w-4 h-4" />
+                <span>
+                    Al delegar, tu representante vota por ti en todas las propuestas y no
+                    podrás votar directamente hasta revocar. La delegación no es transitiva:
+                    tu voto llega a quien elegiste, no a quien esa persona delegue.
+                </span>
             </div>
-        </div>
+        </section>
     );
 };
 

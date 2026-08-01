@@ -21,7 +21,7 @@ class ApiService {
             },
         });
 
-        // Bearer token support, ready for when the backend emits JWT (ROADMAP 1.1)
+        // Bearer token support for the JWT returned by walletVerify (SIWE).
         this.client.interceptors.request.use((config) => {
             if (this.token) {
                 config.headers.Authorization = `Bearer ${this.token}`;
@@ -65,7 +65,7 @@ class ApiService {
         return response.data;
     }
 
-    /** POST /auth/login — RUT + email (no password/JWT yet, ROADMAP 1.1) */
+    /** POST /auth/login — demo account lookup; it does not create a wallet session. */
     async login(rut: string, email: string) {
         const response = await this.client.post('/auth/login', { rut, email });
         return response.data;
