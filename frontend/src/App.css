@@ -715,3 +715,191 @@ h1, h2, h3, h4, h5, h6 {
     box-shadow: none;
   }
 }
+/* =========================================================================
+   ESTILOS CÍVICOS PARA /UNETE (Reemplazo del modo Cyberpunk)
+   ========================================================================= */
+.civic-onboarding {
+  /* Forzamos el fondo claro y bloqueamos los efectos cyberpunk */
+  background: #f7f9fc !important;
+  color: #33456B !important;
+  min-height: 100vh;
+  position: relative;
+  z-index: 1;
+}
+
+/* Bloqueamos el grid matrix y las partículas del body/App */
+.civic-onboarding::before,
+.civic-onboarding::after,
+.civic-onboarding ~ .matrix-rain {
+  display: none !important;
+}
+
+/* Forzar ocultamiento en el root si civic-onboarding está activo */
+:has(.civic-onboarding)::before,
+:has(.civic-onboarding)::after {
+  display: none !important;
+}
+body:has(.civic-onboarding) {
+  background: #f7f9fc !important;
+  animation: none !important;
+}
+.App:has(.civic-onboarding)::before,
+.App:has(.civic-onboarding)::after {
+  display: none !important;
+}
+
+/* Estilos de las Tarjetas Cívicas (CivicMethodSelector) */
+.civic-card {
+  background: #ffffff;
+  border: 1px solid #E5EBF5;
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 12px rgba(0, 56, 151, 0.04);
+  transition: all 0.2s ease;
+}
+
+.civic-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 56, 151, 0.08);
+  border-color: #C2D2EC;
+}
+
+.civic-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.civic-card-header h3 {
+  font-family: 'Poppins', sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: #0B2545;
+  margin: 0;
+  text-transform: none;
+  letter-spacing: normal;
+  text-shadow: none;
+}
+
+.civic-card-desc {
+  font-family: 'Open Sans', sans-serif;
+  font-size: 13.5px;
+  color: #5C7099;
+  line-height: 1.5;
+  margin-bottom: 20px;
+}
+
+/* Botones Cívicos */
+.civic-button {
+  background: #003897;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-family: 'Poppins', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  transition: background 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 56, 151, 0.2);
+}
+
+.civic-button:hover {
+  background: #002B75;
+}
+
+.civic-button:focus-visible {
+  outline: 2px solid #CB2C27;
+  outline-offset: 2px;
+}
+
+/* Inputs Cívicos */
+.civic-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid #DCE5F3;
+  border-radius: 6px;
+  font-family: 'Open Sans', sans-serif;
+  font-size: 14px;
+  color: #33456B;
+  background: #ffffff;
+  transition: border-color 0.2s;
+}
+
+.civic-input:focus {
+  outline: none;
+  border-color: #003897;
+  box-shadow: 0 0 0 3px rgba(0, 56, 151, 0.1);
+}
+
+.civic-input::placeholder {
+  color: #A0B2D0;
+}
+
+/* Demostración */
+.civic-demo-info {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed #E5EBF5;
+}
+
+.demo-badge {
+  display: inline-block;
+  background: #FDF2F2;
+  color: #CB2C27;
+  font-family: 'Poppins', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.civic-demo-info small {
+  display: block;
+  font-family: 'Open Sans', sans-serif;
+  font-size: 11px;
+  color: #8090AD;
+  line-height: 1.4;
+}
+
+/* Sobreescribir componentes internos si están dentro de civic-onboarding */
+.civic-onboarding .cyber-panel {
+  background: #ffffff !important;
+  border: 1px solid #E5EBF5 !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.03) !important;
+}
+
+.civic-onboarding .cyber-title,
+.civic-onboarding h1,
+.civic-onboarding h2,
+.civic-onboarding h3 {
+  text-shadow: none !important;
+  background: none !important;
+  -webkit-text-fill-color: initial !important;
+  color: #0B2545 !important;
+  font-family: 'Poppins', sans-serif !important;
+}
+
+.civic-onboarding .cyber-progress-fill {
+  background: #003897 !important;
+  box-shadow: none !important;
+}
+
+.civic-onboarding .cyber-step-number.active {
+  background: #003897 !important;
+  color: white !important;
+  border-color: #003897 !important;
+  box-shadow: none !important;
+  animation: none !important;
+}
+.civic-onboarding .cyber-step-title.active {
+  color: #003897 !important;
+  text-shadow: none !important;
+}
