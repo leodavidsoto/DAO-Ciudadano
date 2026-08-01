@@ -1,28 +1,29 @@
-# Claude Skills: Frontend & Mobile (ZK & UI)
+# Claude Skills: Backend & Smart Contracts (ZK Verifier & ERC-4337)
 
 Este documento contiene las habilidades específicas (skills) y responsabilidades asignadas a Claude en el proyecto DAO Ciudadana bajo el paradigma de vanguardia (ADR-001).
 
 ## Misión de Claude
-Transformar la interfaz web (`frontend/`) y móvil (`mobile/`) en una DApp inmersiva, de estilo cyberpunk-estatal, que maneje Zero-Knowledge Proofs localmente en el navegador/dispositivo.
+Construir una infraestructura on-chain y off-chain ultrasegura que dependa de criptografía avanzada (ZK, MACI) y abstracción de cuentas (ERC-4337) en lugar de esquemas tradicionales o custodial servers.
 
 ## Skills & Componentes Asignados
 
-### 1. ZK-Client (Zero Knowledge en el Navegador)
-*   **Responsabilidad:** Debes implementar la generación de pruebas ZK en el cliente usando `snarkjs`. El backend enviará un claim firmado (la identidad validada), pero el cliente NUNCA enviará ese claim de vuelta al mintear. En su lugar, el cliente computa la prueba ZK localmente.
-*   **Librerías a usar:** `snarkjs`, ethers.js.
-*   **Archivos objetivo:** Modificar `frontend/src/context/OnboardingContext.jsx` y crear `frontend/src/lib/zk.js`.
+### 1. ZK Verifier (Contratos Inteligentes)
+*   **Responsabilidad:** Modificar `DAOCiudadanaSBT.sol` para que `mintMembership` reciba una prueba ZK (`uint[2] a, uint[2][2] b, uint[2] c`) y un `nullifierHash` (`bytes32`), en lugar del RUT hasheado.
+*   **Librerías/Herramientas a usar:** `circom` (para compilar el circuito y generar el Verifier.sol), Solidity.
+*   **Archivos objetivo:** `contracts/contracts/DAOCiudadanaSBT.sol`, `contracts/contracts/Verifier.sol` (nuevo).
 
-### 2. MACI Integrator (Voto Privado)
-*   **Responsabilidad:** Para la votación de gobernanza (Fase 3), debes integrar el cliente de MACI. Al votar, el usuario no envía su voto en texto plano ni como un EIP-712 simple, sino cifrado con la clave pública del coordinador de MACI.
-*   **Archivos objetivo:** Componentes dentro de `frontend/src/components/governance/`.
+### 2. MACI Coordinator & Safe (Gobernanza)
+*   **Responsabilidad:** Desplegar e integrar MACI para que los votos sean incoercibles. El tally final debe ser verificado on-chain y enlazarse con un módulo SafeSnap (Reality.eth) para ejecutar fondos desde la tesorería real multisig.
+*   **Archivos objetivo:** Modificar `backend/app/routers/governance.py` para manejar el registro de llaves públicas de MACI y encolar mensajes cifrados.
 
-### 3. Account Abstraction UX (ERC-4337)
-*   **Responsabilidad:** Ocultar completamente la complejidad de tener "gas". La interfaz debe conectarse a través de un Bundler/Paymaster.
-*   **Flujo:** En lugar de "Firmar Transacción", el botón debe decir "Autorizar Emisión (Subsidiada por el Estado)".
+### 3. Paymaster / Relayer Backend (ERC-4337 / ERC-2771)
+*   **Responsabilidad:** El backend en FastAPI debe integrar un servicio (como Biconomy, Pimlico o Gelato) para actuar como Paymaster. Cuando el Frontend envía el *UserOperation*, el backend lo subsidia.
+*   **Archivos objetivo:** `backend/app/services/blockchain_service.py` debe evolucionar de firmar transacciones crudas a firmar patrocinios de gas (Paymaster data).
 
-### 4. Estilo Cyberpunk Estatal
-*   **Responsabilidad:** Mantener y extender `styles/premium.css` y `styles/civic.css`. Evita los diseños genéricos. La DApp debe verse como una terminal ultra-segura del futuro, con micro-animaciones (framer-motion o CSS puro). NUNCA uses placeholders ni datos falsos (Regla de AGENTS.md).
+### 4. Seguridad de PII (Criptografía)
+*   **Responsabilidad:** El backend actúa como "Emisor" de identidad. Valida ClaveÚnica o NFC, y emite un claim firmado al cliente. Luego, NUNCA almacena el RUT en claro.
+*   **Archivos objetivo:** `backend/app/routers/auth.py`.
 
 ## Reglas de Convivencia con Codex
-- **No toques nada en `backend/` ni en `contracts/`.** Ese es el dominio de Codex.
-- Si necesitas un endpoint específico de backend para obtener las llaves públicas de MACI o los parámetros del circuito ZK, escribe tus requerimientos en un archivo `REQUEST_TO_CODEX.md`.
+- **No toques nada en `frontend/` ni en `mobile/`.** Ese es el dominio de Codex.
+- Si necesitas que el Frontend emita la prueba ZK de una manera específica o pase parámetros de ERC-4337, define la interfaz de API claramente en swagger o en un archivo `REQUEST_TO_CODEX.md`.
