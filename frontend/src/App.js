@@ -38,7 +38,7 @@ const App = () => {
             path="/unete"
             element={
               <OnboardingProvider>
-                <OnboardingPage />
+                <OnboardingPage appearance="civic" />
               </OnboardingProvider>
             }
           />
