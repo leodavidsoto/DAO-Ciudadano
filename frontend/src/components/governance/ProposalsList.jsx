@@ -7,12 +7,11 @@
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-    Vote, ThumbsUp, ThumbsDown, MinusCircle,
+    Vote,
     Clock, Users, CheckCircle, XCircle, Timer,
     PlusCircle
 } from 'lucide-react';
 import { governanceAPI } from '@/lib/api';
-import { generateNonce } from '@/lib/security';
 import CreateProposalModal from './CreateProposalModal';
 
 const CATEGORIAS = {
@@ -29,24 +28,12 @@ const ESTADOS = {
     expired: { tag: 'civic-tag-neutral', label: 'Expirada', icon: <Timer className="w-3 h-3" /> },
 };
 
-const ProposalCard = ({ proposal, walletAddress, onVote }) => {
-    const [voting, setVoting] = useState(false);
-
+const ProposalCard = ({ proposal }) => {
     const totalVotes = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
     const forPercent = totalVotes > 0 ? (proposal.votes_for / totalVotes) * 100 : 0;
     const againstPercent = totalVotes > 0 ? (proposal.votes_against / totalVotes) * 100 : 0;
 
     const estado = ESTADOS[proposal.status] || ESTADOS.expired;
-
-    const handleVote = async (voteType) => {
-        if (!walletAddress || voting) return;
-        setVoting(true);
-        try {
-            await onVote(proposal.id, voteType);
-        } finally {
-            setVoting(false);
-        }
-    };
 
     const endsAt = new Date(proposal.ends_at);
     const timeLeft = Math.max(0, Math.floor((endsAt - new Date()) / (1000 * 60 * 60 * 24)));
@@ -95,27 +82,11 @@ const ProposalCard = ({ proposal, walletAddress, onVote }) => {
                 </div>
             </div>
 
-            {proposal.status === 'active' && walletAddress && (
-                <div className="grid grid-cols-3 gap-2">
-                    <button onClick={() => handleVote('for')} disabled={voting} className="civic-vote civic-vote-for">
-                        <ThumbsUp className="w-4 h-4" />
-                        A favor
-                    </button>
-                    <button onClick={() => handleVote('against')} disabled={voting} className="civic-vote civic-vote-against">
-                        <ThumbsDown className="w-4 h-4" />
-                        En contra
-                    </button>
-                    <button onClick={() => handleVote('abstain')} disabled={voting} className="civic-vote civic-vote-abstain">
-                        <MinusCircle className="w-4 h-4" />
-                        Abstener
-                    </button>
-                </div>
-            )}
         </article>
     );
 };
 
-const ProposalsList = ({ walletAddress, signer }) => {
+const ProposalsList = ({ walletAddress }) => {
     const [proposals, setProposals] = useState([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState(null);
@@ -136,47 +107,6 @@ const ProposalsList = ({ walletAddress, signer }) => {
     useEffect(() => {
         loadProposals();
     }, [loadProposals]);
-
-    const handleVote = async (proposalId, vote) => {
-        if (!signer) {
-            alert('Conecta y firma la sesión de tu wallet antes de votar.');
-            return;
-        }
-        try {
-            const { data: schema } = await governanceAPI.getBallotSchema();
-            const nonce = generateNonce();
-            const ballotTypes = { ...schema.types };
-            delete ballotTypes.EIP712Domain;
-            const signature = await signer.signTypedData(
-                schema.domain,
-                ballotTypes,
-                {
-                    proposalId,
-                    voter: walletAddress,
-                    choice: vote,
-                    nonce,
-                }
-            );
-            const response = await governanceAPI.vote(
-                proposalId,
-                walletAddress,
-                vote,
-                nonce,
-                signature
-            );
-            if (response.data.ok) {
-                loadProposals(); // Reload to show updated counts
-            } else {
-                alert(response.data.error);
-            }
-        } catch (err) {
-            console.error('Vote error:', err);
-            alert(
-                err.response?.data?.detail ||
-                (err.code === 4001 ? 'Firma rechazada por el usuario.' : 'No fue posible firmar o registrar el voto.')
-            );
-        }
-    };
 
     const filters = [
         { value: null, label: 'Todas' },
@@ -246,8 +176,6 @@ const ProposalsList = ({ walletAddress, signer }) => {
                         <ProposalCard
                             key={proposal.id}
                             proposal={proposal}
-                            walletAddress={walletAddress}
-                            onVote={handleVote}
                         />
                     ))}
                 </div>

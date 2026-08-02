@@ -48,6 +48,7 @@ jest.mock('../lib/zk', () => {
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
 const WALLET = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
+const MEMBERSHIP_CONTRACT = '0x0000000000000000000000000000000000000002';
 const IDENTITY = {
     signature: 'private-signed-identity',
     identityRoot: '11',
@@ -83,7 +84,11 @@ beforeEach(async () => {
     context = null;
     container = document.createElement('div');
     root = createRoot(container);
-    readMembershipDeployment.mockResolvedValue({ scope: '13' });
+    readMembershipDeployment.mockResolvedValue({
+        scope: '13',
+        contractAddress: MEMBERSHIP_CONTRACT,
+        chainId: '11155111',
+    });
     checkZkAvailability.mockResolvedValue({ ready: true, missing: [] });
     deriveIdentityCommitment.mockResolvedValue('12');
     verifyIdentityCredential.mockReturnValue({ identityRoot: '11' });
@@ -121,6 +126,8 @@ test('mint sends only contract arguments after a positive local verification', a
     expect(membershipAPI.mintWithProof).toHaveBeenCalledTimes(1);
     expect(membershipAPI.mintWithProof).toHaveBeenCalledWith({
         walletAddress: WALLET,
+        membershipContract: MEMBERSHIP_CONTRACT,
+        chainId: '11155111',
         pA: PROOF_RESULT.pA,
         pB: PROOF_RESULT.pB,
         pC: PROOF_RESULT.pC,

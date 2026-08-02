@@ -1,5 +1,6 @@
 // Load configuration from environment or config file
 const path = require('path');
+const webpack = require('webpack');
 
 // Environment variable overrides
 const config = {
@@ -7,11 +8,45 @@ const config = {
 };
 
 module.exports = {
+  jest: {
+    configure: {
+      moduleNameMapper: {
+        '^@zk-kit/baby-jubjub$': '<rootDir>/node_modules/@zk-kit/baby-jubjub/dist/index.cjs',
+        '^@zk-kit/eddsa-poseidon$': '<rootDir>/node_modules/@zk-kit/eddsa-poseidon/dist/index.cjs',
+        '^@zk-kit/poseidon-cipher$': '<rootDir>/node_modules/@zk-kit/poseidon-cipher/dist/index.cjs',
+        '^@zk-kit/utils$': '<rootDir>/node_modules/@zk-kit/utils/dist/index.node.cjs',
+        '^@zk-kit/utils/conversions$': '<rootDir>/node_modules/@zk-kit/utils/dist/lib.commonjs/conversions.cjs',
+        '^@zk-kit/utils/error-handlers$': '<rootDir>/node_modules/@zk-kit/utils/dist/lib.commonjs/error-handlers.cjs',
+        '^@zk-kit/utils/f1-field$': '<rootDir>/node_modules/@zk-kit/utils/dist/lib.commonjs/f1-field.cjs',
+        '^@zk-kit/utils/scalar$': '<rootDir>/node_modules/@zk-kit/utils/dist/lib.commonjs/scalar.cjs',
+        '^@zk-kit/utils/type-checks$': '<rootDir>/node_modules/@zk-kit/utils/dist/lib.commonjs/type-checks.cjs',
+      },
+    },
+  },
   webpack: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
     },
     configure: (webpackConfig) => {
+      // MACI 2.5 targets Node as published. Keep its official PCommand wire
+      // format while sourcing randomness from Web Crypto in the browser.
+      webpackConfig.resolve.fallback = {
+        ...webpackConfig.resolve.fallback,
+        crypto: path.resolve(__dirname, 'src/lib/browserCrypto.js'),
+        assert: require.resolve('assert/'),
+        buffer: require.resolve('buffer/'),
+      };
+      webpackConfig.plugins.push(
+        new webpack.ProvidePlugin({ Buffer: ['buffer', 'Buffer'] })
+      );
+      // MACI's npm artifacts reference TypeScript source maps that are not
+      // shipped in the package. Ignore only that known packaging warning.
+      webpackConfig.ignoreWarnings = [
+        ...(webpackConfig.ignoreWarnings || []),
+        (warning) =>
+          /maci-(?:crypto|domainobjs)/.test(warning.module?.resource || '') &&
+          /Failed to parse source map/.test(warning.message || ''),
+      ];
       
       // Disable hot reload completely if environment variable is set
       if (config.disableHotReload) {

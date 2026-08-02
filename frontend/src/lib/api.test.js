@@ -1,4 +1,5 @@
 import {
+    buildEncryptedBallotPayload,
     buildIdentityCredentialRequest,
     buildZkMintPayload,
 } from './api';
@@ -47,4 +48,73 @@ test('builds the exact relayer payload without private identity material', () =>
         nullifier_hash: `0x${'09'.repeat(32)}`,
         identity_root: '10',
     });
+});
+
+test('builds only the public MACI wire message', () => {
+    const ciphertext = Array.from({ length: 10 }, (_, index) => String(index + 20));
+    const payload = buildEncryptedBallotPayload({
+        protocolVersion: 'maci-v2.5.0',
+        proposalId: 'proposal-1',
+        pollId: '7',
+        message: { data: ciphertext },
+        encryptionPublicKey: { x: '11', y: '12' },
+        coordinatorKeyHash: `0x${'ab'.repeat(32)}`,
+        idempotencyKey: '12345678-1234-4234-9234-123456789abc',
+        choice: 'for',
+        walletAddress: 'must-not-leak',
+        voterPrivateKey: 'must-not-leak',
+        sharedKey: 'must-not-leak',
+        signature: 'must-not-leak',
+    });
+
+    expect(payload).toEqual({
+        protocol_version: 'maci-v2.5.0',
+        proposal_id: 'proposal-1',
+        poll_id: '7',
+        message: { data: ciphertext },
+        encryption_public_key: { x: '11', y: '12' },
+        coordinator_key_hash: `0x${'ab'.repeat(32)}`,
+        idempotency_key: '12345678-1234-4234-9234-123456789abc',
+    });
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain('must-not-leak');
+    expect(serialized).not.toContain('choice');
+    expect(serialized).not.toContain('wallet');
+});
+
+test('rejects malformed MACI ciphertext before transport', () => {
+    expect(() => buildEncryptedBallotPayload({
+        protocolVersion: 'maci-v2.5.0',
+        proposalId: 'proposal-1',
+        pollId: '7',
+        message: { data: ['1', '2'] },
+        encryptionPublicKey: { x: '11', y: '12' },
+        coordinatorKeyHash: `0x${'ab'.repeat(32)}`,
+        idempotencyKey: '12345678-1234-4234-9234-123456789abc',
+    })).toThrow(/diez elementos/i);
+
+    expect(() => buildEncryptedBallotPayload({
+        protocolVersion: 'maci-v1',
+        proposalId: 'proposal-1',
+        pollId: '7',
+        message: { data: Array(10).fill('1') },
+        encryptionPublicKey: { x: '11', y: '12' },
+        coordinatorKeyHash: `0x${'ab'.repeat(32)}`,
+        idempotencyKey: '12345678-1234-4234-9234-123456789abc',
+    })).toThrow(/versión MACI no es compatible/i);
+
+    expect(() => buildEncryptedBallotPayload({
+        protocolVersion: 'maci-v2.5.0',
+        proposalId: 'proposal-1',
+        pollId: '7',
+        message: {
+            data: [
+                '21888242871839275222246405745257275088548364400416034343698204186575808495617',
+                ...Array(9).fill('1'),
+            ],
+        },
+        encryptionPublicKey: { x: '11', y: '12' },
+        coordinatorKeyHash: `0x${'ab'.repeat(32)}`,
+        idempotencyKey: '12345678-1234-4234-9234-123456789abc',
+    })).toThrow(/diez elementos decimales/i);
 });

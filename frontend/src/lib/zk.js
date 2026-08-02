@@ -732,8 +732,9 @@ export async function generateIdentityProof({
             ZK_ARTIFACT_URLS.wasm,
             ZK_ARTIFACT_URLS.zkey
         ));
-    } catch (error) {
-        console.error('ZK proof generation failed:', error);
+    } catch {
+        // Do not log the prover exception: some implementations include
+        // witness values, including the browser-only identity secret.
         throw new ZkProofError(
             'No se pudo generar la prueba. La credencial puede no corresponder a esta wallet, secreto o circuito.'
         );
@@ -782,8 +783,9 @@ export async function verifyProofLocally(proof, publicSignals) {
             publicSignals,
             proof
         );
-    } catch (error) {
-        console.error('Local proof verification failed:', error);
+    } catch {
+        // Verification failures are reported through the return value without
+        // exposing proof internals to console collectors.
         return false;
     }
 }

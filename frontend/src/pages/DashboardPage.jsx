@@ -22,6 +22,7 @@ import {
     VoteDelegation,
     ElectionsList,
     RepresentativesPanel,
+    VotingBallot,
 } from '@/components/governance';
 import '../styles/civic.css';
 
@@ -34,7 +35,7 @@ const NAV = [
 ];
 
 const DashboardLayout = () => {
-    const { address, shortAddress, signer, isConnected, connect, isConnecting } = useWallet();
+    const { address, shortAddress, chainId, isConnected, connect, isConnecting } = useWallet();
     const navigate = useNavigate();
 
     return (
@@ -104,7 +105,7 @@ const DashboardLayout = () => {
                 )}
 
                 <main style={{ padding: '28px 0 48px' }}>
-                    <Outlet context={{ walletAddress: address, signer }} />
+                    <Outlet context={{ walletAddress: address, chainId }} />
                 </main>
 
                 <footer className="civic-footer">
@@ -118,18 +119,23 @@ const DashboardLayout = () => {
 // === Sections ===
 
 const OverviewSection = () => {
-    const { walletAddress, signer } = useOutletContext();
+    const { walletAddress } = useOutletContext();
     return (
         <div className="space-y-10">
             <RepresentativesPanel />
-            <ProposalsList walletAddress={walletAddress} signer={signer} />
+            <ProposalsList walletAddress={walletAddress} />
         </div>
     );
 };
 
 const ProposalsSection = () => {
-    const { walletAddress, signer } = useOutletContext();
-    return <ProposalsList walletAddress={walletAddress} signer={signer} />;
+    const { walletAddress, chainId } = useOutletContext();
+    return (
+        <div className="space-y-10">
+            <VotingBallot walletAddress={walletAddress} chainId={chainId} />
+            <ProposalsList walletAddress={walletAddress} />
+        </div>
+    );
 };
 
 const ElectionsSection = () => {

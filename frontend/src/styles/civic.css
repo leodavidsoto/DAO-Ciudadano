@@ -84,6 +84,37 @@ body:has(.civic-app)::after,
     display: none !important;
 }
 
+/* App.css define una barra cian/magenta para el tema cyberpunk histórico.
+   El panel cívico necesita una barra neutra y legible sobre fondo claro. */
+body:has(.civic-app)::-webkit-scrollbar-track {
+    background: #F7F9FC;
+    border: 0;
+}
+
+body:has(.civic-app)::-webkit-scrollbar-thumb,
+body:has(.civic-app)::-webkit-scrollbar-thumb:hover {
+    background: #B7C5DB;
+    border-radius: 4px;
+    box-shadow: none;
+}
+
+.civic-app *::-webkit-scrollbar {
+    width: 8px;
+    height: 6px;
+}
+
+.civic-app *::-webkit-scrollbar-track {
+    background: #EDF1F8;
+    border: 0;
+}
+
+.civic-app *::-webkit-scrollbar-thumb,
+.civic-app *::-webkit-scrollbar-thumb:hover {
+    background: #B7C5DB;
+    border-radius: 4px;
+    box-shadow: none;
+}
+
 .civic-app *:focus-visible {
     outline: 2px solid var(--civic-rojo);
     outline-offset: 2px;
@@ -536,6 +567,136 @@ body:has(.civic-app)::after,
     animation: civicSpin .7s linear infinite;
 }
 
+.civic-spinner-light {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border-color: rgba(255, 255, 255, .45);
+    border-top-color: #ffffff;
+}
+
+/* === Urna privada MACI === */
+
+.civic-ballot {
+    background: var(--civic-superficie);
+    border: 1px solid var(--civic-azul-borde);
+    border-left: 4px solid var(--civic-azul);
+    border-radius: var(--civic-radio);
+    box-shadow: var(--civic-sombra);
+    padding: 24px;
+}
+
+.civic-ballot-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 22px;
+}
+
+.civic-ballot-intro {
+    max-width: 660px;
+    margin: 10px 0 0;
+    font-size: 13.5px;
+    line-height: 1.6;
+}
+
+.civic-ballot-form {
+    display: grid;
+    gap: 20px;
+}
+
+.civic-ballot-form fieldset {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    min-width: 0;
+}
+
+.civic-ballot-options {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.civic-ballot-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-height: 78px;
+    padding: 14px;
+    border: 1px solid var(--civic-borde-fuerte);
+    border-radius: var(--civic-radio-sm);
+    background: #FBFCFE;
+    cursor: pointer;
+    transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+}
+
+.civic-ballot-option:hover {
+    border-color: var(--civic-azul-borde);
+    background: var(--civic-azul-suave);
+}
+
+.civic-ballot-option.is-selected {
+    border-color: var(--civic-azul);
+    background: var(--civic-azul-suave);
+    box-shadow: inset 0 0 0 1px var(--civic-azul);
+}
+
+.civic-ballot-option:has(input:focus-visible) {
+    outline: 2px solid var(--civic-rojo);
+    outline-offset: 2px;
+}
+
+.civic-ballot-option input {
+    accent-color: var(--civic-azul);
+    margin-top: 3px;
+    flex-shrink: 0;
+}
+
+.civic-ballot-option strong,
+.civic-ballot-option small {
+    display: block;
+}
+
+.civic-ballot-option strong {
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 13.5px;
+}
+
+.civic-ballot-option small {
+    color: var(--civic-suave);
+    font-size: 11.5px;
+    line-height: 1.45;
+    margin-top: 3px;
+}
+
+.civic-ballot-form fieldset:disabled .civic-ballot-option {
+    cursor: not-allowed;
+    opacity: .58;
+}
+
+.civic-ballot-privacy {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    color: var(--civic-suave);
+    font-size: 12.5px;
+    line-height: 1.55;
+}
+
+.civic-ballot-privacy svg {
+    color: var(--civic-verde-texto);
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.civic-ballot-submit {
+    justify-self: start;
+    min-width: 224px;
+}
+
 @keyframes civicSpin { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
@@ -563,6 +724,10 @@ body:has(.civic-app)::after,
     .civic-nav { gap: 2px; }
     .civic-nav-item { padding: 9px 11px; font-size: 12.5px; }
     .civic-section-title { font-size: 18px; }
+    .civic-ballot { padding: 20px; }
+    .civic-ballot-heading { flex-direction: column; gap: 12px; }
+    .civic-ballot-options { grid-template-columns: 1fr; }
+    .civic-ballot-submit { width: 100%; }
 }
 
 /* =========================================================================

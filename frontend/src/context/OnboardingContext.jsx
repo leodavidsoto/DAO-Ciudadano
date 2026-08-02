@@ -492,6 +492,8 @@ export const OnboardingProvider = ({ children }) => {
             }
             const response = await membershipAPI.mintWithProof({
                 walletAddress: wallet.address,
+                membershipContract: currentDeployment.contractAddress,
+                chainId: currentDeployment.chainId,
                 pA: proofResult.pA,
                 pB: proofResult.pB,
                 pC: proofResult.pC,
