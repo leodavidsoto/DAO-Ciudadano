@@ -66,7 +66,6 @@ class UserOperationError(RuntimeError):
 class BundlerConfig:
     rpc_url: str
     entrypoint: str
-    account_address: str
     account_implementation: str
 
 
@@ -85,8 +84,9 @@ def configuration_errors() -> dict[str, str]:
             f"debe ser una de {sorted(SUPPORTED_ENTRYPOINTS)}"
         )
 
-    if not settings.ERC4337_ACCOUNT_ADDRESS.strip():
-        errors["ERC4337_ACCOUNT_ADDRESS"] = "falta"
+    # ERC4337_ACCOUNT_ADDRESS ya NO se exige: en el modelo no custodial el
+    # `sender` es la Safe del ciudadano y llega en cada petición. Pedir una
+    # cuenta global era un resto del diseño custodial eliminado.
 
     # Sin esto no se puede firmar: cada implementación firma distinto.
     if not settings.ERC4337_ACCOUNT_IMPLEMENTATION.strip():
@@ -132,12 +132,66 @@ def config() -> BundlerConfig:
     return BundlerConfig(
         rpc_url=settings.BUNDLER_RPC_URL.strip(),
         entrypoint=SUPPORTED_ENTRYPOINTS[settings.ERC4337_ENTRYPOINT_VERSION.strip()],
-        account_address=settings.ERC4337_ACCOUNT_ADDRESS.strip(),
         account_implementation=settings.ERC4337_ACCOUNT_IMPLEMENTATION.strip(),
     )
 
 
-def status() -> dict:
+_runtime_cache = None
+_RUNTIME_CACHE_SECONDS = 60
+
+
+def runtime_status() -> dict:
+    """Sonda real contra el bundler. No es una afirmación estática.
+
+    Comprueba tres cosas que, si no coinciden, producen fallos opacos más
+    tarde: que la credencial pasa, que la red es la que opera este backend, y
+    que el bundler soporta el EntryPoint que construimos. Se cachea porque
+    /health/ready puede consultarse a menudo y una sonda sin autenticar no
+    debe amplificar tráfico hacia el proveedor.
+    """
+    global _runtime_cache
+
+    import time as _time
+
+    now = _time.monotonic()
+    if _runtime_cache and now - _runtime_cache[0] < _RUNTIME_CACHE_SECONDS:
+        return dict(_runtime_cache[1])
+
+    result = {"checked": True, "reachable": False, "chain_id": None,
+              "entrypoint_supported": False, "errors": []}
+    if not is_configured():
+        result["errors"] = sorted(configuration_errors())
+        _runtime_cache = (now, result)
+        return dict(result)
+
+    try:
+        chain_id = int(_rpc("eth_chainId", []), 16)
+        result["chain_id"] = chain_id
+        result["reachable"] = True
+        if chain_id != settings.SIWE_CHAIN_ID:
+            result["errors"].append(
+                f"el bundler opera en chainId {chain_id}; este backend usa "
+                f"{settings.SIWE_CHAIN_ID}"
+            )
+
+        entrypoints = [e.lower() for e in _rpc("eth_supportedEntryPoints", [])]
+        cfg = config()
+        result["entrypoint_supported"] = cfg.entrypoint.lower() in entrypoints
+        if not result["entrypoint_supported"]:
+            result["errors"].append(
+                "el bundler no soporta el EntryPoint configurado"
+            )
+    except UserOperationError as exc:
+        result["errors"].append(str(exc))
+    except Exception:
+        logger.error("Sonda del bundler fallida", exc_info=True)
+        result["errors"].append("no se pudo contactar al bundler")
+
+    _runtime_cache = (now, result)
+    return dict(result)
+
+
+def status(probe: bool = False) -> dict:
     """Estado para /health/ready. Honesto sobre lo que falta."""
     errors = configuration_errors()
     return {
@@ -146,18 +200,25 @@ def status() -> dict:
         "missing": sorted(errors),
         "entrypoint_version": settings.ERC4337_ENTRYPOINT_VERSION,
         "account_implementation": settings.ERC4337_ACCOUNT_IMPLEMENTATION or None,
-        # La firma Safe está implementada, pero nunca se ejecutó contra un
-        # bundler real. Se declaran por separado a propósito: "implementado"
-        # y "verificado" no son lo mismo, y confundirlos es como se despliega
-        # algo que falla con AA24 en producción.
-        # El backend no firma: es arquitectura, no una carencia.
+        # El backend no firma: es arquitectura, no una carencia. Firma el
+        # ciudadano con MetaMask sobre la estructura SafeOp.
         "custodial": False,
         "signing_implemented": False,
-        "verified_against_bundler": False,
+        # Resultado MEDIDO de la sonda, no una constante. Antes era un `False`
+        # fijo que había que acordarse de cambiar a mano — justo el tipo de
+        # afirmación que se queda desactualizada y acaba mintiendo.
+        "bundler": runtime_status() if probe else None,
     }
 
 
 # === Transporte JSON-RPC ===
+
+# Pimlico está detrás de Cloudflare, que rechaza el user-agent por defecto de
+# `requests` con un 403 "error code: 1010" — un error de Cloudflare, no de la
+# API, así que ni siquiera llega a evaluarse la credencial. Verificado contra
+# el endpoint real: con el UA por defecto son 403; con este, responde.
+_USER_AGENT = "dao-ciudadana-backend/1.0"
+
 
 def _rpc(method: str, params: list) -> dict:
     """Llamada JSON-RPC al bundler. Síncrona: el llamador usa to_thread."""
@@ -168,9 +229,20 @@ def _rpc(method: str, params: list) -> dict:
         response = requests.post(
             cfg.rpc_url,
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+            headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
             timeout=20,
         )
+        if response.status_code == 403:
+            # Se distingue del rechazo de la API: confundirlos manda a revisar
+            # la credencial cuando el problema es el filtro de borde.
+            raise UserOperationError(
+                "El bundler devolvió 403 antes de procesar la petición "
+                "(filtro de borde). Revisa el User-Agent y la red de salida, "
+                "no la credencial."
+            )
         payload = response.json()
+    except UserOperationError:
+        raise
     except Exception as exc:
         raise UserOperationError("El bundler no respondió.") from exc
 
@@ -277,51 +349,10 @@ def wait_for_receipt(user_op_hash: str, attempts: int = 30, delay: float = 2.0) 
     )
 
 
-def mint_via_user_operation(
-    wallet_address: str,
-    proof_a: list,
-    proof_b: list,
-    proof_c: list,
-    nullifier_hash: str,
-    identity_root: int,
-) -> tuple[str, Optional[int]]:
-    """Camino completo ERC-4337 del minteo ZK.
-
-    Falla cerrado mientras la firma no esté resuelta: es preferible seguir
-    usando el relayer EOA —que funciona y está probado— a enviar operaciones
-    que el EntryPoint rechaza.
-    """
-    if not is_enabled():
-        raise PaymasterUnavailable(
-            "El transporte ERC-4337 no está habilitado o configurado."
-        )
-
-    cfg = config()
-    call_data = build_mint_calldata(
-        wallet_address, proof_a, proof_b, proof_c, nullifier_hash, identity_root
-    )
-
-    user_op = {
-        "sender": cfg.account_address,
-        "nonce": hex(entrypoint_nonce(cfg.account_address)),
-        "callData": call_data,
-    }
-
-    # 1. Estimar gas, 2. pedir patrocinio, 3. firmar, 4. enviar. El orden
-    #    importa: el Paymaster firma sobre los límites de gas ya fijados.
-    user_op = {**user_op, **estimate_user_operation_gas(user_op)}
-    user_op = sponsor_user_operation(user_op)
-    user_op = sign_user_operation(user_op)
-
-    user_op_hash = send_user_operation(user_op)
-    receipt = wait_for_receipt(user_op_hash)
-
-    if not receipt.get("success"):
-        raise UserOperationError("La UserOperation se revirtió on-chain.")
-
-    # El tokenId lo resuelve el llamador leyendo el contrato: el recibo de una
-    # UserOperation no expone el valor de retorno de la llamada interna.
-    return user_op_hash, None
+# El antiguo `mint_via_user_operation` se eliminó con el resto del camino
+# custodial: enviaba desde una cuenta del backend usando su propia firma. El
+# flujo vigente es /api/erc4337/prepare-mint + submit-mint, donde la Safe es
+# del ciudadano y firma él.
 
 
 def entrypoint_nonce(account_address: str, key: int = 0) -> int:

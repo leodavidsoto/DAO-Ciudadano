@@ -216,6 +216,15 @@ async def health_check():
     from app.core.rate_limit_store import describe as describe_rate_limit
 
     rate_limit = describe_rate_limit(rate_limit_store)
+
+    # Sonda del bundler solo si el transporte está habilitado: no hay que
+    # golpear a un proveedor externo en cada health check de un despliegue
+    # que ni siquiera lo usa.
+    from app.services import paymaster_service
+
+    erc4337 = await asyncio.to_thread(
+        paymaster_service.status, paymaster_service.is_enabled()
+    )
     status_label = (
         "healthy"
         if healthy and configuration["production_ready"]
@@ -230,6 +239,7 @@ async def health_check():
         "database": {"healthy": db_healthy},
         "indexes": {"ready": indexes_ready},
         "rate_limit": rate_limit,
+        "erc4337": erc4337,
         "configuration": configuration,
     }
     return JSONResponse(status_code=200 if healthy else 503, content=body)

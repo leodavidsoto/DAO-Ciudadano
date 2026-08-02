@@ -17,6 +17,28 @@ os.environ.setdefault("SECRET_KEY", "test-only-secret-key-not-for-production")
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("MINT_MODE", "demo")
 
+# La suite debe ser hermética: `pydantic-settings` lee `backend/.env` al
+# importar, así que sin esto un `.env` de desarrollo con credenciales reales
+# cambiaría los resultados y CI divergiría de local. Se fijan a vacío las
+# variables de integraciones externas — `os.environ` tiene precedencia sobre
+# el archivo. Un test que necesite alguna, la activa con monkeypatch.
+os.environ["ERC4337_ENABLED"] = "false"  # booleano: "" no parsea
+for _external in (
+    "BUNDLER_RPC_URL",
+    "ERC4337_ACCOUNT_IMPLEMENTATION",
+    "ERC4337_PAYMASTER_ADDRESS",
+    "SAFE_4337_MODULE_ADDRESS",
+    "SAFE_OWNER_PRIVATE_KEY",
+    "REDIS_URL",
+    "SEPOLIA_RPC_URL",
+    "SBT_CONTRACT_ADDRESS",
+    "MINTER_PRIVATE_KEY",
+    "MACI_COORDINATOR_ADDRESS",
+    "IDENTITY_ISSUER_PRIVATE_KEY",
+    "IDENTITY_PROVIDER",
+):
+    os.environ[_external] = ""
+
 import httpx
 import asyncio
 import pytest
