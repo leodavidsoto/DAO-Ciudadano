@@ -413,3 +413,98 @@ comprobación del color computado — todas devuelven fondo claro `rgb(247,249,2
 y tinta `rgb(51,69,107)`. Un barrido de contraste texto/fondo sobre el flujo de
 alta no encontró combinaciones ilegibles (el único positivo es el `<noscript>`,
 que nunca se muestra con JS activo).
+
+---
+
+## Hallazgos de la Tarea 6 — E2E y firma no custodial (01-08-2026)
+
+| ID | Hallazgo | Ubicación | Severidad | Estado |
+|---|---|---|---|---|
+| P-51 | La suite Playwright arrancaba CRA con `craco start` directamente, saltándose `prestart/zk:sync`. En un checkout limpio podía ejecutar sin los tres artefactos ZK de `public/zk` o reutilizar residuos locales; además no existía un job E2E en CI | `e2e/playwright.config.js`; `.github/workflows/ci.yml` | Alta (integridad de pruebas) | ✅ Corregido: usa `npm start`, reconstruye los artefactos desde el manifiesto verificado y la CI instala Chromium y ejecuta Playwright en cada PR |
+| P-52 | El flujo guardaba solo dirección/red y, al mintear, `erc4337.js` caía a `globalThis.ethereum`. La instancia que estableció SIWE no quedaba fijada hasta la firma de la UserOperation | `frontend/src/hooks/useWallet.js`; `WalletStep.jsx`; `OnboardingContext.jsx`; `lib/api.js`; `lib/erc4337.js` | Alta (autorización) | ✅ Corregido: la instancia MetaMask EIP-1193 viaja explícitamente en memoria, sin fallback global; cuenta y red se revalidan antes de construir y firmar, y la firma Safe v0.7 debe medir 77 bytes. El E2E sustituye el provider global tras SIWE y prueba que ninguna solicitud de firma se desvía |
+| P-53 | El router ERC-4337 añadido en `a49883e` no implementa todavía el contrato del cliente: `PrepareMintRequest` exige `proof`, mientras el frontend envía `account + mint`; además intenta decodificar el `callData` exterior de `Safe4337Module.executeUserOpWithErrorString` directamente con la ABI del SBT. El camino integrado devolvería 422 antes de patrocinar una operación válida | `backend/app/routers/erc4337.py:65`; `backend/app/routers/erc4337.py:112`; `REQUEST_TO_CLAUDE.md:177` | **Alta (integración bloqueada)** | 🔴 Abierto en backend: recalcular la Safe ciudadana, decodificar primero el envoltorio Safe4337 y alinear el modelo con el payload documentado. También debe eliminar la dependencia de una `ERC4337_ACCOUNT_ADDRESS` global y validar la prueba completa. La suite E2E usa un fixture contractual y no afirma haber probado Pimlico/backend reales |
+
+### Evidencia ejecutada
+
+- Frontend: `CI=true npm test -- --watchAll=false --runInBand` → **7 suites,
+  41 tests**; incluye un test con `permissionless` real que observa una única
+  llamada `eth_signTypedData_v4` con `SafeOp`. `CI=true npm run build` compiló
+  correctamente.
+- E2E desde configuración limpia: los tres artefactos ZK fueron resincronizados
+  desde `circuits/build`; la primera corrida limpia pasó en **4.0m**. La corrida
+  final reforzada, sustituyendo el provider global después de SIWE, dio
+  `CI=true E2E_FRONTEND_PORT=3015 npm test` → **1 passed (52.9s)** en Chromium.
+  Se verificó la prueba Groth16, se recuperó el owner de la firma EIP-712 y se
+  descifró/validó la papeleta MACI capturada.
+- El nuevo job `E2E · Playwright` y la suite unitaria de frontend quedaron como
+  gates de `.github/workflows/ci.yml`.
+
+---
+
+## Hallazgo de la Tarea 6 — margen de censura del coordinador MACI (02-08-2026)
+
+| ID | Hallazgo | Ubicación | Severidad | Estado |
+|---|---|---|---|---|
+| P-54 | `processMessages.circom` **exige** que la firma EdDSA del comando sea válida (`EdDSAPoseidonVerifier.enabled === 1`). Un mensaje mal firmado no puede probarse, así que el coordinador debe excluirlo del procesamiento. Eso le deja margen de censura: puede declarar "inválido" un mensaje legítimo y nadie puede distinguir esa exclusión de una legítima, porque el contenido está cifrado. El acumulador on-chain prueba **qué mensajes se publicaron**, pero no que todos los válidos se hayan procesado | `circuits/processMessages.circom` (componente `signature`, `enabled <== 1`) | **Alta (integridad electoral)** | 🔴 **Aceptado a sabiendas para el alcance del piloto** (decisión del orquestador, 02-08-2026). No apto para una elección vinculante |
+
+**Por qué no se cerró ahora.** Procesar mensajes inválidos como *no-op* —sin
+revelar cuáles lo son— requiere que la verificación de firma produzca un
+**booleano** que alimente un selector de estado, en vez de una restricción dura.
+`EdDSAPoseidonVerifier` de circomlib solo restringe: no expone salida. Hacen
+falta dos cosas:
+
+1. un verificador EdDSA-Poseidon con salida (`valid`), reimplementado o
+   adaptado desde circomlib, y
+2. multiplexar la transición: `newLeaf = valid ? leafActualizada : leafPrevia`,
+   de modo que la prueba avance el estado igual haya sido válido o no y el
+   observador no pueda inferir cuál fue.
+
+Con eso, el coordinador quedaría obligado a procesar **todos** los mensajes
+publicados en orden, y omitir uno rompería la cadena de raíces de estado.
+
+**Mitigación disponible mientras tanto:** el acumulador de
+`MACICoordinator.publishMessage` fija contenido y orden de todo lo publicado,
+así que un observador puede contar cuántos mensajes hubo y compararlos con
+cuántos declara el coordinador haber procesado. Detecta una omisión masiva; no
+detecta la exclusión selectiva de un mensaje concreto.
+
+**Contexto de decisión:** aceptado explícitamente para el piloto por el
+orquestador el 02-08-2026, con el compromiso de abordarlo antes de cualquier
+uso vinculante. Se registra aquí para que la deuda no se pierda entre
+iteraciones.
+
+### Frontera de protocolo aprobada — cifrado de mensajes MACI
+
+El esquema de cifrado de `processMessages.circom` quedó **aprobado** el
+02-08-2026 y es contrato con el cliente:
+
+```
+shared        = coordinatorPrivKey · ephemeralPubKey     (ECDH Baby Jubjub)
+ciphertext[i] = plaintext[i] + Poseidon(shared.x, shared.y, i)   (mod p)
+```
+
+El cliente deriva la MISMA clave como `ephemeralPrivKey · coordinatorPubKey`.
+
+**No es el `poseidonDecrypt` de la implementación de referencia de MACI.** Es
+equivalente en garantías y más barato en restricciones, pero exige que el
+cliente cifre exactamente así: cualquier otra construcción produce texto que el
+circuito descifra como basura y cuya firma no verifica — y el fallo aparece
+como "firma inválida", no como "cifrado incompatible", que es difícil de
+diagnosticar.
+
+Disposición del texto plano (10 elementos, los que acepta el contrato):
+
+| Índice | Campo |
+|---|---|
+| 0 | `stateIndex` |
+| 1 | `voteOption` |
+| 2 | `voteWeight` |
+| 3 | `nonce` |
+| 4 | `newPubKeyX` |
+| 5 | `newPubKeyY` |
+| 6 | `sigR8x` |
+| 7 | `sigR8y` |
+| 8 | `sigS` |
+| 9 | relleno (0) |
+
+La firma EdDSA-Poseidon se calcula sobre `Poseidon(plaintext[0..5])`.

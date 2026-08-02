@@ -323,6 +323,8 @@ async def publish_message(
     )
     chain = hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
+    import uuid as _uuid
+
     await maci_messages_collection().insert_one({
         "poll_id": poll_id,
         # Se guarda la wallet para exigir membresía e inscripción, no para
@@ -330,6 +332,11 @@ async def publish_message(
         # coordinador, y el emisor de un voto y el de una anulación son
         # indistinguibles.
         "wallet_address": address,
+        # Clave propia para que el índice único de idempotencia tenga siempre
+        # valor. Un índice compuesto `sparse` NO omite el documento cuando solo
+        # falta uno de sus campos, así que dejarla nula hacía colisionar dos
+        # mensajes autenticados cualesquiera.
+        "idempotency_key": _uuid.uuid4().hex,
         "index": index,
         "ephemeral_x": str(eph_x),
         "ephemeral_y": str(eph_y),
@@ -353,3 +360,163 @@ async def poll_state(poll_id: str) -> dict:
         "message_count": int(poll["message_count"]) if poll else 0,
         "message_chain": poll["message_chain"] if poll else "0" * 64,
     }
+
+
+# === Polls anclados y transporte anónimo (REQUEST_TO_CLAUDE.md) ==============
+
+MACI_PROTOCOL_VERSION = "maci-v2.5.0"
+
+# MACI reserva el índice 0 del state tree: un votante real empieza en 1.
+FIRST_STATE_INDEX = 1
+
+# Los enteros empaquetados en un comando deben caber en 50 bits.
+MAX_PACKED_INT = 1 << 50
+
+
+def maci_poll_registry_collection():
+    return get_collection("maci_poll_registry")
+
+
+def coordinator_key_hash(x: int, y: int) -> str:
+    """Poseidon(x, y) como bytes32. El cliente lo recalcula y compara.
+
+    Sirve para que el navegador detecte que el backend le anunció una llave
+    distinta de la que está anclada on-chain, sin tener que confiar en él.
+    """
+    from ..core.poseidon import poseidon
+
+    return "0x" + poseidon([x, y]).to_bytes(32, "big").hex()
+
+
+async def assign_state_index(poll_id: str, wallet_address: str) -> int:
+    """Índice del votante en el state tree de esta consulta.
+
+    Empieza en 1 porque MACI reserva el 0. Es estable por wallet y consulta:
+    reasignarlo en un reintento rompería el nonce del votante.
+    """
+    address = wallet_address.lower()
+    existing = await maci_poll_registry_collection().find_one(
+        {"poll_id": poll_id, "wallet_address": address}
+    )
+    if existing:
+        return int(existing["state_index"])
+
+    assigned = await maci_poll_registry_collection().count_documents(
+        {"poll_id": poll_id}
+    )
+    state_index = FIRST_STATE_INDEX + assigned
+    await maci_poll_registry_collection().insert_one({
+        "poll_id": poll_id,
+        "wallet_address": address,
+        "state_index": state_index,
+        "nonce": 0,
+        "assigned_at": datetime.now(timezone.utc),
+    })
+    return state_index
+
+
+async def next_nonce(poll_id: str, wallet_address: str) -> int:
+    record = await maci_poll_registry_collection().find_one(
+        {"poll_id": poll_id, "wallet_address": wallet_address.lower()}
+    )
+    return (int(record["nonce"]) + 1) if record else 1
+
+
+async def publish_anonymous_message(
+    poll_id: str,
+    ephemeral_x,
+    ephemeral_y,
+    ciphertext,
+    idempotency_key: str,
+) -> dict:
+    """Encola un mensaje SIN identificar al remitente.
+
+    A diferencia de `publish_message`, aquí no hay `wallet_address`: el
+    transporte anónimo no puede recibirla, porque guardarla junto al texto
+    cifrado reconstruiría exactamente el enlace que MACI elimina.
+
+    La idempotencia es por `idempotency_key` que aporta el cliente, no por
+    wallet: es la única forma de deduplicar un reintento sin identificarlo.
+    """
+    import hashlib
+
+    if not idempotency_key or len(str(idempotency_key)) < 8:
+        raise MaciMessageError("Falta una idempotency_key utilizable.")
+
+    eph_x, eph_y = validate_public_key(ephemeral_x, ephemeral_y)
+    parsed = validate_ciphertext(ciphertext)
+
+    duplicate = await maci_messages_collection().find_one(
+        {"poll_id": poll_id, "idempotency_key": idempotency_key}
+    )
+    if duplicate:
+        return {
+            "index": int(duplicate["index"]),
+            "message_chain": duplicate["message_chain"],
+            "duplicate": True,
+        }
+
+    poll = await maci_polls_collection().find_one({"poll_id": poll_id})
+    previous_chain = poll["message_chain"] if poll else "0" * 64
+    index = int(poll["message_count"]) if poll else 0
+
+    payload = ":".join(
+        [previous_chain, str(eph_x), str(eph_y)] + [str(v) for v in parsed]
+    )
+    chain = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    await maci_messages_collection().insert_one({
+        "poll_id": poll_id,
+        # Sin wallet_address: es la diferencia con el transporte autenticado.
+        "index": index,
+        "ephemeral_x": str(eph_x),
+        "ephemeral_y": str(eph_y),
+        "ciphertext": [str(v) for v in parsed],
+        "message_chain": chain,
+        "idempotency_key": idempotency_key,
+        "published_at": datetime.now(timezone.utc),
+    })
+    await maci_polls_collection().update_one(
+        {"poll_id": poll_id},
+        {"$set": {"message_chain": chain, "message_count": index + 1}},
+        upsert=True,
+    )
+    return {"index": index, "message_chain": chain, "duplicate": False}
+
+
+async def poll_id_for_proposal(proposal_id: str) -> str:
+    """Poll estable por propuesta.
+
+    ADVERTENCIA: este vínculo hoy solo existe en la base de datos. Hasta que el
+    contrato exponga un anclaje verificable entre proposal_id, poll_id y
+    deadline, el cliente no puede comprobar que el backend anunció el poll
+    correcto — por eso `accepting_messages` y `private_voting` van en false.
+    """
+    record = await maci_poll_registry_collection().find_one(
+        {"proposal_id": proposal_id, "kind": "poll"}
+    )
+    if record:
+        return str(record["poll_id"])
+
+    assigned = await maci_poll_registry_collection().count_documents({"kind": "poll"})
+    poll_id = str(assigned + 1)
+    await maci_poll_registry_collection().insert_one({
+        "kind": "poll",
+        "proposal_id": proposal_id,
+        "poll_id": poll_id,
+        "created_at": datetime.now(timezone.utc),
+    })
+    return poll_id
+
+
+async def read_coordinator_key_onchain():
+    """Llave del coordinador leída del contrato. None si no se puede.
+
+    Se lee de la cadena y no de la configuración a propósito: es lo que el
+    cliente puede contrastar por su cuenta.
+    """
+    import asyncio
+
+    from . import chain_service
+
+    return await asyncio.to_thread(chain_service.maci_coordinator_key)

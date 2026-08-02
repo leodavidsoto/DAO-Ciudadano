@@ -105,10 +105,11 @@ Objetivo: cerrar C-1, C-2 y C-6. Al terminar, un SBT existe de verdad y solo lo 
 
 > 🟡 **Parcial** (agosto 2026). 2.1: suite de `contracts/test/` (31 tests, incluye la
 > regresión del orden checks-effects-interactions en `mintMembership`). 2.2: suite de
-> `backend/tests/` con 157 tests, sin red ni Mongo real. 2.3:
+> `backend/tests/` con 247 tests, sin red ni Mongo real. 2.3:
 > `backend_test.py` y `test_result.md` eliminados. 2.4: `.github/workflows/ci.yml` corre
-> backend, contratos, slither, auditoría crítica de npm, `pip-audit` estricto y
-> build del frontend en cada PR; las Actions están fijadas por SHA. 2.5: `slither --fail-medium
+> backend, contratos, slither, auditoría crítica de npm, `pip-audit` estricto,
+> 41 tests unitarios web, build del frontend y un flujo E2E Playwright ZK/AA/MACI
+> en cada PR; las Actions están fijadas por SHA. 2.5: `slither --fail-medium
 > --exclude-dependencies` en verde. 2.6: `requirements.txt` con versiones exactas.
 > Dependabot quedó configurado para los cinco directorios/ecosistemas. Mobile pasa
 > TypeScript, 15 tests, lint y auditoría npm localmente; el workflow incorpora esos
@@ -130,6 +131,7 @@ Objetivo: cerrar C-5 y hacer que las fases siguientes no rompan lo anterior.
 | 2.8 | ✅ SCA y mantenimiento: `pip-audit --strict`, npm sin críticos, Actions fijadas por SHA y Dependabot semanal | Una dependencia Python vulnerable o un crítico npm rompe CI |
 | 2.9 | ✅ Gate estático mobile: instalación reproducible, auditoría crítica, TypeScript, presupuesto de warnings ESLint y Jest | Una regresión móvil bloquea el PR antes del build nativo |
 | 2.10 | **Secret scanning recurrente y protección de push** | GitHub Secret Scanning/ruleset o scanner fijado por SHA, con procedimiento de triage | Una credencial nueva se bloquea antes de llegar a `main` |
+| 2.11 | ✅ Gate web E2E: Playwright sincroniza artefactos ZK desde el manifiesto, genera/verifica Groth16, recupera la firma SafeOp de un fixture EIP-1193 tipo MetaMask y valida una papeleta MACI cifrada | El flujo completo de navegador falla ante una regresión de ZK, ERC-4337, privacidad MACI o del contrato de fixture |
 
 ---
 
@@ -224,3 +226,58 @@ despliegue de los guardrails de esta rama.
 | 3 | Un tercero puede reverificar todos los votos de una propuesta sin confiar en el servidor. |
 | 4 | Un ciudadano completa el onboarding con ClaveÚnica real y cédula real, sin ningún mock en el camino. |
 | 5 | El contrato está auditado externamente y el owner es un multisig. |
+
+---
+
+## Estado tras la Tarea 6 (02-08-2026) — arquitectura de vanguardia
+
+Resumen del avance real sobre las tres decisiones del ADR-001, con lo que
+sigue bloqueado dicho explícitamente.
+
+### D-1 · Minteo — **no custodial**
+
+El camino custodial se **eliminó**. La Safe es del ciudadano, firma él con
+MetaMask y el backend solo prepara, valida y retransmite. `SAFE_OWNER_PRIVATE_KEY`
+ya no se usa en ningún flujo: tenerla configurada se reporta como error.
+
+`prepare-mint` decodifica el `callData` y exige que sea exactamente el
+`mintMembership` declarado antes de gastar patrocinio — sin eso, el gas de la
+DAO financiaría cualquier transacción que el cliente quisiera.
+
+🔴 **Bloqueado:** sin credenciales de Pimlico ni Safe desplegada, nunca se
+ejecutó un envío. El transporte está apagado y el minteo va por el relayer EOA,
+que sí está probado.
+
+### D-2 · Identidad — circuito y emisor listos
+
+`MembershipEligibility(25)` con `recipient` ligado en la hoja (cierra el
+front-running). Emisor con árbol Merkle de 25 niveles, Poseidon compatible con
+circomlib verificado contra vectores publicados, y firma EIP-191.
+
+🔴 **Bloqueado:** no existe proveedor civil que emita `identity_grant`. El
+servicio está implementado y probado, pero solo lo ejercitan los tests, y los
+simuladores no deben promoverse para resolverlo. Producción falla cerrado.
+
+### D-3 · Gobernanza MACI — los dos circuitos existen
+
+| Pieza | Estado |
+|---|---|
+| `MACICoordinator.sol` | ✅ 24 tests |
+| `maci_tally.circom` | ✅ compilado (16.370 restricciones) y probado con testigo |
+| `processMessages.circom` | ✅ compilado (19.860 restricciones) y probado con testigo |
+| Registro de llaves | ✅ con validación de subgrupo primo |
+| Transporte anónimo | 🟡 sin bearer SIWE, pero no resuelve correlación IP/tiempo |
+| Coordinador desplegado | ❌ |
+| Ceremonia de confianza | ❌ una sola parte |
+| Anclaje poll↔propuesta on-chain | ❌ |
+
+🔴 **`private_voting` se mantiene en `false`** hasta cerrar las cuatro últimas
+filas. La existencia de los circuitos no habilita votación privada.
+
+### Deuda registrada
+
+- **P-54** (`AUDIT.md`): el coordinador puede excluir mensajes mal firmados.
+  Aceptado a sabiendas para el piloto; exige un verificador EdDSA con salida
+  booleana antes de cualquier uso vinculante.
+- Ninguno de los tres circuitos tiene ceremonia multi-parte. Quien generó los
+  zkey actuales puede fabricar pruebas falsas.

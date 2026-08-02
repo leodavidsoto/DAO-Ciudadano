@@ -137,6 +137,10 @@ async def issue_credential(
                 "El grant ya fue usado pero no hay credencial asociada. "
                 "Solicita una verificación civil nueva."
             )
+        # El grant se consumió en un intento anterior. Si aquella aprobación
+        # de raíz falló, la credencial existente no serviría para mintear, así
+        # que se vuelve a aprobar/verificar antes de devolverla.
+        await _approve_root_onchain(existing.root)
         return _build_credential(
             wallet_address, existing, identity_commitment, membership_scope
         )

@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     # El nombre del metodo de patrocinio varia entre proveedores.
     PAYMASTER_SPONSOR_METHOD: str = os.environ.get('PAYMASTER_SPONSOR_METHOD', 'pm_sponsorUserOperation')
 
+    # Contrato MACICoordinator desplegado. El cliente lo fija y contrasta.
+    MACI_COORDINATOR_ADDRESS: str = os.environ.get('MACI_COORDINATOR_ADDRESS', '')
+
     # Proveedor civil real que emite los grants. Vacío = no hay ninguno, y la
     # emisión de credenciales falla cerrado en producción. Los simuladores de
     # ClaveÚnica/NFC/liveness NUNCA deben emitir grants.

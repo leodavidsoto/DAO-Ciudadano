@@ -393,3 +393,97 @@ async def test_endpoint_rejects_low_order_keys(client):
 
     assert response.status_code == 422
     assert "orden bajo" in response.json()["detail"]
+
+
+# === Transporte anónimo ===
+
+ANON_BODY = {
+    "protocol_version": "maci-v2.5.0",
+    "proposal_id": "prop-1",
+    "poll_id": "1",
+    "message": {"data": [str(i + 1) for i in range(10)]},
+    "encryption_public_key": {"x": str(BASE_X), "y": str(BASE_Y)},
+    "coordinator_key_hash": "0x" + "00" * 32,
+    "idempotency_key": "idem-0123456789",
+}
+
+
+async def test_anonymous_transport_takes_no_bearer(client):
+    """El transporte no lleva sesión: llevarla reconstruiría el enlace.
+
+    Falla por la llave del coordinador (no configurada), NO por falta de
+    autenticación — que es lo que se quiere comprobar.
+    """
+    response = await client.post("/api/maci/polls/1/messages", json=ANON_BODY)
+    assert response.status_code != 401
+
+
+async def test_anonymous_transport_refuses_without_an_anchored_key(client):
+    """Sin llave anclada on-chain no se acepta nada.
+
+    Aceptar cifrado hacia una llave no verificada produciría votos que el
+    coordinador no puede descifrar: se perderían en silencio.
+    """
+    response = await client.post("/api/maci/polls/1/messages", json=ANON_BODY)
+    assert response.status_code == 503
+
+
+async def test_anonymous_transport_rejects_an_unknown_protocol(client):
+    response = await client.post(
+        "/api/maci/polls/1/messages",
+        json={**ANON_BODY, "protocol_version": "maci-v1"},
+    )
+    assert response.status_code == 422
+
+
+async def test_anonymous_message_stores_nothing_identifying(client):
+    """La garantía central: ningún campo enlaza el ciphertext con una persona."""
+    result = await maci_service.publish_anonymous_message(
+        poll_id="anon-1",
+        ephemeral_x=str(BASE_X),
+        ephemeral_y=str(BASE_Y),
+        ciphertext=[str(i + 1) for i in range(10)],
+        idempotency_key="idem-abcdefgh",
+    )
+    assert result["duplicate"] is False
+
+    stored = await maci_service.maci_messages_collection().find_one(
+        {"poll_id": "anon-1"}
+    )
+    for forbidden in ("wallet_address", "choice", "vote", "signature", "state_index"):
+        assert forbidden not in stored, f"el transporte anónimo guardó {forbidden}"
+
+
+async def test_anonymous_message_is_idempotent_by_client_key(client):
+    """Deduplicar por wallet es imposible aquí: no se conoce."""
+    args = dict(
+        poll_id="anon-2",
+        ephemeral_x=str(BASE_X),
+        ephemeral_y=str(BASE_Y),
+        ciphertext=[str(i + 1) for i in range(10)],
+        idempotency_key="idem-repetida",
+    )
+    first = await maci_service.publish_anonymous_message(**args)
+    second = await maci_service.publish_anonymous_message(**args)
+
+    assert first["duplicate"] is False
+    assert second["duplicate"] is True
+    assert first["index"] == second["index"]
+
+
+async def test_state_index_starts_at_one_and_is_stable(client):
+    """MACI reserva el índice 0; reasignarlo rompería el nonce del votante."""
+    first = await maci_service.assign_state_index("poll-x", VOTER.address)
+    again = await maci_service.assign_state_index("poll-x", VOTER.address)
+    other = await maci_service.assign_state_index("poll-x", OUTSIDER.address)
+
+    assert first == 1
+    assert again == 1
+    assert other == 2
+
+
+async def test_poll_endpoint_does_not_announce_an_unanchored_key(client):
+    """Sin coordinador configurado no se inventa una llave."""
+    headers = await _mint_member(client, VOTER)
+    response = await client.get("/api/maci/proposals/prop-1/poll", headers=headers)
+    assert response.status_code == 503

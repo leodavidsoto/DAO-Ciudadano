@@ -119,14 +119,20 @@ class Member(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     wallet_address: str
     token_id: int
-    doc_hash: str
-    assurance_level: str
+    # Las membresías emitidas por la vía ZK NO tienen doc_hash: el documento
+    # nunca llega al servidor, que es justamente el objetivo del rediseño.
+    # Inventar uno para rellenar el modelo sería fabricar un dato.
+    doc_hash: Optional[str] = None
+    assurance_level: str = "ZK_VERIFIED"
+    # Nullifier que autorizó el minteo ZK. Es público y no revela identidad.
+    nullifier_hash: Optional[str] = None
     status: str = "active"
     # Explicit provenance keeps demo/legacy rows from becoming trusted merely
     # because the same MongoDB database is later promoted to production.
     issuance_mode: Literal["demo", "onchain", "legacy_unverified"] = "legacy_unverified"
-    # No current flow is allowed to set this to True. It will only become true
-    # once a server-issued, one-time identity grant is implemented.
+    # Solo la vía ZK puede ponerlo en True: el contrato únicamente acepta
+    # raíces que el emisor aprobó tras consumir un grant civil de un solo uso.
+    # El minteo demo nunca lo hace.
     identity_verified: bool = False
     tx_hash: Optional[str] = None  # None en modo demo; hash real si se minteó on-chain (task 1.5)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

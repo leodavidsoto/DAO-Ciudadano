@@ -529,3 +529,43 @@ def membership_token_of(wallet_address: str) -> Optional[int]:
     except Exception:
         logger.error("No se pudo leer getMembershipToken()", exc_info=True)
         return None
+
+
+# === MACICoordinator ==========================================================
+
+_MACI_ABI = [
+    {"inputs": [], "name": "coordinatorPubKeyX",
+     "outputs": [{"name": "", "type": "uint256"}],
+     "stateMutability": "view", "type": "function"},
+    {"inputs": [], "name": "coordinatorPubKeyY",
+     "outputs": [{"name": "", "type": "uint256"}],
+     "stateMutability": "view", "type": "function"},
+]
+
+
+def maci_coordinator_key():
+    """Llave pública del coordinador leída del contrato MACI. None si falla.
+
+    Nunca se devuelve la de la configuración como respaldo: el valor de este
+    endpoint es precisamente que esté anclado on-chain, y un fallback silencioso
+    lo convertiría en una afirmación del servidor.
+    """
+    from web3 import Web3
+
+    address = settings.MACI_COORDINATOR_ADDRESS.strip()
+    rpc = settings.SEPOLIA_RPC_URL.strip()
+    if not address or not rpc:
+        return None
+    try:
+        w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 5}))
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(address), abi=_MACI_ABI
+        )
+        x = int(contract.functions.coordinatorPubKeyX().call())
+        y = int(contract.functions.coordinatorPubKeyY().call())
+        if x == 0 and y == 0:
+            return None
+        return (x, y)
+    except Exception:
+        logger.error("No se pudo leer la llave del coordinador MACI", exc_info=True)
+        return None

@@ -1,7 +1,7 @@
 # Handoff — DAO Ciudadana
 
 **Para:** Codex (o cualquier agente/desarrollador que retome el proyecto)
-**Actualizado:** 1 de agosto de 2026 · base `73f2985`, rama local `codex/produccion-ci`
+**Actualizado:** 2 de agosto de 2026 · base `73f2985`, rama local `codex/produccion-ci`
 **Documentos hermanos:** [`AUDIT.md`](./AUDIT.md) · [`ROADMAP.md`](./ROADMAP.md) · [`SECURITY_RUNBOOK.md`](./SECURITY_RUNBOOK.md) · [`../AGENTS.md`](../AGENTS.md)
 
 ---
@@ -58,6 +58,9 @@ credencial on-chain de producción está habilitada.
 | **Minteo on-chain** | 🔒 Bloqueado | Sin fallback implícito; producción espera grant de identidad + contrato compatible + reconciliación. |
 | **Identidad real** | ❌ Pendiente | Demos bloqueadas en producción; Web NFC nunca se acepta como cédula verificada. |
 | **PII** | 🟡 Código nuevo cifrado | Altas nuevas usan Fernet + índices HMAC. Datos legacy no fueron migrados/auditados; snapshot y migración son bloqueantes. |
+| **Identidad ZK (D-2)** | 🟡 Implementada, sin proveedor | Circuito `MembershipEligibility(25)` con `recipient` ligado en la hoja; emisor con árbol Merkle de 25 niveles y firma EIP-191. Bloqueado: no existe proveedor civil que emita `identity_grant`, y la ceremonia de confianza es de una sola parte. |
+| **Gobernanza MACI (D-3)** | 🟡 Circuitos listos, pipeline no | `MACICoordinator.sol` (24 tests), `maci_tally.circom` y `processMessages.circom` compilados y probados con testigo. Falta desplegar coordinador, ceremonia real y cerrar P-54. `/maci/status` mantiene `private_voting: false`. |
+| **ERC-4337 (D-1)** | 🟡 No custodial, sin verificar | El backend prepara y retransmite; firma el ciudadano. Sin credenciales de Pimlico ni Safe desplegada: nunca se ejecutó un envío. Apagado por configuración; el minteo va por el relayer EOA. |
 | **App móvil** | ⚠️ Experimental | TypeScript, 15 tests, lint y auditoría npm pasan localmente y tienen un job CI. Release falla cerrado sin keystore externo; faltan PACE real y build/publicación nativos reproducibles. |
 
 ---
@@ -86,7 +89,7 @@ DAO-Ciudadano/
 │   ├── render.yaml             blueprint (plan free, rootDir backend)
 │   ├── requirements.txt        SOLO producción — mínimo a propósito
 │   ├── requirements-dev.txt    producción + pytest/mongomock/linters
-│   ├── tests/                  157 tests con mongomock-motor
+│   ├── tests/                  247 tests con mongomock-motor
 │   └── app/
 │       ├── core/               config · database · security · middleware
 │       ├── models/schemas.py   modelos Pydantic
@@ -190,12 +193,28 @@ Cosas que te van a costar tiempo si no las sabes de antemano:
 11. **El lock de nonce del minter es local al proceso.** Antes de escalar a varias
     instancias debe existir un coordinador distribuido. También hay que alinear el
     timeout del cliente (30 s) con la espera de recibo del backend (hasta 120 s).
+    *Salida prevista:* el transporte ERC-4337 usa los nonces bidimensionales del
+    EntryPoint, así que cada worker puede tomar su propia `key` sin coordinación.
+    Está escrito pero sin verificar contra un bundler real.
 
 12. **Papeleta y tally no son una escritura atómica.** El índice único evita votos
     duplicados concurrentes en propuestas, pero una caída entre insertar el voto y
     sumar el contador exige transacción o reconciliación derivada de papeletas.
 
-13. **El JWT SIWE sigue en `localStorage`.** La CSP reduce la superficie XSS,
+13. **El backend NO firma UserOperations, y no debe hacerlo.** La Safe es del
+    ciudadano y firma él con MetaMask; el servidor solo prepara, valida y
+    retransmite. `SAFE_OWNER_PRIVATE_KEY` no se usa en ningún camino: tenerla
+    configurada se reporta como ERROR, porque su presencia sugiere que alguien
+    pretende que el servidor custodie Safes ajenas. El camino custodial que
+    existió brevemente se eliminó a propósito.
+
+14. **El coordinador MACI puede excluir mensajes mal firmados** (hallazgo P-54,
+    aceptado a sabiendas para el piloto). `processMessages.circom` exige firma
+    válida, así que un mensaje inválido no se puede probar y queda fuera. No
+    apto para una elección vinculante hasta tener un verificador EdDSA con
+    salida booleana.
+
+15. **El JWT SIWE sigue en `localStorage`.** La CSP reduce la superficie XSS,
     pero pasar a cookie `HttpOnly` exige un cambio coordinado de emisión/logout,
     CORS con credenciales y defensa CSRF; no hagas una migración parcial.
 

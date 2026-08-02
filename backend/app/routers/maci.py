@@ -17,7 +17,8 @@ from typing import List
 
 from pydantic import BaseModel
 
-from ..services import maci_service
+from ..core.config import settings
+from ..services import chain_service, maci_service
 from .deps import current_address, ensure_acts_as_self, ensure_active_member
 
 logger = logging.getLogger(__name__)
@@ -180,3 +181,138 @@ async def get_tally(poll_id: str):
             "encolados coinciden con los publicados on-chain."
         ),
     }
+
+
+# === Poll anclado y transporte anónimo (REQUEST_TO_CLAUDE.md) ===============
+
+
+@router.get("/proposals/{proposal_id}/poll")
+async def get_poll_for_proposal(
+    proposal_id: str,
+    authenticated: str = Depends(current_address),
+):
+    """Parámetros que el votante necesita para cifrar su papeleta.
+
+    Este endpoint SÍ lleva sesión SIWE: asignar el `state_index` requiere
+    saber quién es. El transporte del mensaje cifrado, en cambio, no la lleva
+    — separarlos es lo que impide enlazar el ciphertext con la identidad.
+
+    La llave del coordinador se lee de la CADENA, no de la configuración: el
+    cliente la contrasta contra `REACT_APP_MACI_COORDINATOR_ADDRESS` y
+    recalcula `Poseidon(x,y)`, así que anunciar una llave que no esté anclada
+    on-chain solo conseguiría que el navegador rechace la operación.
+    """
+    await ensure_active_member(authenticated, "votar en esta consulta")
+
+    coordinator_address = settings.MACI_COORDINATOR_ADDRESS.strip()
+    if not coordinator_address:
+        raise HTTPException(
+            status_code=503,
+            detail="El coordinador MACI no está configurado en el servidor.",
+        )
+
+    key = await maci_service.read_coordinator_key_onchain()
+    if key is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No se pudo leer la llave del coordinador desde la cadena. No se "
+                "anuncia una llave sin anclaje: cifrar hacia la equivocada "
+                "perdería el voto en silencio."
+            ),
+        )
+    pub_x, pub_y = key
+
+    poll_id = await maci_service.poll_id_for_proposal(proposal_id)
+    state_index = await maci_service.assign_state_index(poll_id, authenticated)
+    nonce = await maci_service.next_nonce(poll_id, authenticated)
+
+    return {
+        "protocol_version": maci_service.MACI_PROTOCOL_VERSION,
+        "proposal_id": proposal_id,
+        "poll_id": poll_id,
+        "state_index": str(state_index),
+        "nonce": str(nonce),
+        "vote_weight": "1",
+        "vote_options": {"for": "0", "against": "1", "abstain": "2"},
+        "coordinator_contract": coordinator_address,
+        "coordinator_public_key": {"x": str(pub_x), "y": str(pub_y)},
+        "coordinator_key_hash": maci_service.coordinator_key_hash(pub_x, pub_y),
+        "chain_id": str(settings.SIWE_CHAIN_ID),
+        # Sigue en false: falta el anclaje verificable entre proposal_id,
+        # poll_id y deadline que exige REQUEST_TO_CLAUDE.md.
+        "accepting_messages": False,
+        "deadline": None,
+    }
+
+
+class AnonymousMessage(BaseModel):
+    data: List[str]
+
+
+class AnonymousMessageRequest(BaseModel):
+    """Frontera anónima. NO acepta wallet_address, choice, comando, firma,
+    salt, shared key ni llave privada: cualquiera de esos campos volvería a
+    enlazar el texto cifrado con una persona."""
+
+    protocol_version: str
+    proposal_id: str
+    poll_id: str
+    message: AnonymousMessage
+    encryption_public_key: MaciPublicKey
+    coordinator_key_hash: str
+    idempotency_key: str
+
+
+@router.post("/polls/{poll_id}/messages")
+async def publish_anonymous_message(poll_id: str, request: AnonymousMessageRequest):
+    """Transporte anónimo: SIN bearer SIWE, a propósito.
+
+    Llevar la sesión aquí reconstruiría el enlace entre el ciphertext y la
+    identidad del votante, que es justo lo que MACI elimina.
+
+    ADVERTENCIA HONESTA: quitar el bearer elimina el identificador directo,
+    pero NO resuelve la correlación por IP ni por tiempo. Mientras no exista
+    una prueba de elegibilidad anónima o un relay, este transporte no basta
+    para afirmar anonimato — y por eso `/maci/status` mantiene
+    `private_voting: false`.
+    """
+    if request.protocol_version != maci_service.MACI_PROTOCOL_VERSION:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Versión de protocolo no soportada: {request.protocol_version}",
+        )
+    if request.poll_id != poll_id:
+        raise HTTPException(status_code=422, detail="poll_id inconsistente.")
+
+    key = await maci_service.read_coordinator_key_onchain()
+    if key is None:
+        raise HTTPException(
+            status_code=503, detail="No se pudo verificar la llave del coordinador."
+        )
+    expected_hash = maci_service.coordinator_key_hash(*key)
+    if request.coordinator_key_hash.lower() != expected_hash.lower():
+        # El cliente cifró hacia otra llave: aceptarlo produciría un voto que
+        # el coordinador no puede descifrar y que se perdería en silencio.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "El mensaje se cifró hacia una llave de coordinador distinta de "
+                "la anclada on-chain. No se acepta: el voto sería ilegible."
+            ),
+        )
+
+    try:
+        result = await maci_service.publish_anonymous_message(
+            poll_id=poll_id,
+            ephemeral_x=request.encryption_public_key.x,
+            ephemeral_y=request.encryption_public_key.y,
+            ciphertext=request.message.data,
+            idempotency_key=request.idempotency_key,
+        )
+    except (maci_service.MaciKeyError, maci_service.MaciMessageError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # No se registra nada que identifique al remitente.
+    logger.info("Anonymous MACI message queued for poll %s", poll_id)
+    return {"ok": True, **result}

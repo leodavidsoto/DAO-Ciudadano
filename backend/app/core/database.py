@@ -120,6 +120,14 @@ class Database:
             await cls.get_db()["erc4337_operations"].create_index(
                 "operation_id", unique=True
             )
+            # MACI: un state_index por wallet y consulta; idempotencia anónima
+            # por (poll, idempotency_key) — nunca por wallet, que no se conoce.
+            await cls.get_db()["maci_poll_registry"].create_index(
+                [("poll_id", 1), ("wallet_address", 1)], unique=True, sparse=True
+            )
+            await cls.get_db()["maci_messages"].create_index(
+                [("poll_id", 1), ("idempotency_key", 1)], unique=True, sparse=True
+            )
             cls.indexes_ready = True
         except Exception as e:
             # A pre-existing duplicate in the collection blocks unique index

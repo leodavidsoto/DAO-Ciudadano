@@ -14,6 +14,7 @@ from typing import List
 from datetime import datetime, timezone
 import asyncio
 import logging
+import uuid as _uuid
 
 from pymongo.errors import DuplicateKeyError
 
@@ -184,18 +185,35 @@ async def mint_with_zk_proof(
             detail="Ya hay un minteo en curso para esta credencial. Espera a que confirme.",
         )
 
-    try:
-        await mint_operations_collection().insert_one({
-            "nullifier_hash": request.nullifier_hash.lower(),
-            "wallet_address": request.wallet_address.lower(),
-            "status": "pending",
-            "created_at": datetime.now(timezone.utc),
-        })
-    except DuplicateKeyError:
-        raise HTTPException(
-            status_code=409,
-            detail="Ya hay un minteo en curso para esta credencial. Espera a que confirme.",
+    # Reintento atómico de un intento fallido: el índice único hacía que un
+    # `failed` se convirtiera en 409 permanente y el ciudadano quedara sin
+    # forma de volver a intentarlo. La transición failed -> pending es
+    # condicional, así que dos reintentos simultáneos no envían dos veces.
+    if existing and existing.get("status") == "failed":
+        claimed = await mint_operations_collection().update_one(
+            {"nullifier_hash": request.nullifier_hash.lower(), "status": "failed"},
+            {"$set": {"status": "pending", "retried_at": datetime.now(timezone.utc)},
+             "$inc": {"attempts": 1}},
         )
+        if claimed.modified_count == 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Otro reintento tomó esta operación. Espera a que confirme.",
+            )
+    else:
+        try:
+            await mint_operations_collection().insert_one({
+                "nullifier_hash": request.nullifier_hash.lower(),
+                "wallet_address": request.wallet_address.lower(),
+                "status": "pending",
+                "attempts": 1,
+                "created_at": datetime.now(timezone.utc),
+            })
+        except DuplicateKeyError:
+            raise HTTPException(
+                status_code=409,
+                detail="Ya hay un minteo en curso para esta credencial. Espera a que confirme.",
+            )
 
     try:
         tx_hash, token_id = await asyncio.to_thread(
@@ -230,4 +248,48 @@ async def mint_with_zk_proof(
         }},
     )
 
+    # Reconciliar `members`: sin esto, /membership/member/{wallet} y las
+    # estadísticas no ven el SBT recién emitido, y el gate de gobernanza
+    # rechazaría a un miembro que sí tiene su credencial on-chain.
+    await _reconcile_member_record(
+        wallet_address=request.wallet_address,
+        token_id=token_id,
+        tx_hash=tx_hash,
+        nullifier_hash=request.nullifier_hash.lower(),
+    )
+
     return MintSBTResponse(ok=True, token_id=token_id, tx_hash=tx_hash)
+
+
+async def _reconcile_member_record(
+    wallet_address: str, token_id, tx_hash: str, nullifier_hash: str = None
+):
+    """Refleja en `members` un SBT emitido por la vía ZK.
+
+    `identity_verified` va en True porque la prueba ZK ES la verificación: el
+    contrato solo acepta raíces que el emisor aprobó tras consumir un grant
+    civil. Es el único camino que puede ponerlo en True — el minteo demo nunca
+    lo hace.
+    """
+    from ..core.database import members_collection
+
+    await members_collection().update_one(
+        {"wallet_address": wallet_address.lower()},
+        {"$set": {
+            "wallet_address": wallet_address.lower(),
+            "token_id": token_id,
+            "tx_hash": tx_hash,
+            "nullifier_hash": nullifier_hash,
+            "status": "active",
+            "issuance_mode": "onchain",
+            "identity_verified": True,
+            # No hay doc_hash: el documento nunca llegó al servidor.
+            "assurance_level": "ZK_VERIFIED",
+            "updated_at": datetime.now(timezone.utc),
+        },
+         "$setOnInsert": {
+             "id": str(_uuid.uuid4()),
+             "created_at": datetime.now(timezone.utc),
+         }},
+        upsert=True,
+    )
