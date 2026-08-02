@@ -422,7 +422,7 @@ que nunca se muestra con JS activo).
 |---|---|---|---|---|
 | P-51 | La suite Playwright arrancaba CRA con `craco start` directamente, saltándose `prestart/zk:sync`. En un checkout limpio podía ejecutar sin los tres artefactos ZK de `public/zk` o reutilizar residuos locales; además no existía un job E2E en CI | `e2e/playwright.config.js`; `.github/workflows/ci.yml` | Alta (integridad de pruebas) | ✅ Corregido: usa `npm start`, reconstruye los artefactos desde el manifiesto verificado y la CI instala Chromium y ejecuta Playwright en cada PR |
 | P-52 | El flujo guardaba solo dirección/red y, al mintear, `erc4337.js` caía a `globalThis.ethereum`. La instancia que estableció SIWE no quedaba fijada hasta la firma de la UserOperation | `frontend/src/hooks/useWallet.js`; `WalletStep.jsx`; `OnboardingContext.jsx`; `lib/api.js`; `lib/erc4337.js` | Alta (autorización) | ✅ Corregido: la instancia MetaMask EIP-1193 viaja explícitamente en memoria, sin fallback global; cuenta y red se revalidan antes de construir y firmar, y la firma Safe v0.7 debe medir 77 bytes. El E2E sustituye el provider global tras SIWE y prueba que ninguna solicitud de firma se desvía |
-| P-53 | El router ERC-4337 añadido en `a49883e` no implementa todavía el contrato del cliente: `PrepareMintRequest` exige `proof`, mientras el frontend envía `account + mint`; además intenta decodificar el `callData` exterior de `Safe4337Module.executeUserOpWithErrorString` directamente con la ABI del SBT. El camino integrado devolvería 422 antes de patrocinar una operación válida | `backend/app/routers/erc4337.py:65`; `backend/app/routers/erc4337.py:112`; `REQUEST_TO_CLAUDE.md:177` | **Alta (integración bloqueada)** | 🟡 Parcialmente mitigado, integración bloqueada: falta recalcular la Safe ciudadana, decodificar primero el envoltorio Safe4337, alinear el modelo con el payload documentado y validar la prueba completa. `d9f40d0` ya eliminó correctamente la dependencia de una `ERC4337_ACCOUNT_ADDRESS` global y añadió una sonda real del bundler, pero no modificó este router. La suite E2E usa un fixture contractual y no afirma haber probado el flujo integrado con Pimlico |
+| P-53 | El router ERC-4337 no implementaba el contrato del cliente: `PrepareMintRequest` exigía `proof` mientras el frontend envía `account + mint`, y decodificaba el `callData` exterior de `Safe4337Module.executeUserOpWithErrorString` con la ABI del SBT. El camino integrado devolvía 422 antes de patrocinar una operación válida | `backend/app/routers/erc4337.py` | **Alta (integración bloqueada)** | ✅ **Corregido** (02-08-2026): modelos alineados con el payload real del cliente, decodificación en dos capas (envoltorio Safe4337 → llamada al SBT), y validaciones nuevas de `operation=CALL`, valor cero, perfil de cuenta y correspondencia de la prueba. Tests que construyen el callData de dos capas exactamente como el cliente. Queda sin implementar la derivación CREATE2 completa de la Safe — ver nota |
 
 ### Evidencia ejecutada
 
@@ -558,3 +558,34 @@ cerrado.
 (`backend/.env` confirmado ignorado) y no hay ningún `.env` rastreado. Con push
 protection activo, un intento de reintroducir una clave reconocible quedaría
 bloqueado en el push.
+
+
+### Nota sobre P-53 — qué se validó y qué no
+
+La corrección cubre el bloqueo real (modelos y decodificación). Sobre
+"recalcular la Safe ciudadana" conviene ser preciso, porque se implementó de
+forma parcial y deliberada:
+
+**Sí se valida**, y basta para proteger lo que importa:
+- el perfil de cuenta declarado (`type`, `version`, `salt_nonce`, módulo,
+  `use_multi_send_for_setup`) debe coincidir exactamente con el que sirve
+  `/config`; con otros parámetros la Safe tendría otra dirección y la firma no
+  validaría;
+- `user_operation.sender` debe ser la `safe_address` declarada;
+- si la operación **despliega** la Safe, su `factoryData` debe nombrar a la
+  wallet autenticada. Esto es lo que impide que el paymaster de la DAO pague
+  el despliegue de una cuenta ajena, que era el riesgo económico concreto;
+- la llamada interna va al SBT configurado, con `operation=CALL`, valor cero,
+  destinatario igual a la wallet autenticada, y **coordenadas Groth16, nullifier
+  y raíz idénticas a las declaradas** — sin esto último el campo `mint` sería
+  decorativo: se validaría una prueba y se ejecutaría otra.
+
+**No se implementó** la derivación CREATE2 completa de la dirección Safe
+(factory + singleton + hash del inicializador + saltNonce). Requiere replicar
+exactamente las constantes de despliegue de Safe v1.4.1 que usa
+`permissionless.js`, y **no hay en el repositorio ningún vector conocido
+(owner → dirección) contra el que verificarlo**: los tests del cliente usan
+direcciones de relleno. Implementarla a ciegas y equivocar una constante
+rechazaría *todas* las peticiones legítimas, que es peor que el hueco que
+cierra. Queda pendiente de un vector real —lo aporta el primer despliegue en
+Sepolia— y hasta entonces la protección efectiva es el resto de comprobaciones.
