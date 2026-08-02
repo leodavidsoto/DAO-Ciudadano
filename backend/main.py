@@ -86,6 +86,12 @@ from app.core.rate_limit_store import build_store as _build_rate_limit_store
 
 rate_limit_store = _build_rate_limit_store(settings.REDIS_URL)
 
+# El antifraude comparte el almacén: su historial de votos es una ventana
+# deslizante por dirección, o sea exactamente un rate limit (ROADMAP 3.8).
+from app.core.security_middleware import fraud_detector as _fraud_detector
+
+_fraud_detector.bind(_build_rate_limit_store(settings.REDIS_URL))
+
 # 1. Rate Limiting (outermost - first line of defense)
 app.add_middleware(
     RateLimitMiddleware,

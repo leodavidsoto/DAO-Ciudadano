@@ -155,7 +155,7 @@ Objetivo: cerrar C-3, A-4, A-5, A-9 y M-10.
 | 3.5 | **Peso de voto por delegación**: `cast_vote` calcula el peso real a partir de las delegaciones recibidas | Delegar cambia el resultado de forma medible |
 | 3.6 | **Tesorería real**: leer balances de un Safe multisig vía API o RPC; precio de ETH desde un oráculo o API de precios, no hardcodeado | Ningún número de tesorería es una constante en el código |
 | 3.7 | ✅ **Enrutado y montaje de la UI de gobernanza**: `/` (landing), `/unete` (onboarding) y `/dashboard/{propuestas,elecciones,delegacion,tesoreria}` | Las secciones de gobernanza son alcanzables |
-| 3.8 | Mover el rate limiter y el antifraude a Redis | Los límites sobreviven a reinicios y funcionan con varias instancias |
+| 3.8 | ✅ **Completada** (02-08-2026). Rate limiter y antifraude sobre Redis | Ventana deslizante atómica en Lua, historial de votos y penalización progresiva compartidos. Ya no queda estado en memoria de proceso. Degradación a memoria **visible** en `/health/ready`. Verificado con `fakeredis[lua]`, **no** contra un Redis real |
 | 3.9 | ✅ **Hecho (julio 2026)** — el middleware usa `asyncio.sleep`; el event loop ya no se bloquea | Sin bloqueo del event loop bajo carga |
 | 3.10 | **Tally transaccional o derivado**: evitar que una caída entre insertar la papeleta y sumar el resultado produzca divergencia | El resultado siempre puede reconstruirse desde papeletas válidas |
 
@@ -281,3 +281,38 @@ filas. La existencia de los circuitos no habilita votación privada.
   booleana antes de cualquier uso vinculante.
 - Ninguno de los tres circuitos tiene ceremonia multi-parte. Quien generó los
   zkey actuales puede fabricar pruebas falsas.
+
+
+---
+
+## Cierre de 3.8 — rate limiter y antifraude compartidos (02-08-2026)
+
+Qué se movió a Redis y qué **no**, que es la parte interesante:
+
+| Estado | Antes | Ahora |
+|---|---|---|
+| Ventana de peticiones por IP | memoria de proceso | Redis (sorted set + Lua atómico) |
+| Penalización progresiva por fallos | memoria de proceso | Redis (contador con TTL) |
+| Historial de votos (antifraude) | memoria de proceso | Redis (misma ventana deslizante) |
+| Grafo de delegaciones | memoria de proceso | **eliminado** — duplicaba MongoDB |
+
+**Por qué el grafo de delegaciones no fue a Redis.** Era una copia de la
+colección `delegations`, y el router ya comprobaba ciclos con
+`find_delegation_cycle` y el máximo de delegados con un `count_documents`,
+ambos contra la base y con el mismo límite. Llevarlo a Redis habría creado una
+tercera copia divergiendo de la fuente autoritativa. Se eliminó, y la única
+heurística que aportaba en exclusiva —profundidad máxima de cadena— vive ahora
+en `find_delegation_cycle`, sobre el grafo real.
+
+**Corrección de un umbral.** El detector comparaba `> 10` después de excluir el
+voto actual, así que dejaba pasar 11 y marcaba el 12º pese a que su constante
+decía 10. Ahora se permiten 10 y se marca el 11º.
+
+**El límite de voto es por votante, no por propuesta.** Antes el `proposal_id`
+entraba en la clave, así que rotarlo permitía emitir la cuota entera contra
+cada propuesta. Hay un test que lo fija.
+
+🔴 **Sin verificar contra un Redis real.** Los tests ejercitan el mismo script
+Lua con `fakeredis[lua]`, lo que valida la lógica de la ventana, pero no
+sustituye a una prueba contra un servidor. Antes de producción hay que
+levantar Redis y repetirlas.

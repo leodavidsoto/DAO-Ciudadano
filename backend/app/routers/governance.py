@@ -384,7 +384,7 @@ async def cast_vote(
         )
 
     # Anti-fraud: rapid-voting pattern check (A-4, wired per ROADMAP 3.4)
-    suspicious, reason = fraud_detector.check_rapid_voting(
+    suspicious, reason = await fraud_detector.check_rapid_voting(
         request.voter_address, request.proposal_id
     )
     if suspicious:
@@ -626,20 +626,10 @@ async def delegate_vote(
                 error=f"El delegado ya alcanzó el máximo de {MAX_DELEGATION_POWER} delegaciones",
             )
 
-        # Anti-fraud heuristics (A-4, wired per ROADMAP 3.4): chain depth and
-        # delegator count over the in-process history.
-        suspicious, reason = fraud_detector.check_delegation_chain(
-            request.delegator_address, request.delegate_address
-        )
-        if suspicious:
-            logger.warning(
-                f"Delegation blocked by fraud detector: "
-                f"{request.delegator_address} -> {request.delegate_address} ({reason})"
-            )
-            return DelegationResponse(
-                ok=False,
-                error="Delegación rechazada por el control antifraude: patrón de delegación sospechoso",
-            )
+        # La profundidad de cadena y el máximo de delegados ya se comprobaron
+        # arriba contra MongoDB (find_delegation_cycle y count_documents). El
+        # detector en memoria duplicaba ambas con una copia del grafo que se
+        # vaciaba al reiniciar; se eliminó en ROADMAP 3.8.
 
         # Upsert delegation
         await delegations_collection().update_one(
@@ -652,9 +642,6 @@ async def delegate_vote(
                 }
             },
             upsert=True
-        )
-        fraud_detector.record_delegation(
-            request.delegator_address, request.delegate_address
         )
         
         logger.info(f"Delegation: {request.delegator_address} -> {request.delegate_address}")
@@ -678,7 +665,6 @@ async def revoke_delegation(address: str, authenticated: str = Depends(current_a
     ensure_acts_as_self(address, authenticated, "revocar tu delegación")
     result = await delegations_collection().delete_one({"delegator": address.lower()})
     if result.deleted_count > 0:
-        fraud_detector.remove_delegation(address)
         return {"ok": True, "message": "Delegación revocada"}
     return {"ok": False, "error": "No hay delegación activa"}
 

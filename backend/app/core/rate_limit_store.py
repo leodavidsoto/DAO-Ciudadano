@@ -73,6 +73,15 @@ class RateLimitStore(ABC):
     async def allow(self, key: str, limit: int, window_seconds: int) -> bool:
         """True si la petición se admite y queda registrada."""
 
+    @abstractmethod
+    async def penalty(self, key: str, delta: int, ttl_seconds: int) -> int:
+        """Ajusta y devuelve el contador de penalización de una clave.
+
+        Separado de `allow` porque no es una ventana: es un contador que sube
+        con cada fallo y baja con cada acierto, y debe sobrevivir entre
+        peticiones igual que el resto del antifraude.
+        """
+
     async def reset(self) -> None:
         """Limpia el estado. Solo lo usan los tests."""
 
@@ -89,6 +98,7 @@ class InMemoryRateLimitStore(RateLimitStore):
 
     def __init__(self):
         self._buckets = defaultdict(list)
+        self._penalties: dict[str, int] = {}
         self._last_seen: dict[str, float] = {}
         self._last_sweep = time.time()
 
@@ -119,12 +129,22 @@ class InMemoryRateLimitStore(RateLimitStore):
         for key in [k for k, seen in self._last_seen.items() if seen < cutoff]:
             self._last_seen.pop(key, None)
             self._buckets.pop(key, None)
+            self._penalties.pop(key, None)
         for key in [k for k, stamps in self._buckets.items() if not stamps]:
             self._buckets.pop(key, None)
+
+    async def penalty(self, key: str, delta: int, ttl_seconds: int) -> int:
+        current = max(0, self._penalties.get(key, 0) + delta)
+        if current == 0:
+            self._penalties.pop(key, None)
+        else:
+            self._penalties[key] = current
+        return current
 
     async def reset(self) -> None:
         self._buckets.clear()
         self._last_seen.clear()
+        self._penalties.clear()
         self._last_sweep = time.time()
 
     # Introspección para los tests y el diagnóstico.
@@ -160,6 +180,16 @@ class RedisRateLimitStore(RateLimitStore):
             args=[time.time(), window_seconds, limit, self._member()],
         )
         return bool(int(result))
+
+    async def penalty(self, key: str, delta: int, ttl_seconds: int) -> int:
+        """INCRBY + EXPIRE. El TTL evita que un contador quede para siempre."""
+        full_key = f"{self._namespace}:penalty:{key}"
+        value = int(await self._client.incrby(full_key, delta))
+        if value <= 0:
+            await self._client.delete(full_key)
+            return 0
+        await self._client.expire(full_key, ttl_seconds)
+        return value
 
     async def reset(self) -> None:
         async for key in self._client.scan_iter(match=f"{self._namespace}:*"):
@@ -212,6 +242,18 @@ class FallbackRateLimitStore(RateLimitStore):
         self._degraded = False
         logger.info("Rate limiter recuperado: Redis vuelve a responder")
         return True
+
+    async def penalty(self, key: str, delta: int, ttl_seconds: int) -> int:
+        if not self._degraded:
+            try:
+                return await self._primary.penalty(key, delta, ttl_seconds)
+            except Exception as exc:
+                self._degraded = True
+                logger.error(
+                    "Rate limiter degradado a memoria: Redis no responde (%s).",
+                    type(exc).__name__,
+                )
+        return await self._fallback.penalty(key, delta, ttl_seconds)
 
     async def reset(self) -> None:
         await self._fallback.reset()

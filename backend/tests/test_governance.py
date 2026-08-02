@@ -646,3 +646,42 @@ async def test_replayed_ballot_nonce_is_rejected_as_conflict(client, monkeypatch
     replayed = await _cast(second_proposal)
     assert replayed.status_code == 409
     assert "ya fue usada" in replayed.json()["detail"]
+
+
+async def test_delegation_depth_heuristic_survived_the_move_to_mongo(client):
+    """La profundidad máxima de cadena se evalúa ahora sobre el grafo real.
+
+    Antes vivía en el FraudDetector en memoria, sobre una copia que se vaciaba
+    en cada reinicio: bastaba reiniciar el proceso para que una cadena
+    profunda dejara de detectarse. Ahora sale de MongoDB.
+    """
+    from app.core.database import delegations_collection
+    from app.services.governance_service import MAX_DELEGATION_DEPTH, governance_service
+
+    # Cadena b -> c -> d -> e, más profunda que el máximo admitido.
+    chain = ["0xb", "0xc", "0xd", "0xe"]
+    for origin, target in zip(chain, chain[1:]):
+        await delegations_collection().insert_one(
+            {"delegator": origin, "delegate": target}
+        )
+
+    assert MAX_DELEGATION_DEPTH == 3
+    # Delegar en el inicio de la cadena la haría demasiado profunda.
+    assert await governance_service.find_delegation_cycle("0xa", "0xb") is True
+
+
+async def test_a_short_delegation_chain_is_still_allowed(client):
+    """La heurística no puede rechazar una delegación normal."""
+    from app.services.governance_service import governance_service
+
+    assert await governance_service.find_delegation_cycle("0xa", "0xb") is False
+
+
+async def test_delegation_cycles_are_still_detected(client):
+    from app.core.database import delegations_collection
+    from app.services.governance_service import governance_service
+
+    await delegations_collection().insert_one({"delegator": "0xb", "delegate": "0xa"})
+
+    # a -> b cerraría el ciclo a -> b -> a.
+    assert await governance_service.find_delegation_cycle("0xa", "0xb") is True

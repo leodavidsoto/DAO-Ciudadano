@@ -55,12 +55,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # los middlewares de forma perezosa, así que buscarlo por
         # introspección desde el endpoint sería frágil.
         self.store = store if store is not None else build_store(redis_url)
-        self.failed_attempts = defaultdict(int)
-        self.last_seen: dict[str, float] = {}
-        self._last_sweep = time.time()
-        # Se conserva para que los tests existentes y el diagnóstico sigan
-        # pudiendo inspeccionar/limpiar el estado en proceso.
-        self.requests = defaultdict(list)
+        # Ya no queda estado en el proceso: la ventana y la penalización
+        # progresiva viven en el almacén (ROADMAP 3.8). Con varios workers el
+        # castigo por intentos fallidos también es compartido, así que rotar de
+        # instancia deja de limpiarlo.
         self.trusted_proxy_networks = self._parse_trusted_proxy_networks(
             trusted_proxy_ips
         )
@@ -82,9 +80,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         client_ip = self._get_client_ip(request)
-        now = time.time()
-        self.last_seen[client_ip] = now
-        self._sweep_expired(now)
 
         # Every request consumes the per-IP global budget. Sensitive endpoints
         # additionally share one stricter per-IP budget; using the path itself
@@ -115,8 +110,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Progressive slowdown for failed attempts.
         # Must be asyncio.sleep: time.sleep here would block the event loop
         # for every concurrent request, not just the abusive client.
-        if self.failed_attempts[client_ip] > 5:
-            delay = min(self.failed_attempts[client_ip] * 0.5, 30)  # Max 30 seconds
+        failures = await self.store.penalty(client_ip, 0, self.PENALTY_TTL_SECONDS)
+        if failures > self.PENALTY_THRESHOLD:
+            delay = min(failures * 0.5, 30)  # Max 30 seconds
             await asyncio.sleep(delay)
         
         # Process request
@@ -124,41 +120,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         
         # Track failed attempts
         if response.status_code in [401, 403, 422]:
-            self.failed_attempts[client_ip] += 1
+            await self.store.penalty(client_ip, 1, self.PENALTY_TTL_SECONDS)
         elif response.status_code == 200:
-            self.failed_attempts[client_ip] = max(0, self.failed_attempts[client_ip] - 1)
-        
+            await self.store.penalty(client_ip, -1, self.PENALTY_TTL_SECONDS)
+
         return response
     
-    # An IP is forgotten once it has been silent for this many windows. It must
-    # outlast the progressive-slowdown penalty, otherwise going quiet for one
-    # window would be enough to clear a failed-attempt counter.
-    _RETENTION_WINDOWS = 10
-
-    def _sweep_expired(self, now: float) -> None:
-        """Drop per-IP state for clients that stopped sending requests.
-
-        Without this, every dict here grows one permanent entry per distinct
-        source address: on a public API the bookkeeping itself becomes the
-        memory-exhaustion vector the rate limiter is supposed to prevent.
-        Amortized to once per window so the hot path stays O(1).
-        """
-        if now - self._last_sweep < self.window_seconds:
-            return
-        self._last_sweep = now
-
-        cutoff = now - self.window_seconds * self._RETENTION_WINDOWS
-        stale = [ip for ip, seen in self.last_seen.items() if seen < cutoff]
-        for ip in stale:
-            del self.last_seen[ip]
-            self.failed_attempts.pop(ip, None)
-            self.requests.pop(f"global:{ip}", None)
-            self.requests.pop(f"sensitive:{ip}", None)
-
-        # Timestamp lists of still-active clients are pruned on their own
-        # requests; drop the ones that emptied out and were never refilled.
-        for key in [k for k, stamps in self.requests.items() if not stamps]:
-            del self.requests[key]
+    # Umbral y caducidad de la penalización progresiva. El TTL evita que un
+    # contador quede vivo para siempre; el barrido manual que hacía falta con
+    # los diccionarios en proceso desapareció con ellos.
+    PENALTY_THRESHOLD = 5
+    PENALTY_TTL_SECONDS = 3600
 
     @classmethod
     def _is_sensitive_path(cls, path: str) -> bool:
@@ -389,94 +361,74 @@ def verify_eth_address(address: str) -> bool:
 # === Anti-Fraud Detection ===
 
 class FraudDetector:
+    """Detección de patrones de voto sospechosos (ROADMAP 3.8).
+
+    Qué quedó aquí y qué se movió, y por qué
+    ────────────────────────────────────────
+    Antes esta clase guardaba TRES cosas en memoria de proceso: el historial
+    de votos, el grafo de delegaciones y el mapa delegante→delegado. Solo la
+    primera era estado propio.
+
+    Las dos de delegación **duplicaban la colección `delegations` de MongoDB**.
+    El router ya comprobaba ciclos con `GovernanceService.find_delegation_cycle`
+    y el máximo de delegados con un `count_documents`, ambos contra la base y
+    con el mismo límite. La copia en memoria solo añadía una versión más vieja
+    de la misma verdad, que además se vaciaba en cada reinicio.
+
+    Moverlas a Redis habría creado una TERCERA copia divergiendo de la fuente
+    autoritativa. En su lugar se eliminaron, y la única heurística que
+    aportaban de forma exclusiva —la profundidad máxima de cadena— vive ahora
+    en `find_delegation_cycle`, que ya recorre el grafo real.
+
+    El historial de votos sí era estado propio sin equivalente en la base, y
+    es lo que pasa a Redis: es una ventana deslizante por dirección, o sea
+    exactamente un rate limit, así que reutiliza el mismo almacén.
     """
-    Detect suspicious voting and delegation patterns
-    """
-    
-    def __init__(self):
-        self.vote_history = defaultdict(list)  # address -> [(timestamp, proposal_id)]
-        self.delegation_chains = defaultdict(list)  # delegate -> [delegators]
-        self.delegated_to = {}  # delegator -> delegate (each address delegates at most once)
-    
-    def check_rapid_voting(self, voter_address: str, proposal_id: str) -> tuple[bool, str]:
+
+    # Se permiten hasta 10 votos por ventana; el 11º se marca. La versión
+    # anterior comparaba `> 10` DESPUÉS de excluir el actual, así que dejaba
+    # pasar 11 y marcaba el 12º — una discrepancia con su propio umbral
+    # documentado. Se corrige al valor que la constante siempre dijo.
+    MAX_VOTES_PER_WINDOW = 10
+    VOTE_WINDOW_SECONDS = 300  # 5 minutos
+
+    def __init__(self, store=None):
+        self._store = store
+
+    def bind(self, store) -> None:
+        """Conecta el almacén compartido. Lo llama main al arrancar."""
+        self._store = store
+
+    async def check_rapid_voting(
+        self, voter_address: str, proposal_id: str
+    ) -> tuple[bool, str]:
+        """(sospechoso, motivo) para un intento de voto.
+
+        `proposal_id` ya no participa en la clave: el límite es por votante y
+        ventana, no por propuesta. Incluirlo permitiría emitir la cuota entera
+        contra cada propuesta rotando el identificador.
         """
-        Detect suspiciously rapid voting patterns
-        Returns (is_suspicious, reason)
-        """
-        now = datetime.now()
-        history = self.vote_history[voter_address.lower()]
-        
-        # Count votes in last 5 minutes
-        recent_votes = [v for v in history if now - v[0] < timedelta(minutes=5)]
-        
-        if len(recent_votes) > 10:
+        if self._store is None:
+            # Sin almacén no se inventa un veredicto: dejar pasar en silencio
+            # desactivaría el antifraude sin que nadie lo note.
+            logger.error(
+                "FraudDetector sin almacén: no se puede evaluar el patrón de voto"
+            )
+            return True, "Antifraude no disponible"
+
+        allowed = await self._store.allow(
+            f"votes:{voter_address.lower()}",
+            limit=self.MAX_VOTES_PER_WINDOW,
+            window_seconds=self.VOTE_WINDOW_SECONDS,
+        )
+        if not allowed:
             return True, "Too many votes in short period"
-        
-        # Record this vote
-        history.append((now, proposal_id))
-        
-        # Keep only last 100 votes
-        self.vote_history[voter_address.lower()] = history[-100:]
-        
         return False, ""
-    
-    def check_delegation_chain(self, delegator: str, delegate: str) -> tuple[bool, str]:
-        """
-        Detect circular or excessively deep delegation chains.
 
-        Walks the OUTGOING delegations starting from the proposed delegate
-        (delegator -> delegate direction — the direction a vote travels).
-        The previous implementation walked delegate -> delegators (backwards)
-        and never detected a real a->b + b->a cycle (audit finding N-3).
-
-        NOTE: state is in-process memory and empty after a restart (M-2);
-        the authoritative cycle check runs against MongoDB in
-        GovernanceService.find_delegation_cycle. This one adds the
-        chain-depth and delegator-count heuristics.
-        """
-        MAX_CHAIN_DEPTH = 3
-        MAX_DELEGATORS = 10
-        
-        seen = {delegator.lower()}
-        current = delegate.lower()
-        depth = 0
-        
-        while True:
-            if current in seen:
-                return True, "Circular delegation detected"
-            seen.add(current)
-            depth += 1
-            if depth > MAX_CHAIN_DEPTH:
-                return True, f"Delegation chain too deep (max {MAX_CHAIN_DEPTH})"
-            # Follow where `current` has delegated its own vote, if anywhere
-            nxt = self.delegated_to.get(current)
-            if nxt is None:
-                break
-            current = nxt
-        
-        # Check max delegators
-        if len(self.delegation_chains[delegate.lower()]) >= MAX_DELEGATORS:
-            return True, f"Delegate has too many delegators (max {MAX_DELEGATORS})"
-        
-        return False, ""
-    
-    def record_delegation(self, delegator: str, delegate: str):
-        """Record a delegation, replacing any previous one by the same delegator"""
-        delegator = delegator.lower()
-        delegate = delegate.lower()
-        previous = self.delegated_to.get(delegator)
-        if previous and delegator in self.delegation_chains[previous]:
-            self.delegation_chains[previous].remove(delegator)
-        self.delegated_to[delegator] = delegate
-        if delegator not in self.delegation_chains[delegate]:
-            self.delegation_chains[delegate].append(delegator)
-    
-    def remove_delegation(self, delegator: str):
-        """Forget a revoked delegation so stale edges don't flag false cycles"""
-        delegator = delegator.lower()
-        previous = self.delegated_to.pop(delegator, None)
-        if previous and delegator in self.delegation_chains[previous]:
-            self.delegation_chains[previous].remove(delegator)
+    async def reset(self) -> None:
+        """Limpia el historial. Solo lo usan los tests."""
+        if self._store is not None:
+            await self._store.reset()
 
 
 # Global fraud detector instance

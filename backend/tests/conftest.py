@@ -43,12 +43,8 @@ def _reset_rate_limiter(asgi_app):
     seen = set()
     while node is not None and id(node) not in seen:
         seen.add(id(node))
-        if hasattr(node, "failed_attempts") and hasattr(node, "store"):
-            node.requests.clear()
-            node.failed_attempts.clear()
-            node.last_seen.clear()
-            # El estado real vive en el almacén desde ROADMAP 3.8; se limpia
-            # de forma asíncrona en el propio fixture.
+        if hasattr(node, "store") and hasattr(node, "PENALTY_THRESHOLD"):
+            # Todo el estado vive en el almacén desde ROADMAP 3.8.
             _stores_to_reset.append(node.store)
         node = getattr(node, "app", None)
 
@@ -65,9 +61,7 @@ async def client():
         await store.reset()
     # The fraud detector is a process-global singleton; clear its in-memory
     # history so vote/delegation patterns from one test can't flag the next.
-    fraud_detector.vote_history.clear()
-    fraud_detector.delegation_chains.clear()
-    fraud_detector.delegated_to.clear()
+    await fraud_detector.reset()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:

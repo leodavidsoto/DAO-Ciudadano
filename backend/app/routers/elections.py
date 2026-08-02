@@ -419,7 +419,7 @@ async def vote_in_election(
         )
 
     # Anti-fraud: same rapid-voting heuristic as proposal votes (A-4)
-    suspicious, reason = fraud_detector.check_rapid_voting(
+    suspicious, reason = await fraud_detector.check_rapid_voting(
         request.voter_address, f"election:{election_id}"
     )
     if suspicious:

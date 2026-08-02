@@ -196,43 +196,62 @@ async def test_body_limit_allows_chunked_body_at_limit():
     assert response.json() == {"size": 8}
 
 
-def test_rate_limiter_forgets_silent_clients():
-    """Per-IP state must not accumulate one permanent entry per address.
+async def test_penalty_counter_lives_in_the_store_not_in_the_process():
+    """La penalización progresiva ya no es estado de proceso (ROADMAP 3.8).
 
-    Without eviction the limiter's own bookkeeping becomes the memory
-    exhaustion vector it exists to prevent: every distinct source address on a
-    public API leaves a dict entry behind forever.
+    Con contadores por instancia, rotar de worker limpiaba el castigo por
+    intentos fallidos: bastaba reintentar hasta caer en otra.
     """
-    middleware = RateLimitMiddleware(app=None, window_seconds=60)
-    now = 1_000_000.0
+    from app.core.rate_limit_store import InMemoryRateLimitStore
 
-    middleware.last_seen["10.0.0.1"] = now
-    middleware.failed_attempts["10.0.0.1"] = 3
-    middleware.requests["global:10.0.0.1"] = [now]
-    middleware.last_seen["10.0.0.2"] = now
-    middleware.failed_attempts["10.0.0.2"] = 7
-    middleware.requests["global:10.0.0.2"] = [now]
+    store = InMemoryRateLimitStore()
+    middleware = RateLimitMiddleware(app=None, store=store)
 
-    # 10.0.0.1 keeps sending traffic; 10.0.0.2 goes silent past retention.
-    later = now + 60 * middleware._RETENTION_WINDOWS + 1
-    middleware.last_seen["10.0.0.1"] = later
-    middleware._last_sweep = now
-    middleware._sweep_expired(later)
-
-    assert "10.0.0.1" in middleware.last_seen
-    assert middleware.failed_attempts["10.0.0.1"] == 3
-    assert "10.0.0.2" not in middleware.last_seen
-    assert "10.0.0.2" not in middleware.failed_attempts
-    assert "global:10.0.0.2" not in middleware.requests
+    # El middleware no guarda nada propio.
+    assert not hasattr(middleware, "failed_attempts")
+    assert not hasattr(middleware, "requests")
+    assert middleware.store is store
 
 
-def test_rate_limiter_sweep_is_amortized_to_one_per_window():
-    """The hot path must not walk every tracked IP on each request."""
-    middleware = RateLimitMiddleware(app=None, window_seconds=60)
-    now = 1_000_000.0
-    middleware._last_sweep = now
-    middleware.last_seen["10.0.0.9"] = now - 10_000
+async def test_penalty_rises_with_failures_and_falls_with_successes():
+    from app.core.rate_limit_store import InMemoryRateLimitStore
 
-    middleware._sweep_expired(now + 1)  # within the window: no sweep
+    store = InMemoryRateLimitStore()
 
-    assert "10.0.0.9" in middleware.last_seen
+    assert await store.penalty("ip", 1, 3600) == 1
+    assert await store.penalty("ip", 1, 3600) == 2
+    assert await store.penalty("ip", -1, 3600) == 1
+    # No baja de cero: un cliente correcto no acumula crédito para gastarlo.
+    assert await store.penalty("ip", -5, 3600) == 0
+    assert await store.penalty("ip", 0, 3600) == 0
+
+
+async def test_penalty_is_shared_between_workers():
+    """Es la razón de moverlo: el castigo debe seguir al cliente, no al proceso."""
+    import fakeredis.aioredis
+
+    from app.core.rate_limit_store import RedisRateLimitStore
+
+    client = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    worker_a = RedisRateLimitStore(client)
+    worker_b = RedisRateLimitStore(client)
+
+    await worker_a.penalty("ip", 1, 3600)
+    await worker_a.penalty("ip", 1, 3600)
+
+    # El otro worker ve el mismo contador.
+    assert await worker_b.penalty("ip", 0, 3600) == 2
+
+
+async def test_penalty_key_expires():
+    """Sin TTL, el contador de una IP quedaría vivo para siempre."""
+    import fakeredis.aioredis
+
+    from app.core.rate_limit_store import RedisRateLimitStore
+
+    client = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    store = RedisRateLimitStore(client)
+
+    await store.penalty("ip", 1, 3600)
+
+    assert 0 < await client.ttl("rl:penalty:ip") <= 3600

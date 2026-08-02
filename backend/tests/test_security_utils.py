@@ -75,22 +75,71 @@ def test_format_rut():
 
 # === Fraud detector ===
 
-def test_fraud_detector_flags_rapid_voting():
-    detector = FraudDetector()
+async def test_fraud_detector_flags_rapid_voting():
+    """El historial de votos vive ahora en el almacén compartido (ROADMAP 3.8)."""
+    from app.core.rate_limit_store import InMemoryRateLimitStore
+
+    detector = FraudDetector(store=InMemoryRateLimitStore())
+
     flagged = False
-    for i in range(15):
-        suspicious, reason = detector.check_rapid_voting("0xabc", f"prop-{i}")
+    for _ in range(15):
+        suspicious, reason = await detector.check_rapid_voting("0xabc", "prop-1")
         if suspicious:
             flagged = True
             assert "Too many votes" in reason
             break
+
     assert flagged is True
 
 
-def test_fraud_detector_flags_delegate_with_too_many_delegators():
-    detector = FraudDetector()
-    for i in range(10):
-        detector.record_delegation(f"0xdelegator{i}", "0xpopular")
-    suspicious, reason = detector.check_delegation_chain("0xnew", "0xpopular")
+async def test_rapid_voting_cannot_be_evaded_by_rotating_the_proposal():
+    """El límite es por votante, no por propuesta.
+
+    Si la propuesta formara parte de la clave, bastaría rotar el identificador
+    para emitir la cuota entera contra cada una.
+    """
+    from app.core.rate_limit_store import InMemoryRateLimitStore
+
+    detector = FraudDetector(store=InMemoryRateLimitStore())
+
+    verdicts = [
+        (await detector.check_rapid_voting("0xabc", f"prop-{i}"))[0]
+        for i in range(12)
+    ]
+
+    assert any(verdicts), "rotar el proposal_id evadió el límite"
+
+
+async def test_fraud_detector_without_a_store_fails_closed():
+    """Sin almacén no se inventa un veredicto favorable.
+
+    Dejar pasar en silencio desactivaría el antifraude sin que nadie lo note.
+    """
+    detector = FraudDetector(store=None)
+
+    suspicious, reason = await detector.check_rapid_voting("0xabc", "prop-1")
+
     assert suspicious is True
-    assert "too many delegators" in reason.lower()
+    assert "no disponible" in reason
+
+
+async def test_rapid_voting_state_is_shared_between_workers():
+    """Dos procesos contra el mismo almacén comparten el historial.
+
+    Es la razón de la migración: con estado por proceso, un votante duplicaba
+    su cuota simplemente cayendo en otra instancia.
+    """
+    import fakeredis.aioredis
+
+    from app.core.rate_limit_store import RedisRateLimitStore
+
+    client = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    worker_a = FraudDetector(store=RedisRateLimitStore(client))
+    worker_b = FraudDetector(store=RedisRateLimitStore(client))
+
+    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW):
+        assert (await worker_a.check_rapid_voting("0xabc", "p"))[0] is False
+
+    # El siguiente se marca aunque llegue al OTRO worker.
+    suspicious, _ = await worker_b.check_rapid_voting("0xabc", "p")
+    assert suspicious is True

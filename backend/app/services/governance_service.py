@@ -51,9 +51,16 @@ def add_months(dt: datetime, months: int) -> datetime:
     return dt.replace(year=year, month=month, day=day)
 
 
-# Depth guard for the DB cycle walk. Delegations are single-hop for weight,
-# but the stored graph could still contain a long cycle (a->b->c->a) that the
-# two-node check misses; walk it with a hard cap.
+# Profundidad máxima admitida de una cadena de delegación. Antes vivía en el
+# FraudDetector en memoria (MAX_CHAIN_DEPTH = 3) sobre una copia del grafo que
+# se vaciaba en cada reinicio; ahora se evalúa contra el grafo real (ROADMAP
+# 3.8). Las delegaciones no son transitivas para el peso, así que una cadena
+# larga no concentra poder — pero sí es una estructura anómala que conviene
+# frenar.
+MAX_DELEGATION_DEPTH = 3
+
+# Tope duro del recorrido, por si el grafo contuviera un ciclo largo que la
+# comprobación de dos nodos no detecta.
 MAX_DELEGATION_WALK = 10
 
 
@@ -106,10 +113,15 @@ class GovernanceService:
         """
         seen = {delegator.lower()}
         current = delegate.lower()
-        for _ in range(MAX_DELEGATION_WALK):
+        for depth in range(MAX_DELEGATION_WALK):
             if current in seen:
                 return True
             seen.add(current)
+            # Cadena demasiado profunda: se trata como sospechosa igual que un
+            # ciclo. Esta es la heurística que antes aportaba el detector en
+            # memoria, ahora sobre el grafo autoritativo.
+            if depth >= MAX_DELEGATION_DEPTH:
+                return True
             nxt = await delegations_collection().find_one({"delegator": current})
             if not nxt:
                 return False
