@@ -28,16 +28,25 @@ module.exports = {
       '@': path.resolve(__dirname, 'src'),
     },
     configure: (webpackConfig) => {
-      // MACI 2.5 targets Node as published. Keep its official PCommand wire
-      // format while sourcing randomness from Web Crypto in the browser.
+      // MACI 2.5 publishes CommonJS bundles which import Node core modules.
+      // CRA 5 no longer injects those shims, so map only the browser-safe
+      // primitives used by the MACI dependency graph. crypto-browserify's
+      // randomBytes implementation delegates to Web Crypto in the browser.
       webpackConfig.resolve.fallback = {
         ...webpackConfig.resolve.fallback,
-        crypto: path.resolve(__dirname, 'src/lib/browserCrypto.js'),
+        crypto: require.resolve('crypto-browserify'),
+        stream: require.resolve('stream-browserify'),
         assert: require.resolve('assert/'),
         buffer: require.resolve('buffer/'),
+        process: require.resolve('process/browser.js'),
+        util: require.resolve('util/'),
+        vm: require.resolve('vm-browserify'),
       };
       webpackConfig.plugins.push(
-        new webpack.ProvidePlugin({ Buffer: ['buffer', 'Buffer'] })
+        new webpack.ProvidePlugin({
+          Buffer: ['buffer', 'Buffer'],
+          process: [require.resolve('process/browser.js')],
+        })
       );
       // MACI's npm artifacts reference TypeScript source maps that are not
       // shipped in the package. Ignore only that known packaging warning.
