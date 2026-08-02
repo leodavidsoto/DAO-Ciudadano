@@ -306,7 +306,7 @@ estado histórico descrito arriba contradice el código actual.
 | P-15 | Permanecían rutas muertas que inventaban wallet/balance y un POST público capaz de llenar `status_checks`; además `GET /membership/member` exponía el `doc_hash` interno | `backend/app/routers/wallet.py`; `dashboard.py`; `membership.py` | Alta | ✅ Corregido: superficie mock eliminada, cliente huérfano borrado y respuesta pública de membresía reducida a campos operativos |
 | P-16 | La landing, onboarding y README seguían presentando capacidades no disponibles como identidad civil verificada, votos/fondos on-chain y biometría | `frontend/src/pages/LandingPage.jsx`; componentes de onboarding; `README.md` | Alta (reputación) | ✅ Corregido: producto rotulado como piloto, demos y límites visibles; lenguaje on-chain condicionado a transacciones reales |
 | P-17 | Promover la misma base de datos de demo a producción conservaba como miembros activos a altas autoafirmadas: `members` no registraba procedencia y el verificador Mongo solo comprobaba `status=active` | `backend/app/models/schemas.py`; `backend/app/services/blockchain_service.py`; `membership_verifier.py` | **Crítica (autorización)** | ✅ Corregido: cada alta declara `issuance_mode`, todo camino actual mantiene `identity_verified=false`, legacy queda como `legacy_unverified` y producción solo autoriza `active + onchain + tx_hash + identity_verified=true`; regresión demo→producción incluida |
-| P-18 | El historial público contiene una `EMERGENT_LLM_KEY` con formato real dentro de `backend/.env` en tres commits de 2025 | historial Git: `8d66b97`, `6202a9f`, `9977a2f` | **P0 crítica** | 🔴 Acción externa pendiente: revocar/rotar en el proveedor, revisar uso/facturación y luego coordinar cualquier reescritura de historia. Runbook: `docs/SECURITY_RUNBOOK.md` |
+| P-18 | El historial público contiene una `EMERGENT_LLM_KEY` con formato real dentro de `backend/.env` | historial Git: `6202a9f` (confirmado 02-08-2026); `8d66b97` y `9977a2f` ya no contienen el archivo | **P0 crítica** | 🔴 **Sigue abierto.** Verificado el 02-08-2026: el valor continúa accesible en el repositorio público. Revocar/rotar en el proveedor es acción externa que ningún agente puede ejecutar. Runbook: `docs/SECURITY_RUNBOOK.md` |
 | P-19 | El código cifra altas nuevas, pero no existe migración/backfill validado para PII legacy; múltiples documentos sin `rut_key`/`email_key` pueden impedir crear índices únicos y dejar readiness en 503 | colección Atlas `users`; `backend/app/core/database.py` | **Crítica (release/datos)** | 🔴 Abierto: snapshot, inventario/duplicados, migración ensayada y rollback antes de promover la base. Readiness falla cerrado; no se ejecutó ninguna mutación remota |
 | P-20 | Configuración on-chain no vacía pero inválida podía declarar readiness; no se comprobaban chainId, bytecode, ABI, `MINTER_ROLE` ni saldo | `backend/app/services/chain_service.py`; `backend/app/core/readiness.py` | Alta | ✅ Corregido: readiness y el endpoint de minteo ejecutan la misma validación estática/runtime contra Sepolia, bytecode, ABI, rol y gas; producción exige RPC HTTPS. El envío usa chain ID fijo, reserva local de nonce, errores sanitizados y obtiene el token desde evento o lectura del contrato, sin inventarlo |
 | P-21 | El frontend mantenía la dirección Sepolia histórica y una ABI manual `string` incompatible con el contrato actual `bytes32`; cualquier `tx_hash` abría el contrato equivocado | `frontend/netlify.toml`; `src/contracts/SBTContract.js`; `useSBTContract.js`; `DashboardStep.jsx` | Alta (integridad) | ✅ Corregido: dirección, ABI y hook huérfano eliminados; la UI enlaza únicamente el `tx_hash` real devuelto por la API |
@@ -508,3 +508,43 @@ Disposición del texto plano (10 elementos, los que acepta el contrato):
 | 9 | relleno (0) |
 
 La firma EdDSA-Poseidon se calcula sobre `Poseidon(plaintext[0..5])`.
+
+
+---
+
+## Endurecimiento del repositorio (02-08-2026)
+
+Cierra la parte de **P-31** que dependía de configuración de GitHub y que hasta
+ahora estaba marcada como "acción externa pendiente".
+
+| Control | Antes | Ahora |
+|---|---|---|
+| Ruleset sobre `main` | ninguno | **activo** (id 20222928): exige PR, checks en verde, y bloquea force-push y borrado |
+| Checks obligatorios | ninguno | `Backend · pytest`, `Contracts · hardhat test`, `Contracts · slither`, `Frontend · build` |
+| Secret scanning | deshabilitado | **habilitado** |
+| Push protection | deshabilitado | **habilitado** |
+| Dependabot security updates | deshabilitado | **habilitado** |
+
+**Decisión sobre las revisiones:** el ruleset exige PR pero con
+`required_approving_review_count: 0`. Exigir una aprobación dejaría al
+mantenedor en solitario sin poder mergear nada —GitHub no permite aprobar el
+propio PR— y el efecto práctico sería desactivar la protección para poder
+trabajar. Con cero aprobaciones se conserva lo que pedía la auditoría: **no se
+puede mergear con CI en rojo**.
+
+**`Mobile · static gates` NO se incluyó** entre los checks obligatorios: el job
+existe en `ci.yml` pero todavía no ha reportado sobre `main`, y exigir un check
+que nunca llega deja los PR colgados para siempre. Añadirlo en cuanto la rama
+actual se integre.
+
+**Sin cobertura (requieren GitHub Advanced Security, de pago):**
+`secret_scanning_non_provider_patterns` y `secret_scanning_validity_checks`
+siguen deshabilitados. Importa para P-18: `EMERGENT_LLM_KEY` es un nombre
+propio, no un patrón de proveedor reconocido, así que el escaneo estándar
+**puede no detectarlo**. No confiar en la alerta automática para darlo por
+cerrado.
+
+**Controles preventivos verificados hoy:** `*.env` está en `.gitignore`
+(`backend/.env` confirmado ignorado) y no hay ningún `.env` rastreado. Con push
+protection activo, un intento de reintroducir una clave reconocible quedaría
+bloqueado en el push.
