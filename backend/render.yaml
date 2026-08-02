@@ -36,6 +36,45 @@ services:
       - key: SIGNED_BALLOTS_REQUIRED
         value: "false"
 
+      # === Servicios añadidos tras la arquitectura ADR-001 ===
+      # Todos van con `sync: false`: se definen en el dashboard y nunca en el
+      # repositorio. `/health/ready` reporta cuáles faltan y qué funcionalidad
+      # deja de estar disponible por cada una.
+
+      # Firma la credencial EIP-191 de identidad ZK. DISTINTA de
+      # MINTER_PRIVATE_KEY: firmar credenciales y enviar transacciones son
+      # poderes separados y no deben compartir llave.
+      - key: IDENTITY_ISSUER_PRIVATE_KEY
+        sync: false
+
+      # Proveedor civil real que emite los grants de un solo uso. Vacío = el
+      # alta de nuevos ciudadanos queda bloqueada (falla cerrado).
+      - key: IDENTITY_PROVIDER
+        sync: false
+
+      # Rate limiter y antifraude compartidos entre instancias (ROADMAP 3.8).
+      # Sin esto los contadores son por proceso y el límite efectivo se
+      # multiplica por el número de workers.
+      - key: REDIS_URL
+        sync: false
+
+      # ERC-4337 no custodial. La URL del bundler lleva la API key del
+      # proveedor, así que nunca se versiona. NO definir SAFE_OWNER_PRIVATE_KEY:
+      # el backend no es owner ni custodio, y tenerla se reporta como error.
+      - key: ERC4337_ENABLED
+        value: "false"
+      - key: BUNDLER_RPC_URL
+        sync: false
+      - key: ERC4337_ACCOUNT_IMPLEMENTATION
+        value: safe
+      - key: SAFE_4337_MODULE_ADDRESS
+        value: "0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226"
+
+      # MACICoordinator desplegado. El cliente contrasta la llave del
+      # coordinador contra la cadena, no contra lo que diga el backend.
+      - key: MACI_COORDINATOR_ADDRESS
+        sync: false
+
       # Generada por Render, nunca commiteada
       - key: SECRET_KEY
         generateValue: true

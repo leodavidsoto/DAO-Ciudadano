@@ -218,3 +218,104 @@ async def test_unimplemented_onchain_membership_source_is_never_ready(
         "MEMBERSHIP_SOURCE=onchain" in blocker
         for blocker in response.json()["configuration"]["blockers"]
     )
+
+
+# === Servicios añadidos después de la primera pasada ===
+
+def _production(monkeypatch, **overrides):
+    """Producción con lo mínimo bien configurado, salvo lo que se sobreescriba."""
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "DEBUG", False)
+    monkeypatch.setattr(settings, "SECRET_KEY", "k" * 48)
+    monkeypatch.setattr(settings, "IDENTITY_PEPPER", "p" * 48)
+    monkeypatch.setattr(settings, "SIWE_DOMAIN", "estamosdao.cl")
+    monkeypatch.setattr(settings, "SIWE_URI", "https://estamosdao.cl")
+    monkeypatch.setattr(settings, "CORS_ORIGINS", "https://estamosdao.cl")
+    monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", True)
+    monkeypatch.setattr(settings, "MONGO_URL", "mongodb+srv://user:pw@cluster.example/db")
+    for key, value in overrides.items():
+        monkeypatch.setattr(settings, key, value)
+
+
+def test_production_requires_the_credential_issuer(monkeypatch):
+    """Sin emisor no se puede emitir ninguna credencial: es un requisito duro."""
+    _production(monkeypatch, IDENTITY_ISSUER_PRIVATE_KEY="")
+
+    missing = [r.key for r in readiness.missing_requirements()]
+
+    assert "IDENTITY_ISSUER_PRIVATE_KEY" in missing
+
+
+def test_the_issuer_key_must_be_a_usable_ethereum_key(monkeypatch):
+    """Una cadena cualquiera fallaría con un error opaco al primer intento."""
+    monkeypatch.setattr(settings, "IDENTITY_ISSUER_PRIVATE_KEY", "no-es-una-llave")
+    assert readiness.requirement_is_valid("IDENTITY_ISSUER_PRIVATE_KEY") is False
+
+    monkeypatch.setattr(settings, "IDENTITY_ISSUER_PRIVATE_KEY", "0x" + "5a" * 32)
+    assert readiness.requirement_is_valid("IDENTITY_ISSUER_PRIVATE_KEY") is True
+
+
+def test_demo_does_not_require_the_issuer(monkeypatch):
+    """En demo su ausencia es legítima: el endpoint ya falla cerrado solo."""
+    monkeypatch.setattr(settings, "APP_ENV", "demo")
+    monkeypatch.setattr(settings, "IDENTITY_ISSUER_PRIVATE_KEY", "")
+
+    missing = [r.key for r in readiness.missing_requirements()]
+
+    assert "IDENTITY_ISSUER_PRIVATE_KEY" not in missing
+
+
+def test_production_blocks_without_a_civil_provider(monkeypatch):
+    _production(monkeypatch, IDENTITY_PROVIDER="")
+
+    blockers = " ".join(readiness.deployment_blockers())
+
+    assert "IDENTITY_PROVIDER" in blockers
+
+
+def test_production_blocks_without_shared_rate_limiting(monkeypatch):
+    """Con varias instancias y sin Redis, el límite efectivo se multiplica."""
+    _production(monkeypatch, REDIS_URL="")
+
+    blockers = " ".join(readiness.deployment_blockers())
+
+    assert "REDIS_URL" in blockers
+
+
+def test_production_blocks_without_the_membership_contract(monkeypatch):
+    _production(monkeypatch, SBT_CONTRACT_ADDRESS="")
+
+    blockers = " ".join(readiness.deployment_blockers())
+
+    assert "SBT_CONTRACT_ADDRESS" in blockers
+
+
+# === Qué puede hacer realmente el despliegue ===
+
+def test_feature_status_reflects_configuration_not_intention(monkeypatch):
+    """Un booleano `ready` no dice QUÉ funciona; esto sí."""
+    monkeypatch.setattr(settings, "IDENTITY_ISSUER_PRIVATE_KEY", "")
+    monkeypatch.setattr(settings, "IDENTITY_PROVIDER", "")
+    monkeypatch.setattr(settings, "REDIS_URL", "")
+
+    features = readiness.feature_status()
+
+    assert features["identity_issuance"]["available"] is False
+    assert features["shared_rate_limiting"]["available"] is False
+    # El backend nunca es custodio: forma parte del contrato de API.
+    assert features["sponsored_minting"]["custodial"] is False
+    # MACI registra llaves pero NO habilita votación privada.
+    assert features["maci"]["key_registry"] is True
+    assert features["maci"]["private_voting"] is False
+
+
+def test_feature_status_turns_on_with_real_configuration(monkeypatch):
+    monkeypatch.setattr(settings, "IDENTITY_ISSUER_PRIVATE_KEY", "0x" + "5a" * 32)
+    monkeypatch.setattr(settings, "IDENTITY_PROVIDER", "clave-unica")
+    monkeypatch.setattr(settings, "REDIS_URL", "redis://cache:6379/0")
+
+    features = readiness.feature_status()
+
+    assert features["identity_issuance"]["available"] is True
+    assert features["identity_issuance"]["civil_provider"] == "clave-unica"
+    assert features["shared_rate_limiting"]["available"] is True

@@ -199,3 +199,50 @@ Dos que **no** se pueden quitar pese a no aparecer en ningún `import`:
 ## Requisitos
 
 Python **3.11**, fijado en `render.yaml` vía `PYTHON_VERSION` e igual en el CI.
+
+
+---
+
+## Checklist de producción tras ADR-001 (02-08-2026)
+
+`/health/ready` es la fuente de verdad: enumera lo que falta y, en `features`,
+**qué puede hacer realmente** el despliegue. Un `ready: true` con
+`features.identity_issuance.available: false` significa que el servicio está
+sano pero nadie puede darse de alta.
+
+### Variables nuevas y qué se rompe sin cada una
+
+| Variable | Si falta |
+|---|---|
+| `IDENTITY_ISSUER_PRIVATE_KEY` | No se emite ninguna credencial ZK. **Bloquea producción.** Debe ser una llave Ethereum válida y distinta de `MINTER_PRIVATE_KEY` |
+| `IDENTITY_PROVIDER` | No se pueden emitir grants civiles: el alta de ciudadanos queda bloqueada. **Bloquea producción** |
+| `REDIS_URL` | Rate limiter y antifraude cuentan por proceso: con N instancias el límite efectivo es N veces el configurado. **Bloquea producción** |
+| `SBT_CONTRACT_ADDRESS` | No se puede leer `membershipScope()` ni aprobar raíces. **Bloquea producción** |
+| `BUNDLER_RPC_URL` | Sin patrocinio de gas; el minteo cae al relayer EOA, que sí funciona |
+| `MACI_COORDINATOR_ADDRESS` | El registro de llaves MACI sigue activo, pero no se puede anunciar poll |
+
+### Lo que NO debe definirse
+
+- **`SAFE_OWNER_PRIVATE_KEY`** — el backend no es owner ni custodio de las
+  Safes. Configurarla se reporta como error de configuración, no como opción.
+
+### Orden de encendido sugerido
+
+1. Desplegar el contrato SBT y anotar su dirección → `SBT_CONTRACT_ADDRESS`.
+2. Conceder `ROOT_MANAGER_ROLE` a la llave del relayer: aprueba raíces de
+   identidad, que es un permiso distinto del de mintear.
+3. Provisionar Redis → `REDIS_URL`.
+4. Generar la llave del emisor → `IDENTITY_ISSUER_PRIVATE_KEY`.
+5. Integrar el proveedor civil → `IDENTITY_PROVIDER`.
+6. Solo entonces `APP_ENV=production` y `SIGNED_BALLOTS_REQUIRED=true`.
+7. ERC-4337 al final, con `ERC4337_ENABLED=true`: comprobar en
+   `/health/ready` que `erc4337.bundler.reachable` es true y que el
+   `chain_id` coincide antes de dar por buena la integración.
+
+### Lo que sigue sin poder verificarse desde aquí
+
+- Ninguna UserOperation se ha enviado nunca: hace falta una Safe desplegada y
+  saldo en el paymaster.
+- Los circuitos ZK no tienen ceremonia multiparte; quien generó los `zkey`
+  actuales puede fabricar pruebas falsas.
+- La llave filtrada de P-18 sigue sin rotar. Es lo único P0 del proyecto.

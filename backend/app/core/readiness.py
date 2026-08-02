@@ -25,6 +25,9 @@ class Requirement:
     key: str
     feature: str
     why: str
+    # Algunos requisitos solo tienen sentido en producción: en demo su ausencia
+    # es legítima y el endpoint correspondiente ya falla cerrado por su cuenta.
+    production_only: bool = False
 
 
 REQUIREMENTS: List[Requirement] = [
@@ -32,6 +35,7 @@ REQUIREMENTS: List[Requirement] = [
         key="MONGO_URL",
         feature="persistencia de producción",
         why="producción debe declarar una URI MongoDB válida y no usar el fallback local",
+        production_only=True,
     ),
     Requirement(
         key="IDENTITY_PEPPER",
@@ -42,6 +46,12 @@ REQUIREMENTS: List[Requirement] = [
         key="PII_ENCRYPTION_KEY",
         feature="registro de ciudadanos",
         why="sin esto no se puede cifrar el RUT/email/nombre antes de guardarlos",
+    ),
+    Requirement(
+        key="IDENTITY_ISSUER_PRIVATE_KEY",
+        feature="emisión de credenciales de identidad ZK",
+        why="firma la credencial EIP-191 que el cliente verifica; sin ella no se puede emitir ninguna",
+        production_only=True,
     ),
     Requirement(
         key="SECRET_KEY",
@@ -94,6 +104,17 @@ def requirement_is_valid(key: str) -> bool:
     if key == "IDENTITY_PEPPER":
         return len(value) >= 32
 
+    if key == "IDENTITY_ISSUER_PRIVATE_KEY":
+        # Debe ser una llave Ethereum utilizable, no una cadena cualquiera:
+        # si no, el primer intento de emitir falla con un error opaco.
+        try:
+            from eth_account import Account
+
+            Account.from_key(value.strip())
+        except Exception:
+            return False
+        return True
+
     if key == "PII_ENCRYPTION_KEY":
         try:
             Fernet(value.encode("utf-8"))
@@ -104,12 +125,13 @@ def requirement_is_valid(key: str) -> bool:
 
 
 def missing_requirements() -> List[Requirement]:
+    # Los requisitos `production_only` se omiten fuera de producción: el
+    # fallback local sigue siendo útil para desarrollo, pero nunca debe hacer
+    # que un despliegue de producción parezca configurado.
     return [
         req
         for req in REQUIREMENTS
-        # El fallback local sigue siendo útil para desarrollo/tests, pero nunca
-        # debe hacer que un despliegue de producción parezca configurado.
-        if (req.key != "MONGO_URL" or settings.is_production)
+        if (not req.production_only or settings.is_production)
         and not requirement_is_valid(req.key)
     ]
 
@@ -166,8 +188,91 @@ def deployment_blockers() -> list[str]:
         )
 
     blockers.extend(siwe_configuration_blockers())
+    # Se llega aquí solo en producción: la comprobación de is_production está
+    # más arriba en esta misma función.
+    blockers.extend(_service_blockers())
 
     return blockers
+
+
+def _service_blockers() -> list[str]:
+    """Servicios añadidos después de la primera pasada de readiness.
+
+    Sin esto, un despliegue reportaba `ready` mientras la emisión de
+    credenciales, el patrocinio de gas o el límite compartido no funcionaban
+    — justo el tipo de "listo" que no significa nada.
+    """
+    from . import config as _config  # evita import circular en tiempo de módulo
+
+    blockers: list[str] = []
+
+    # Proveedor civil: sin él la emisión de credenciales falla cerrada, así que
+    # el flujo de alta completo no existe.
+    if not settings.IDENTITY_PROVIDER.strip():
+        blockers.append(
+            "IDENTITY_PROVIDER no está configurado: no se pueden emitir grants "
+            "civiles y el alta de nuevos ciudadanos queda bloqueada"
+        )
+
+    # Rate limiter: con varios workers y sin Redis el límite efectivo se
+    # multiplica por el número de instancias (ROADMAP 3.8).
+    if not settings.REDIS_URL.strip():
+        blockers.append(
+            "REDIS_URL no está configurada: el rate limiter y el antifraude "
+            "cuentan por proceso, así que con más de una instancia el límite "
+            "efectivo se multiplica"
+        )
+
+    # Contrato de membresía: hace falta para leer scope y aprobar raíces.
+    if not settings.SBT_CONTRACT_ADDRESS.strip():
+        blockers.append(
+            "SBT_CONTRACT_ADDRESS no está configurada: no se puede leer "
+            "membershipScope() ni aprobar raíces de identidad"
+        )
+
+    return blockers
+
+
+def feature_status() -> dict:
+    """Qué funcionalidades están realmente operativas.
+
+    Un booleano `ready` no le dice a un operador QUÉ puede hacer el
+    despliegue. Esto sí, y sin adornos: cada entrada refleja configuración
+    real, no intención.
+    """
+    from ..services import paymaster_service
+
+    erc4337 = paymaster_service.status()
+    return {
+        "identity_issuance": {
+            "available": bool(
+                settings.IDENTITY_ISSUER_PRIVATE_KEY.strip()
+                and settings.IDENTITY_PROVIDER.strip()
+            ),
+            "issuer_configured": bool(settings.IDENTITY_ISSUER_PRIVATE_KEY.strip()),
+            "civil_provider": settings.IDENTITY_PROVIDER.strip() or None,
+        },
+        "sponsored_minting": {
+            # Habilitado no significa probado: la sonda del bundler vive en
+            # /health/ready bajo `erc4337`.
+            "available": erc4337["enabled"],
+            "custodial": False,
+            "missing": erc4337["missing"],
+        },
+        "shared_rate_limiting": {
+            "available": bool(settings.REDIS_URL.strip()),
+        },
+        "maci": {
+            # El registro de llaves funciona siempre; la votación privada no.
+            "key_registry": True,
+            "coordinator_configured": bool(settings.MACI_COORDINATOR_ADDRESS.strip()),
+            "private_voting": False,
+            "why": (
+                "falta el circuito de tally con ceremonia multiparte y el "
+                "anclaje verificable entre propuesta y poll"
+            ),
+        },
+    }
 
 
 def siwe_configuration_blockers() -> list[str]:
@@ -304,6 +409,7 @@ def status(onchain_runtime: dict | None = None) -> dict:
         ],
         "blockers": config_blockers,
         "minting": minting,
+        "features": feature_status(),
         # Backwards-compatible field for existing monitors.
         "onchain_minting": minting["onchain"],
     }
