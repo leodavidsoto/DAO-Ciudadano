@@ -422,7 +422,7 @@ que nunca se muestra con JS activo).
 |---|---|---|---|---|
 | P-51 | La suite Playwright arrancaba CRA con `craco start` directamente, saltándose `prestart/zk:sync`. En un checkout limpio podía ejecutar sin los tres artefactos ZK de `public/zk` o reutilizar residuos locales; además no existía un job E2E en CI | `e2e/playwright.config.js`; `.github/workflows/ci.yml` | Alta (integridad de pruebas) | ✅ Corregido: usa `npm start`, reconstruye los artefactos desde el manifiesto verificado y la CI instala Chromium y ejecuta Playwright en cada PR |
 | P-52 | El flujo guardaba solo dirección/red y, al mintear, `erc4337.js` caía a `globalThis.ethereum`. La instancia que estableció SIWE no quedaba fijada hasta la firma de la UserOperation | `frontend/src/hooks/useWallet.js`; `WalletStep.jsx`; `OnboardingContext.jsx`; `lib/api.js`; `lib/erc4337.js` | Alta (autorización) | ✅ Corregido: la instancia MetaMask EIP-1193 viaja explícitamente en memoria, sin fallback global; cuenta y red se revalidan antes de construir y firmar, y la firma Safe v0.7 debe medir 77 bytes. El E2E sustituye el provider global tras SIWE y prueba que ninguna solicitud de firma se desvía |
-| P-53 | El router ERC-4337 no implementaba el contrato del cliente: `PrepareMintRequest` exigía `proof` mientras el frontend envía `account + mint`, y decodificaba el `callData` exterior de `Safe4337Module.executeUserOpWithErrorString` con la ABI del SBT. El camino integrado devolvía 422 antes de patrocinar una operación válida | `backend/app/routers/erc4337.py` | **Alta (integración bloqueada)** | ✅ **Corregido** (02-08-2026): modelos alineados con el payload real del cliente, decodificación en dos capas (envoltorio Safe4337 → llamada al SBT), y validaciones nuevas de `operation=CALL`, valor cero, perfil de cuenta y correspondencia de la prueba. Tests que construyen el callData de dos capas exactamente como el cliente. Queda sin implementar la derivación CREATE2 completa de la Safe — ver nota |
+| P-53 | El router ERC-4337 no implementaba el contrato del cliente: `PrepareMintRequest` exigía `proof` mientras el frontend envía `account + mint`, y decodificaba el `callData` exterior de `Safe4337Module.executeUserOpWithErrorString` con la ABI del SBT | `backend/app/routers/erc4337.py` | **Alta (integración bloqueada)** | ✅ **Cerrado** (02-08-2026): modelos alineados, decodificación en dos capas, y **derivación CREATE2 de la Safe implementada y verificada** contra direcciones generadas por el mismo `permissionless.js` del navegador |
 
 ### Evidencia ejecutada
 
@@ -560,7 +560,33 @@ protection activo, un intento de reintroducir una clave reconocible quedaría
 bloqueado en el push.
 
 
-### Nota sobre P-53 — qué se validó y qué no
+### Cierre de P-53 (02-08-2026) — derivación CREATE2 verificada
+
+Lo que quedaba pendiente ya está implementado. El enfoque final resultó **mejor
+que replicar las constantes de despliegue de Safe**: se deriva la dirección
+desde el propio `factoryData` del cliente, decodificando
+`createProxyWithNonce(address,bytes,uint256)` y leyendo el `proxyCreationCode`
+**de la propia factory on-chain**. Cero constantes adivinadas.
+
+Verificado contra vectores reales generados con el mismo `permissionless.js`
+que usa el navegador (Safe v1.4.1, módulo canónico, saltNonce 0):
+
+| owner | Safe derivada |
+|---|---|
+| `0x118d2C9e…` | `0x9875C9C1cE9C23ff2240197276B9cf740b2c3989` |
+| `0x1111…1111` | `0x4315A87ca896aCfd7c8Ce0Fcf10eEc8fe3053816` |
+
+Ambas coinciden. El vector y el `proxyCreationCode` quedaron como fixtures en
+`backend/tests/fixtures/`, así que si la derivación se rompe falla un test en
+vez de rechazar peticiones legítimas en producción.
+
+Se conservan **dos comprobaciones complementarias**, porque ninguna sustituye a
+la otra: la derivación prueba que la dirección declarada es la que ese
+`factoryData` despliega; el binding de owner prueba que esa cuenta pertenece a
+quien firmó. Sin la primera, el cliente podía declarar una dirección y desplegar
+otra; sin la segunda, el paymaster pagaría el despliegue de una Safe ajena.
+
+### Nota histórica — por qué no se hizo antes
 
 La corrección cubre el bloqueo real (modelos y decodificación). Sobre
 "recalcular la Safe ciudadana" conviene ser preciso, porque se implementó de
@@ -589,3 +615,35 @@ direcciones de relleno. Implementarla a ciegas y equivocar una constante
 rechazaría *todas* las peticiones legítimas, que es peor que el hueco que
 cierra. Queda pendiente de un vector real —lo aporta el primer despliegue en
 Sepolia— y hasta entonces la protección efectiva es el resto de comprobaciones.
+
+
+---
+
+## Despliegue de integración en Sepolia — verificación independiente (02-08-2026)
+
+Comprobado contra la cadena, no contra el reporte:
+
+| Contrato | Dirección | Verificado |
+|---|---|---|
+| `DAOCiudadanaSBT` | `0x41491B6976A3796bEf8660625Dc9eA51e72a587a` | 9.877 bytes de bytecode |
+| `Verifier` | `0x26b18c29E8EF613958EFE0123a24A70E9ff52413` | 1.658 bytes; **coincide** con `membershipVerifier()` del SBT |
+| `MACICoordinator` | `0x1CC218883dBeFf6aB8b4933723DF23B8F69336a6` | 5.349 bytes; su `membership()` apunta al SBT |
+
+- `membershipScope()` = `16916500747997676645551243185131135892121977094615858609009617732596527423811`
+- `totalSupply()` = **0** — todavía no se ha minteado ninguna membresía.
+- El admin `0x118d2C9e…` tiene `ROOT_MANAGER_ROLE`: puede aprobar raíces.
+- `tallyIsVerifiable()` = **false**, `tallyVerifier()` = `address(0)`, tal como
+  se reportó. Ningún resultado de MACI puede publicarse.
+- **`coordinatorPubKeyX` = 0**: la llave del coordinador MACI **no está
+  publicada**. `GET /maci/proposals/{id}/poll` devuelve 503 correctamente, y
+  seguirá haciéndolo hasta que se publique: anunciar una llave sin anclaje
+  produciría votos que nadie puede descifrar.
+
+### Bug encontrado al leer el despliegue real
+
+`chain_service.membership_scope()` devolvía `None` pese a que el contrato
+respondía: `is_configured()` exigía también `MINTER_PRIVATE_KEY`, y **las
+lecturas no necesitan llave privada**. El efecto era que la emisión de
+credenciales fallaba con "no se pudo leer membershipScope()" cuando el único
+problema era que el relayer no estaba configurado — dos cosas sin relación.
+Corregido con `can_read_chain()`, separado de `is_configured()`.

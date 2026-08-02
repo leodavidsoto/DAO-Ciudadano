@@ -147,3 +147,32 @@ def test_mint_never_uses_client_when_runtime_precondition_fails(monkeypatch):
             "0x" + "00" * 32,
             "AL2",
         )
+
+
+# === Lecturas sin llave privada ===
+
+def test_reading_the_chain_does_not_require_a_minter_key(monkeypatch):
+    """Las lecturas no necesitan llave privada.
+
+    Exigirla hacía que la emisión de credenciales fallara con "no se pudo leer
+    membershipScope()" cuando el único problema era que el relayer no estaba
+    configurado — dos cosas sin relación. Se descubrió al leer el contrato
+    realmente desplegado en Sepolia.
+    """
+    monkeypatch.setattr(settings, "SEPOLIA_RPC_URL", "https://rpc.example")
+    monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "0x" + "ab" * 20)
+    monkeypatch.setattr(settings, "MINTER_PRIVATE_KEY", "")
+
+    assert chain_service.can_read_chain() is True
+    # Enviar transacciones sigue exigiendo la llave.
+    assert chain_service.is_configured() is False
+
+
+def test_reading_still_needs_the_rpc_and_the_contract(monkeypatch):
+    monkeypatch.setattr(settings, "SEPOLIA_RPC_URL", "")
+    monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "0x" + "ab" * 20)
+    assert chain_service.can_read_chain() is False
+
+    monkeypatch.setattr(settings, "SEPOLIA_RPC_URL", "https://rpc.example")
+    monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "")
+    assert chain_service.can_read_chain() is False

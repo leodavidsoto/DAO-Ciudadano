@@ -259,6 +259,105 @@ def _assert_account_profile(profile: SafeAccountProfile) -> None:
         )
 
 
+# El código de creación del proxy se LEE de la factory, no se codifica aquí:
+# es lo que permite derivar la dirección sin adivinar ninguna constante de
+# despliegue de Safe. Se cachea porque es inmutable por factory.
+_PROXY_CREATION_CODE: dict[str, bytes] = {}
+
+_CREATE_PROXY_SELECTOR = None
+
+
+def _proxy_creation_code(factory: str) -> bytes:
+    from eth_utils import keccak  # noqa: F401
+    from web3 import Web3
+
+    key = factory.lower()
+    if key in _PROXY_CREATION_CODE:
+        return _PROXY_CREATION_CODE[key]
+
+    rpc = settings.SEPOLIA_RPC_URL.strip()
+    if not rpc:
+        raise HTTPException(
+            status_code=503,
+            detail="SEPOLIA_RPC_URL no está configurada: no se puede verificar la Safe.",
+        )
+    w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 10}))
+    contract = w3.eth.contract(
+        address=Web3.to_checksum_address(factory),
+        abi=[{"inputs": [], "name": "proxyCreationCode",
+              "outputs": [{"name": "", "type": "bytes"}],
+              "stateMutability": "pure", "type": "function"}],
+    )
+    try:
+        code = contract.functions.proxyCreationCode().call()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="La factory declarada no expone proxyCreationCode: no es una SafeProxyFactory.",
+        ) from exc
+    _PROXY_CREATION_CODE[key] = code
+    return code
+
+
+def _assert_safe_address_is_derived(user_op: dict, safe_address: str) -> None:
+    """La dirección declarada debe ser la que ese `factoryData` despliega.
+
+    Se deriva CREATE2 de verdad: se decodifica `createProxyWithNonce` para
+    sacar singleton, inicializador y saltNonce, y el `proxyCreationCode` se lee
+    de la propia factory. Cero constantes adivinadas — verificado contra
+    direcciones generadas por el mismo permissionless.js que usa el navegador.
+
+    Sin esto, el cliente podía declarar una dirección y hacer que el paymaster
+    financiara el despliegue de otra distinta.
+    """
+    from eth_abi import decode as abi_decode, encode as abi_encode
+    from eth_utils import keccak
+    from web3 import Web3
+
+    factory = user_op.get("factory")
+    factory_data = user_op.get("factoryData") or user_op.get("factory_data")
+    if not factory or not factory_data:
+        return  # Safe ya desplegada: no hay despliegue que verificar.
+
+    selector = keccak(text="createProxyWithNonce(address,bytes,uint256)")[:4]
+    raw = bytes.fromhex(str(factory_data).removeprefix("0x"))
+    if raw[:4] != selector:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "El factoryData no es una llamada a createProxyWithNonce; no se "
+                "patrocina un despliegue que no se puede verificar."
+            ),
+        )
+
+    try:
+        singleton, initializer, salt_nonce = abi_decode(
+            ["address", "bytes", "uint256"], raw[4:]
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422, detail="El factoryData no decodifica."
+        ) from exc
+
+    salt = keccak(keccak(initializer) + abi_encode(["uint256"], [salt_nonce]))
+    init_code_hash = keccak(
+        _proxy_creation_code(factory) + abi_encode(["address"], [singleton])
+    )
+    derived = "0x" + keccak(
+        b"\xff" + bytes.fromhex(str(factory).removeprefix("0x")) + salt + init_code_hash
+    )[12:].hex()
+
+    if Web3.to_checksum_address(derived) != Web3.to_checksum_address(safe_address):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "La dirección declarada de la Safe no es la que produce su propio "
+                "factoryData. No se patrocina el despliegue de una cuenta distinta "
+                "de la anunciada."
+            ),
+        )
+
+
 def _assert_deployment_binds_owner(user_op: dict, owner_address: str) -> None:
     """Si la operación despliega la Safe, su inicializador debe nombrar al owner.
 
@@ -330,6 +429,10 @@ async def prepare_mint(
             status_code=422,
             detail="El sender de la operación no es la Safe declarada.",
         )
+    # Dos comprobaciones complementarias sobre el despliegue patrocinado:
+    # la derivación prueba que la dirección declarada es la que ese factoryData
+    # produce; el binding prueba que esa cuenta pertenece a quien firmó.
+    _assert_safe_address_is_derived(user_op, request.safe_address)
     _assert_deployment_binds_owner(user_op, request.owner_address)
 
     # La prueba declarada tiene que ser la del propio solicitante.

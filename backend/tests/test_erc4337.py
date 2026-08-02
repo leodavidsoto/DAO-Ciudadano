@@ -308,3 +308,91 @@ def test_calldata_decoder_rejects_a_non_mint_call():
     with pytest.raises(HTTPException) as exc:
         _decode_inner_mint_call("0xdeadbeef")
     assert exc.value.status_code == 422
+
+
+# === Derivación CREATE2 de la Safe (cierre de P-53) ===
+
+# Vector REAL generado con el mismo permissionless.js que usa el navegador,
+# contra Safe v1.4.1 y el módulo canónico en Sepolia. No es inventado: si esta
+# derivación se rompe, el test falla en vez de rechazar peticiones legítimas
+# en producción.
+VECTOR_OWNER = "0x1111111111111111111111111111111111111111"
+VECTOR_SAFE = "0x4315A87ca896aCfd7c8Ce0Fcf10eEc8fe3053816"
+VECTOR_FACTORY = "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"
+
+
+def _vector_factory_data():
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "safe_factory_data.txt"
+    return path.read_text().strip()
+
+
+def _stub_proxy_creation_code(monkeypatch, code: bytes):
+    """Evita una llamada RPC real: el código del proxy es inmutable."""
+    from app.routers import erc4337
+
+    monkeypatch.setattr(erc4337, "_proxy_creation_code", lambda factory: code)
+
+
+def test_create2_derivation_matches_the_real_client(monkeypatch):
+    """La dirección derivada debe ser la que produjo permissionless.js."""
+    from pathlib import Path
+
+    from app.routers.erc4337 import _assert_safe_address_is_derived
+
+    code = bytes.fromhex(
+        (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
+         / "safe_proxy_creation_code.txt").read_text().strip()
+    )
+    _stub_proxy_creation_code(monkeypatch, code)
+
+    # No lanza: la dirección declarada es la que ese factoryData despliega.
+    _assert_safe_address_is_derived(
+        {"factory": VECTOR_FACTORY, "factoryData": _vector_factory_data()},
+        VECTOR_SAFE,
+    )
+
+
+def test_a_declared_address_that_does_not_match_is_rejected(monkeypatch):
+    """Impide que el paymaster financie el despliegue de otra cuenta."""
+    from pathlib import Path
+
+    from fastapi import HTTPException
+
+    from app.routers.erc4337 import _assert_safe_address_is_derived
+
+    code = bytes.fromhex(
+        (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
+         / "safe_proxy_creation_code.txt").read_text().strip()
+    )
+    _stub_proxy_creation_code(monkeypatch, code)
+
+    with pytest.raises(HTTPException) as exc:
+        _assert_safe_address_is_derived(
+            {"factory": VECTOR_FACTORY, "factoryData": _vector_factory_data()},
+            "0x" + "99" * 20,
+        )
+    assert "no es la que produce" in exc.value.detail
+
+
+def test_factory_data_that_is_not_create_proxy_is_rejected(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.routers.erc4337 import _assert_safe_address_is_derived
+
+    _stub_proxy_creation_code(monkeypatch, b"\x00")
+
+    with pytest.raises(HTTPException) as exc:
+        _assert_safe_address_is_derived(
+            {"factory": VECTOR_FACTORY, "factoryData": "0xdeadbeef" + "00" * 64},
+            VECTOR_SAFE,
+        )
+    assert "createProxyWithNonce" in exc.value.detail
+
+
+def test_an_already_deployed_safe_needs_no_derivation(monkeypatch):
+    """Sin factoryData no hay despliegue que patrocinar ni que verificar."""
+    from app.routers.erc4337 import _assert_safe_address_is_derived
+
+    _assert_safe_address_is_derived({}, VECTOR_SAFE)

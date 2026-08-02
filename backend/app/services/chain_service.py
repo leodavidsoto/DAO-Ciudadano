@@ -155,7 +155,33 @@ def configuration_errors() -> dict[str, str]:
 
 
 def is_configured() -> bool:
+    """Configuración completa: lecturas Y envío de transacciones."""
     return not configuration_errors()
+
+
+def can_read_chain() -> bool:
+    """Solo lo necesario para LEER: RPC y dirección del contrato.
+
+    Separado de `is_configured` porque las lecturas no necesitan llave
+    privada. Exigirla hacía que la emisión de credenciales fallara con "no se
+    pudo leer membershipScope()" cuando el único problema era que el relayer
+    no estaba configurado — dos cosas sin relación.
+    """
+    errors = configuration_errors()
+    return not {k for k in errors if k != "MINTER_PRIVATE_KEY"}
+
+
+def _read_only_contract():
+    """Contrato para llamadas `view`, sin necesidad de cuenta."""
+    from web3 import Web3
+
+    w3 = Web3(
+        Web3.HTTPProvider(settings.SEPOLIA_RPC_URL, request_kwargs={"timeout": 10})
+    )
+    return w3.eth.contract(
+        address=Web3.to_checksum_address(settings.SBT_CONTRACT_ADDRESS),
+        abi=_MINT_ABI,
+    )
 
 
 def _client():
@@ -363,10 +389,10 @@ def membership_scope() -> Optional[int]:
     version + chainId + address(this) dentro del propio contrato, así que
     calcularlo aquí sería duplicar una fuente de verdad que ya existe.
     """
-    if not is_configured():
+    if not can_read_chain():
         return None
     try:
-        _, contract, _ = _client()
+        contract = _read_only_contract()
         return int(contract.functions.membershipScope().call())
     except Exception:
         logger.error("No se pudo leer membershipScope()", exc_info=True)
@@ -375,10 +401,10 @@ def membership_scope() -> Optional[int]:
 
 def identity_root_is_approved(identity_root: int) -> Optional[bool]:
     """True/False según el contrato; None si la consulta falla."""
-    if not is_configured():
+    if not can_read_chain():
         return None
     try:
-        _, contract, _ = _client()
+        contract = _read_only_contract()
         return bool(contract.functions.isIdentityRootApproved(identity_root).call())
     except Exception:
         logger.error("No se pudo consultar isIdentityRootApproved()", exc_info=True)
@@ -516,10 +542,10 @@ def membership_token_of(wallet_address: str) -> Optional[int]:
     """
     from web3 import Web3
 
-    if not is_configured():
+    if not can_read_chain():
         return None
     try:
-        _, contract, _ = _client()
+        contract = _read_only_contract()
         token_id = int(
             contract.functions.getMembershipToken(
                 Web3.to_checksum_address(wallet_address)
