@@ -91,6 +91,16 @@ class Database:
             await cls.get_db()["ballot_nonces"].create_index(
                 [("voter_address", 1), ("nonce", 1)], unique=True
             )
+            # Árbol de identidades ZK (ADR-001, D-2): una hoja por sujeto. Este
+            # índice es lo que impide que un reintento del cliente le emita dos
+            # credenciales a la misma persona; la comprobación en el servicio
+            # solo da un error más claro.
+            await cls.get_db()["identity_commitments"].create_index(
+                "subject_key", unique=True
+            )
+            await cls.get_db()["identity_commitments"].create_index(
+                "commitment", unique=True
+            )
             cls.indexes_ready = True
         except Exception as e:
             # A pre-existing duplicate in the collection blocks unique index
