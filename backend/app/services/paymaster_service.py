@@ -27,9 +27,10 @@ valida el Safe4337Module. Solo se admite `safe`: SimpleAccount y Kernel firman
 de otra forma, y aceptar un valor desconocido produciría firmas que el módulo
 rechaza sin explicar por qué.
 
-Limitación conocida: se firma con UNA llave, así que solo sirve para una Safe
-de umbral 1. Con umbral mayor hacen falta varias firmas concatenadas y
-ordenadas por dirección; el módulo lo rechaza ruidosamente, no en silencio.
+ARQUITECTURA NO CUSTODIAL: el backend NUNCA firma. La Safe pertenece al
+ciudadano y su owner firma con MetaMask. El servidor prepara la UserOperation,
+valida en profundidad lo que se va a ejecutar y la retransmite al bundler.
+Si el backend firmara, sería custodio: podría mintear a nombre de cualquiera.
 
 NO VERIFICADO CONTRA UN BUNDLER REAL: este entorno no tiene credenciales de
 Pimlico ni una Safe desplegada. La construcción sigue la especificación de
@@ -100,8 +101,12 @@ def configuration_errors() -> dict[str, str]:
     if settings.ERC4337_ACCOUNT_IMPLEMENTATION.strip().lower() == "safe":
         if not settings.SAFE_4337_MODULE_ADDRESS.strip():
             errors["SAFE_4337_MODULE_ADDRESS"] = "falta"
-        if not settings.SAFE_OWNER_PRIVATE_KEY.strip():
-            errors["SAFE_OWNER_PRIVATE_KEY"] = "falta"
+        # SAFE_OWNER_PRIVATE_KEY ya NO se exige ni se usa: el owner es el
+        # ciudadano. Si alguien la configura, es una señal de alarma.
+        if settings.SAFE_OWNER_PRIVATE_KEY.strip():
+            errors["SAFE_OWNER_PRIVATE_KEY"] = (
+                "no debe configurarse: el backend no es owner ni custodio"
+            )
 
     return errors
 
@@ -145,7 +150,9 @@ def status() -> dict:
         # bundler real. Se declaran por separado a propósito: "implementado"
         # y "verificado" no son lo mismo, y confundirlos es como se despliega
         # algo que falla con AA24 en producción.
-        "signing_implemented": True,
+        # El backend no firma: es arquitectura, no una carencia.
+        "custodial": False,
+        "signing_implemented": False,
         "verified_against_bundler": False,
     }
 
@@ -227,47 +234,24 @@ def sponsor_user_operation(user_op: dict) -> dict:
 
 
 def sign_user_operation(user_op: dict) -> dict:
-    """Firma la UserOperation con la llave propietaria de la Safe.
+    """NO IMPLEMENTADA — y no debe estarlo.
 
-    Delega en `safe_4337`, que construye la estructura EIP-712 `SafeOp` que el
-    Safe4337Module valida. Firmar el `userOpHash` del EntryPoint —el error
-    intuitivo— daría AA24 tras pagar la simulación.
+    El backend NO es owner ni custodio de la Safe del ciudadano. Quien firma
+    la UserOperation es el usuario con MetaMask, sobre la estructura EIP-712
+    `SafeOp` que construye el frontend. El servidor solo prepara la operación,
+    la valida y la retransmite.
 
-    Solo se admite `safe`: SimpleAccount y Kernel firman distinto, y aceptar
-    un valor desconocido produciría firmas que el módulo rechaza sin decir por
-    qué.
+    Se conserva `safe_4337.safe_op_digest` porque sigue siendo útil del lado
+    del servidor para VALIDAR que la firma recibida corresponde al owner
+    declarado — verificar no es firmar.
+
+    Firmar aquí con una llave del servidor haría al backend custodio de las
+    membresías: podría mintear en nombre de cualquiera sin su consentimiento.
     """
-    from . import safe_4337
-
-    cfg = config()
-    implementation = cfg.account_implementation.strip().lower()
-    if implementation != "safe":
-        raise PaymasterUnavailable(
-            f"Implementación de cuenta no soportada: {implementation!r}. "
-            "Solo está implementada 'safe' (Safe4337Module)."
-        )
-
-    module_address = settings.SAFE_4337_MODULE_ADDRESS.strip()
-    if not module_address:
-        raise PaymasterUnavailable(
-            "Falta SAFE_4337_MODULE_ADDRESS: sin la dirección del módulo el "
-            "dominio EIP-712 es otro y el módulo rechaza la firma."
-        )
-
-    owner_key = settings.SAFE_OWNER_PRIVATE_KEY.strip()
-    if not owner_key:
-        raise PaymasterUnavailable("Falta SAFE_OWNER_PRIVATE_KEY.")
-
-    try:
-        return safe_4337.sign_user_operation(
-            user_op,
-            private_key=owner_key,
-            entrypoint=cfg.entrypoint,
-            chain_id=settings.SIWE_CHAIN_ID,
-            module_address=module_address,
-        )
-    except safe_4337.SafeSigningError as exc:
-        raise UserOperationError(str(exc)) from exc
+    raise PaymasterUnavailable(
+        "El backend no firma UserOperations: la Safe pertenece al ciudadano y "
+        "firma con su wallet. Usa /api/erc4337/prepare-mint y submit-mint."
+    )
 
 
 def send_user_operation(user_op: dict) -> str:
@@ -376,3 +360,9 @@ def estimate_user_operation_gas(user_op: dict) -> dict:
     if not isinstance(result, dict):
         raise UserOperationError("El bundler no devolvió una estimación de gas.")
     return result
+
+
+def get_user_operation_receipt(user_op_hash: str):
+    """Recibo de la UserOperation, o None si el bundler aún no la incluyó."""
+    cfg = config()
+    return _rpc("eth_getUserOperationReceipt", [user_op_hash])

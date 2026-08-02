@@ -41,35 +41,35 @@ def test_rejects_unknown_entrypoint_version(monkeypatch):
     assert "ERC4337_ENTRYPOINT_VERSION" in pm.configuration_errors()
 
 
-def test_unsupported_account_implementation_fails_loudly(monkeypatch):
-    """Solo 'safe' está implementada.
+def test_backend_refuses_to_sign_user_operations(monkeypatch):
+    """El backend NO firma: la Safe es del ciudadano.
 
-    SimpleAccount y Kernel firman de otra forma: aceptarlas produciría firmas
-    que el módulo rechaza con AA24 tras pagar la simulación, en vez de un
-    error claro aquí.
+    Si firmara, sería custodio — podría mintear membresías a nombre de
+    cualquiera sin su consentimiento. Que esto falle es la garantía, no un
+    defecto.
     """
     monkeypatch.setattr(settings, "BUNDLER_RPC_URL", "https://bundler.example")
     monkeypatch.setattr(settings, "ERC4337_ACCOUNT_ADDRESS", "0x" + "11" * 20)
-    monkeypatch.setattr(settings, "ERC4337_ACCOUNT_IMPLEMENTATION", "kernel")
+    monkeypatch.setattr(settings, "ERC4337_ACCOUNT_IMPLEMENTATION", "safe")
+    monkeypatch.setattr(settings, "SAFE_4337_MODULE_ADDRESS", "0x" + "22" * 20)
 
-    # Se rechaza ya en la validación de configuración —antes de intentar
-    # firmar— y el error nombra la variable culpable.
-    assert "ERC4337_ACCOUNT_IMPLEMENTATION" in pm.configuration_errors()
     with pytest.raises(pm.PaymasterUnavailable) as exc:
         pm.sign_user_operation({"sender": "0x" + "11" * 20})
-    assert "ERC4337_ACCOUNT_IMPLEMENTATION" in str(exc.value)
+    assert "no firma" in str(exc.value).lower()
 
 
-def test_safe_signing_requires_the_module_address(monkeypatch):
-    """Sin la dirección del módulo el dominio EIP-712 es otro."""
-    monkeypatch.setattr(settings, "BUNDLER_RPC_URL", "https://bundler.example")
-    monkeypatch.setattr(settings, "ERC4337_ACCOUNT_ADDRESS", "0x" + "11" * 20)
+def test_configuring_an_owner_key_is_reported_as_an_error(monkeypatch):
+    """Tener SAFE_OWNER_PRIVATE_KEY configurada es señal de alarma.
+
+    No se usa en ningún camino; que exista sugiere que alguien pretende que el
+    servidor custodie Safes ajenas.
+    """
     monkeypatch.setattr(settings, "ERC4337_ACCOUNT_IMPLEMENTATION", "safe")
     monkeypatch.setattr(settings, "SAFE_OWNER_PRIVATE_KEY", "0x" + "c3" * 32)
-    monkeypatch.setattr(settings, "SAFE_4337_MODULE_ADDRESS", "")
 
-    with pytest.raises(pm.PaymasterUnavailable):
-        pm.sign_user_operation({"sender": "0x" + "11" * 20})
+    errors = pm.configuration_errors()
+    assert "SAFE_OWNER_PRIVATE_KEY" in errors
+    assert "custodio" in errors["SAFE_OWNER_PRIVATE_KEY"]
 
 
 def test_mint_refuses_while_disabled():
@@ -84,16 +84,12 @@ def test_mint_refuses_while_disabled():
         )
 
 
-def test_status_separates_implemented_from_verified():
-    """"Implementado" y "verificado" no son lo mismo.
-
-    La firma Safe existe, pero nunca se ejecutó contra un bundler real.
-    Confundir ambas cosas es como se despliega algo que falla con AA24 en
-    producción, así que el estado las declara por separado.
-    """
+def test_status_declares_the_backend_is_not_custodial():
+    """El contrato de API debe decir que el servidor no firma ni custodia."""
     status = pm.status()
     assert status["enabled"] is False
-    assert status["signing_implemented"] is True
+    assert status["custodial"] is False
+    assert status["signing_implemented"] is False
     assert status["verified_against_bundler"] is False
 
 

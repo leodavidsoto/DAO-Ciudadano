@@ -506,3 +506,26 @@ def mint_with_proof(
     except Exception as e:
         logger.error("Error minteando con prueba ZK (%s)", type(e).__name__)
         raise ChainMintError("Fallo interno al enviar o confirmar la transacción") from e
+
+
+def membership_token_of(wallet_address: str) -> Optional[int]:
+    """tokenId del SBT de una wallet, o None si no tiene o falla la consulta.
+
+    Se lee de la cadena y no del recibo: el recibo de una UserOperation no
+    expone el valor de retorno de la llamada interna.
+    """
+    from web3 import Web3
+
+    if not is_configured():
+        return None
+    try:
+        _, contract, _ = _client()
+        token_id = int(
+            contract.functions.getMembershipToken(
+                Web3.to_checksum_address(wallet_address)
+            ).call()
+        )
+        return token_id or None
+    except Exception:
+        logger.error("No se pudo leer getMembershipToken()", exc_info=True)
+        return None

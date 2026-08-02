@@ -113,6 +113,13 @@ class Database:
             await cls.get_db()["maci_key_history"].create_index(
                 [("wallet_address", 1), ("version", 1)], unique=True
             )
+            # ERC-4337: un nullifier -> como mucho una UserOperation.
+            await cls.get_db()["erc4337_operations"].create_index(
+                "nullifier_hash", unique=True
+            )
+            await cls.get_db()["erc4337_operations"].create_index(
+                "operation_id", unique=True
+            )
             cls.indexes_ready = True
         except Exception as e:
             # A pre-existing duplicate in the collection blocks unique index

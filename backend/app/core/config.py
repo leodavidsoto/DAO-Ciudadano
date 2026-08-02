@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     SAFE_4337_MODULE_ADDRESS: str = os.environ.get('SAFE_4337_MODULE_ADDRESS', '')
     # Llave del propietario de la Safe. Solo sirve para umbral 1.
     SAFE_OWNER_PRIVATE_KEY: str = os.environ.get('SAFE_OWNER_PRIVATE_KEY', '')
+    # Direccion del Paymaster (informativa para el cliente).
+    ERC4337_PAYMASTER_ADDRESS: str = os.environ.get('ERC4337_PAYMASTER_ADDRESS', '')
     # El nombre del metodo de patrocinio varia entre proveedores.
     PAYMASTER_SPONSOR_METHOD: str = os.environ.get('PAYMASTER_SPONSOR_METHOD', 'pm_sponsorUserOperation')
 
