@@ -107,6 +107,12 @@ class Database:
             await cls.get_db()["mint_operations"].create_index(
                 "nullifier_hash", unique=True
             )
+            # MACI: una llave vigente por wallet. El historial NO es unico:
+            # cambiar de llave es el mecanismo anti-coercion del protocolo.
+            await cls.get_db()["maci_keys"].create_index("wallet_address", unique=True)
+            await cls.get_db()["maci_key_history"].create_index(
+                [("wallet_address", 1), ("version", 1)], unique=True
+            )
             cls.indexes_ready = True
         except Exception as e:
             # A pre-existing duplicate in the collection blocks unique index

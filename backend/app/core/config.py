@@ -80,6 +80,19 @@ class Settings(BaseSettings):
     # es la ventana en la que una verificación civil puede canjearse.
     IDENTITY_GRANT_TTL_SECONDS: int = int(os.environ.get('IDENTITY_GRANT_TTL_SECONDS', '300'))
 
+    # === Transporte ERC-4337 (ADR-001, D-1) ===
+    # Apagado por defecto: mientras no se decida la implementacion de cuenta
+    # inteligente no se pueden firmar UserOperations, y el relayer EOA sigue
+    # siendo el camino probado.
+    ERC4337_ENABLED: bool = os.environ.get('ERC4337_ENABLED', 'false').lower() == 'true'
+    BUNDLER_RPC_URL: str = os.environ.get('BUNDLER_RPC_URL', '')
+    ERC4337_ENTRYPOINT_VERSION: str = os.environ.get('ERC4337_ENTRYPOINT_VERSION', '0.7')
+    ERC4337_ACCOUNT_ADDRESS: str = os.environ.get('ERC4337_ACCOUNT_ADDRESS', '')
+    # SimpleAccount | safe | kernel. Determina como se firma la UserOperation.
+    ERC4337_ACCOUNT_IMPLEMENTATION: str = os.environ.get('ERC4337_ACCOUNT_IMPLEMENTATION', '')
+    # El nombre del metodo de patrocinio varia entre proveedores.
+    PAYMASTER_SPONSOR_METHOD: str = os.environ.get('PAYMASTER_SPONSOR_METHOD', 'pm_sponsorUserOperation')
+
     # Proveedor civil real que emite los grants. Vacío = no hay ninguno, y la
     # emisión de credenciales falla cerrado en producción. Los simuladores de
     # ClaveÚnica/NFC/liveness NUNCA deben emitir grants.

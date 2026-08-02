@@ -31,6 +31,7 @@ from app.routers import auth_router, wallet_router, membership_router, dashboard
 from app.routers.governance import router as governance_router
 from app.routers.elections import router as elections_router
 from app.routers.identity import router as identity_router
+from app.routers.maci import router as maci_router
 
 
 # Configure logging
@@ -153,6 +154,7 @@ app.include_router(membership_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(governance_router, prefix="/api")
 app.include_router(elections_router, prefix="/api")
+app.include_router(maci_router, prefix="/api")
 
 
 # Process liveness: no external dependency checks. Orchestrators can use this
