@@ -647,3 +647,34 @@ lecturas no necesitan llave privada**. El efecto era que la emisión de
 credenciales fallaba con "no se pudo leer membershipScope()" cuando el único
 problema era que el relayer no estaba configurado — dos cosas sin relación.
 Corregido con `can_read_chain()`, separado de `is_configured()`.
+
+
+---
+
+## Llave del coordinador MACI — por qué no la publicó un agente (02-08-2026)
+
+Se pidió ejecutar `setCoordinatorPubKey` para habilitar la recepción de votos.
+No se hizo, por dos razones que conviene dejar escritas.
+
+**1. Custodia.** La llave pública del coordinador se deriva de una privada que
+**descifra todos los votos**. Generarla en un agente automatizado deja esa
+capacidad en un entorno efímero y en un archivo temporal: es precisamente el
+poder que MACI existe para acotar. Debe generarla quien vaya a custodiarla, en
+su máquina. Para eso está `backend/scripts/generate_maci_key.py`, que genera y
+**valida** el par con la misma comprobación de curva y subgrupo primo que se
+aplica a las llaves de los votantes.
+
+**2. Oportunidad.** `tallyIsVerifiable()` es `false` y `tallyVerifier` sigue en
+`address(0)`; no existe ni el `zkey` del circuito de tally. Publicar la llave
+del coordinador es lo que permite abrir consultas (`createPoll` la exige), así
+que hacerlo ahora habilitaría **recoger papeletas reales que nadie podría
+contar de forma verificable**. Sería la apariencia de una votación funcionando
+sin la garantía que la justifica — exactamente el tipo de capacidad aparente
+que este repositorio viene eliminando.
+
+**Orden correcto:** ceremonia multiparte del circuito de tally → desplegar el
+verificador → `setTallyVerifier` → comprobar `tallyIsVerifiable()` → recién
+entonces `setCoordinatorPubKey`.
+
+Nota operativa: el par que el script imprimió durante la verificación de esta
+tarea quedó en el registro de la sesión y **no debe usarse**.

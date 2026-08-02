@@ -487,3 +487,45 @@ async def test_poll_endpoint_does_not_announce_an_unanchored_key(client):
     headers = await _mint_member(client, VOTER)
     response = await client.get("/api/maci/proposals/prop-1/poll", headers=headers)
     assert response.status_code == 503
+
+
+# === Generación de la llave del coordinador ===
+
+def test_generated_keypair_is_valid_by_construction():
+    """Lo generado debe pasar la MISMA validación que las llaves de votantes.
+
+    Si no, se podría publicar on-chain una llave de orden bajo y el sistema
+    quedaría comprometido desde el primer voto.
+    """
+    private_key, (x, y) = maci_service.generate_coordinator_keypair()
+
+    assert 0 < private_key < maci_service.BABYJUB_SUBORDER
+    assert maci_service.is_on_babyjub_curve(x, y) is True
+    assert maci_service.is_in_prime_subgroup(x, y) is True
+    # No lanza: es la misma función que filtra a los votantes.
+    maci_service.validate_public_key(x, y)
+
+
+def test_public_key_derivation_is_deterministic():
+    assert maci_service.derive_public_key(12345) == maci_service.derive_public_key(12345)
+    assert maci_service.derive_public_key(1) != maci_service.derive_public_key(2)
+
+
+def test_the_generator_is_the_public_key_of_private_key_one():
+    """Contraprueba de la derivación: 1·Base8 debe ser Base8."""
+    assert maci_service.derive_public_key(1) == maci_service.BASE8
+
+
+def test_private_keys_outside_the_subgroup_range_are_rejected():
+    """Fuera de [1, subOrder) el punto no pertenece al subgrupo primo."""
+    for invalid in (0, -1, maci_service.BABYJUB_SUBORDER,
+                    maci_service.BABYJUB_SUBORDER + 1):
+        with pytest.raises(maci_service.MaciKeyError):
+            maci_service.derive_public_key(invalid)
+
+
+def test_two_generated_keypairs_differ():
+    """Una generación determinista haría predecible la llave del coordinador."""
+    first, _ = maci_service.generate_coordinator_keypair()
+    second, _ = maci_service.generate_coordinator_keypair()
+    assert first != second

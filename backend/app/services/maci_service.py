@@ -59,6 +59,12 @@ BABYJUB_SUBORDER = (
 # Punto identidad del grupo (elemento neutro en forma de Edwards retorcida).
 IDENTITY_POINT = (0, 1)
 
+# Generador del subgrupo de orden primo (EIP-2494 / circomlib).
+BASE8 = (
+    5299619240641551281634865583518297030282874472190772894086521144482721001553,
+    16950150798460657717958625567821834550301663161624707787222815936182638968203,
+)
+
 
 def _point_add(p1: tuple[int, int], p2: tuple[int, int]) -> tuple[int, int]:
     """Suma en Edwards retorcida (fórmula completa, sin casos especiales)."""
@@ -520,3 +526,33 @@ async def read_coordinator_key_onchain():
     from . import chain_service
 
     return await asyncio.to_thread(chain_service.maci_coordinator_key)
+
+
+def derive_public_key(private_key: int) -> tuple[int, int]:
+    """pub = priv · Base8. La inversa es intratable: es lo que protege el voto."""
+    if not isinstance(private_key, int) or isinstance(private_key, bool):
+        raise MaciKeyError("La llave privada debe ser un entero.")
+    if private_key <= 0 or private_key >= BABYJUB_SUBORDER:
+        raise MaciKeyError(
+            "La llave privada debe estar en [1, subOrder): fuera de ese rango "
+            "el punto resultante no pertenece al subgrupo primo."
+        )
+    return _scalar_mul(BASE8, private_key)
+
+
+def generate_coordinator_keypair() -> tuple[int, tuple[int, int]]:
+    """Genera un par de llaves del coordinador. Devuelve (privada, pública).
+
+    ADVERTENCIA: la llave privada descifra TODOS los votos de la consulta.
+    Esta función existe para que la ejecute quien vaya a custodiarla, en su
+    propia máquina — no un proceso automatizado cuyo entorno es efímero. El
+    resultado se valida antes de devolverlo, así que una llave publicada con
+    esto está garantizadamente en el subgrupo primo.
+    """
+    import secrets
+
+    private_key = secrets.randbelow(BABYJUB_SUBORDER - 1) + 1
+    public_key = derive_public_key(private_key)
+    # Se valida con la MISMA función que filtra las llaves de los votantes.
+    validate_public_key(*public_key)
+    return private_key, public_key
