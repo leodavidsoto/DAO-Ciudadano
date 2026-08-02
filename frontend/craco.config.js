@@ -28,6 +28,22 @@ module.exports = {
       '@': path.resolve(__dirname, 'src'),
     },
     configure: (webpackConfig) => {
+      // CRA's final asset rule otherwise emits .cjs entries as URLs. MACI then
+      // receives a string instead of the @zk-kit exports (for example `r`),
+      // which makes ballot encryption fail at runtime. Parse only this audited
+      // dependency family as CommonJS JavaScript before the asset catch-all.
+      const oneOfRule = webpackConfig.module.rules.find((rule) =>
+        Array.isArray(rule.oneOf)
+      );
+      if (!oneOfRule) {
+        throw new Error('No se encontró la regla oneOf de CRA para cargar @zk-kit.');
+      }
+      oneOfRule.oneOf.unshift({
+        test: /\.cjs$/,
+        include: /node_modules[\\/]@zk-kit[\\/]/,
+        type: 'javascript/auto',
+      });
+
       // MACI 2.5 publishes CommonJS bundles which import Node core modules.
       // CRA 5 no longer injects those shims, so map only the browser-safe
       // primitives used by the MACI dependency graph. crypto-browserify's
