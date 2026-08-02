@@ -30,6 +30,7 @@ from app.core.security_middleware import (
 from app.routers import auth_router, wallet_router, membership_router, dashboard_router
 from app.routers.governance import router as governance_router
 from app.routers.elections import router as elections_router
+from app.routers.identity import router as identity_router
 
 
 # Configure logging
@@ -145,6 +146,8 @@ async def api_root():
 
 # Include routers with /api prefix
 app.include_router(auth_router, prefix="/api")
+# Emisión real de credenciales ZK: router aparte, sin el bloqueo de los demos.
+app.include_router(identity_router, prefix="/api")
 app.include_router(wallet_router, prefix="/api")
 app.include_router(membership_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")

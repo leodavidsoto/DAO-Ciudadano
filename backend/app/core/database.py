@@ -101,6 +101,12 @@ class Database:
             await cls.get_db()["identity_commitments"].create_index(
                 "commitment", unique=True
             )
+            # Grants civiles: un digest solo existe una vez.
+            await cls.get_db()["identity_grants"].create_index("digest", unique=True)
+            # Idempotencia del relayer: un nullifier -> como mucho una tx.
+            await cls.get_db()["mint_operations"].create_index(
+                "nullifier_hash", unique=True
+            )
             cls.indexes_ready = True
         except Exception as e:
             # A pre-existing duplicate in the collection blocks unique index

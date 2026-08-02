@@ -30,18 +30,10 @@ _nonce_lock = threading.Lock()
 # ABI mínima: solo lo que este servicio necesita, no el ABI completo del
 # contrato. Evita depender del archivo de artifacts de Hardhat en runtime.
 _MINT_ABI = [
-    {
-        "inputs": [
-            {"name": "to", "type": "address"},
-            {"name": "identityHash", "type": "bytes32"},
-            {"name": "assuranceLevel", "type": "string"},
-            {"name": "uri", "type": "string"},
-        ],
-        "name": "mintMembership",
-        "outputs": [{"name": "", "type": "uint256"}],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    },
+    # NOTA: la firma antigua de mintMembership (to, identityHash,
+    # assuranceLevel, uri) se eliminó al migrar al modelo ZK. Ya no existe en
+    # el contrato desplegado; dejarla haría que web3 tuviera que desambiguar
+    # dos funciones con el mismo nombre y podría seleccionar la equivocada.
     {
         "inputs": [{"name": "member", "type": "address"}],
         "name": "getMembershipToken",
@@ -54,7 +46,8 @@ _MINT_ABI = [
         "inputs": [
             {"indexed": True, "name": "member", "type": "address"},
             {"indexed": True, "name": "tokenId", "type": "uint256"},
-            {"indexed": False, "name": "assuranceLevel", "type": "string"},
+            {"indexed": True, "name": "nullifierHash", "type": "bytes32"},
+            {"indexed": False, "name": "identityRoot", "type": "uint256"},
             {"indexed": False, "name": "timestamp", "type": "uint256"},
         ],
         "name": "MembershipMinted",
@@ -65,6 +58,49 @@ _MINT_ABI = [
         "name": "MINTER_ROLE",
         "outputs": [{"name": "", "type": "bytes32"}],
         "stateMutability": "view",
+        "type": "function",
+    },
+    # === Modelo ZK (ADR-001, D-2) — contrato de Codex en 5d36007 ===
+    {
+        "inputs": [],
+        "name": "membershipScope",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"name": "identityRoot", "type": "uint256"}],
+        "name": "approveIdentityRoot",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [{"name": "identityRoot", "type": "uint256"}],
+        "name": "isIdentityRootApproved",
+        "outputs": [{"name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "ROOT_MANAGER_ROLE",
+        "outputs": [{"name": "", "type": "bytes32"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"name": "to", "type": "address"},
+            {"name": "pA", "type": "uint256[2]"},
+            {"name": "pB", "type": "uint256[2][2]"},
+            {"name": "pC", "type": "uint256[2]"},
+            {"name": "nullifierHash", "type": "bytes32"},
+            {"name": "identityRoot", "type": "uint256"},
+        ],
+        "name": "mintMembership",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "nonpayable",
         "type": "function",
     },
     {
@@ -311,4 +347,162 @@ def mint_sbt_onchain(
             wallet_address,
             type(e).__name__,
         )
+        raise ChainMintError("Fallo interno al enviar o confirmar la transacción") from e
+
+
+# === Modelo ZK (ADR-001, D-2) ===================================================
+# El emisor lee el scope del contrato y aprueba raíces; el relayer envía el
+# mint con la prueba. La llave del minter necesita ROOT_MANAGER_ROLE para
+# aprobar raíces, que es un permiso distinto del de mintear.
+
+
+def membership_scope() -> Optional[int]:
+    """Lee membershipScope() del contrato. None si no se puede consultar.
+
+    Se consulta la cadena y no la configuración: el scope se deriva de
+    version + chainId + address(this) dentro del propio contrato, así que
+    calcularlo aquí sería duplicar una fuente de verdad que ya existe.
+    """
+    if not is_configured():
+        return None
+    try:
+        _, contract, _ = _client()
+        return int(contract.functions.membershipScope().call())
+    except Exception:
+        logger.error("No se pudo leer membershipScope()", exc_info=True)
+        return None
+
+
+def identity_root_is_approved(identity_root: int) -> Optional[bool]:
+    """True/False según el contrato; None si la consulta falla."""
+    if not is_configured():
+        return None
+    try:
+        _, contract, _ = _client()
+        return bool(contract.functions.isIdentityRootApproved(identity_root).call())
+    except Exception:
+        logger.error("No se pudo consultar isIdentityRootApproved()", exc_info=True)
+        return None
+
+
+def approve_identity_root(identity_root: int) -> Optional[str]:
+    """Aprueba una raíz on-chain. Devuelve el tx_hash, o None si ya estaba.
+
+    Idempotente: si la raíz ya está aprobada no se envía transacción. Sin esto,
+    cada credencial emitida contra la misma raíz gastaría gas para nada.
+    """
+    if not is_configured():
+        raise ChainMintError(
+            "La aprobación de raíces requiere SEPOLIA_RPC_URL, SBT_CONTRACT_ADDRESS y MINTER_PRIVATE_KEY."
+        )
+
+    already = identity_root_is_approved(identity_root)
+    if already is True:
+        return None
+    if already is None:
+        raise ChainMintError("No se pudo comprobar si la raíz ya estaba aprobada.")
+
+    try:
+        w3, contract, account = _client()
+        with _nonce_lock:
+            nonce = w3.eth.get_transaction_count(account.address, "pending")
+            tx = contract.functions.approveIdentityRoot(identity_root).build_transaction({
+                "from": account.address,
+                "nonce": nonce,
+                "chainId": SEPOLIA_CHAIN_ID,
+            })
+            signed = account.sign_transaction(tx)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        if receipt.status != 1:
+            raise ChainMintError("La aprobación de la raíz se revirtió on-chain.")
+        return tx_hash.hex()
+    except ChainMintError:
+        raise
+    except Exception as e:
+        logger.error("Error aprobando la raíz de identidad (%s)", type(e).__name__)
+        raise ChainMintError("Fallo interno al aprobar la raíz de identidad") from e
+
+
+def mint_with_proof(
+    wallet_address: str,
+    proof_a: list,
+    proof_b: list,
+    proof_c: list,
+    nullifier_hash: str,
+    identity_root: int,
+) -> Tuple[str, Optional[int]]:
+    """Envía el mint con la prueba ZK. Devuelve (tx_hash, token_id).
+
+    El relayer paga el gas: el ciudadano no necesita ETH (D-1, ERC-4337). No
+    puede alterar el destinatario, porque `recipient` está ligado dentro de la
+    hoja del árbol y la prueba dejaría de verificar.
+    """
+    from web3 import Web3
+
+    if not is_configured():
+        raise ChainMintError("El minteo on-chain no está configurado.")
+
+    operational = runtime_status()
+    if not operational.get("ready"):
+        raise ChainMintError(
+            "La precondición operativa on-chain falló; revisa RPC, red, contrato, rol y saldo."
+        )
+
+    try:
+        to = Web3.to_checksum_address(wallet_address)
+        nullifier_bytes = bytes.fromhex(nullifier_hash.removeprefix("0x"))
+        if len(nullifier_bytes) != 32:
+            raise ChainMintError("nullifierHash debe ser bytes32.")
+
+        w3, contract, account = _client()
+        with _nonce_lock:
+            nonce = w3.eth.get_transaction_count(account.address, "pending")
+            tx = contract.functions.mintMembership(
+                to,
+                [int(v) for v in proof_a],
+                [[int(v) for v in row] for row in proof_b],
+                [int(v) for v in proof_c],
+                nullifier_bytes,
+                int(identity_root),
+            ).build_transaction({
+                "from": account.address,
+                "nonce": nonce,
+                "chainId": SEPOLIA_CHAIN_ID,
+            })
+            signed = account.sign_transaction(tx)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+
+        if receipt.status != 1:
+            raise ChainMintError(f"El minteo se revirtió on-chain (tx {tx_hash.hex()}).")
+
+        token_id = None
+        try:
+            events = contract.events.MembershipMinted().process_receipt(receipt)
+            if events:
+                token_id = int(events[0]["args"]["tokenId"])
+        except Exception as e:
+            logger.warning("No se pudo leer el tokenId del recibo (%s)", type(e).__name__)
+
+        if token_id is None:
+            try:
+                resolved = int(contract.functions.getMembershipToken(to).call())
+            except Exception as exc:
+                raise ChainMintError(
+                    "La transacción se confirmó pero no se pudo resolver su tokenId; "
+                    "requiere reconciliación."
+                ) from exc
+            if resolved <= 0:
+                raise ChainMintError(
+                    "La transacción se confirmó sin un tokenId válido; requiere reconciliación."
+                )
+            token_id = resolved
+
+        return tx_hash.hex(), token_id
+
+    except ChainMintError:
+        raise
+    except Exception as e:
+        logger.error("Error minteando con prueba ZK (%s)", type(e).__name__)
         raise ChainMintError("Fallo interno al enviar o confirmar la transacción") from e

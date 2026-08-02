@@ -69,6 +69,22 @@ class Settings(BaseSettings):
     SBT_CONTRACT_ADDRESS: str = os.environ.get('SBT_CONTRACT_ADDRESS', '')
     MINTER_PRIVATE_KEY: str = os.environ.get('MINTER_PRIVATE_KEY', '')
 
+    # === Emisor de credenciales ZK (ADR-001, D-2) ===
+    # Llave que firma la credencial EIP-191 que el cliente verifica contra
+    # REACT_APP_ZK_IDENTITY_ISSUER_ADDRESS. Distinta de MINTER_PRIVATE_KEY a
+    # propósito: firmar credenciales y enviar transacciones son poderes
+    # separados, y una llave comprometida no debe dar ambos.
+    IDENTITY_ISSUER_PRIVATE_KEY: str = os.environ.get('IDENTITY_ISSUER_PRIVATE_KEY', '')
+
+    # Segundos de validez de un grant civil de un solo uso. Corto a propósito:
+    # es la ventana en la que una verificación civil puede canjearse.
+    IDENTITY_GRANT_TTL_SECONDS: int = int(os.environ.get('IDENTITY_GRANT_TTL_SECONDS', '300'))
+
+    # Proveedor civil real que emite los grants. Vacío = no hay ninguno, y la
+    # emisión de credenciales falla cerrado en producción. Los simuladores de
+    # ClaveÚnica/NFC/liveness NUNCA deben emitir grants.
+    IDENTITY_PROVIDER: str = os.environ.get('IDENTITY_PROVIDER', '')
+
     # External Services
     EMERGENT_LLM_KEY: Optional[str] = None
     
