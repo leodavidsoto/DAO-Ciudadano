@@ -48,6 +48,53 @@ BN254_FIELD = (
 BABYJUB_A = 168700
 BABYJUB_D = 168696
 
+# Orden del subgrupo primo de Baby Jubjub (EIP-2494). El cofactor es 8, así
+# que la curva contiene puntos de orden 1, 2, 4 y 8 que están EN la curva pero
+# no en el subgrupo útil. Aceptarlos permite ataques de subgrupo pequeño: el
+# coordinador filtraría información de su clave privada al operar con ellos.
+BABYJUB_SUBORDER = (
+    2736030358979909402780800718157159386076813972158567259200215660948447373041
+)
+
+# Punto identidad del grupo (elemento neutro en forma de Edwards retorcida).
+IDENTITY_POINT = (0, 1)
+
+
+def _point_add(p1: tuple[int, int], p2: tuple[int, int]) -> tuple[int, int]:
+    """Suma en Edwards retorcida (fórmula completa, sin casos especiales)."""
+    x1, y1 = p1
+    x2, y2 = p2
+    x1x2 = x1 * x2 % BN254_FIELD
+    y1y2 = y1 * y2 % BN254_FIELD
+    dprod = BABYJUB_D * x1x2 % BN254_FIELD * y1y2 % BN254_FIELD
+
+    x3 = (x1 * y2 + y1 * x2) % BN254_FIELD * pow(1 + dprod, -1, BN254_FIELD)
+    y3 = (y1y2 - BABYJUB_A * x1x2) % BN254_FIELD * pow(1 - dprod, -1, BN254_FIELD)
+    return (x3 % BN254_FIELD, y3 % BN254_FIELD)
+
+
+def _scalar_mul(point: tuple[int, int], scalar: int) -> tuple[int, int]:
+    """Multiplicación escalar por duplicación y suma."""
+    result = IDENTITY_POINT
+    addend = point
+    while scalar > 0:
+        if scalar & 1:
+            result = _point_add(result, addend)
+        addend = _point_add(addend, addend)
+        scalar >>= 1
+    return result
+
+
+def is_in_prime_subgroup(x: int, y: int) -> bool:
+    """True si [subOrder]P == identidad, es decir, si P tiene orden primo.
+
+    Sin esta comprobación entran puntos de orden bajo (orden 2, 4 u 8). Están
+    en la curva y pasan la ecuación, pero cifrar hacia ellos degenera el
+    espacio de claves: el resultado toma muy pocos valores posibles y filtra
+    la clave privada del coordinador.
+    """
+    return _scalar_mul((x, y), BABYJUB_SUBORDER) == IDENTITY_POINT
+
 
 class MaciKeyError(ValueError):
     """La llave pública no es un punto válido de Baby Jubjub."""
@@ -98,6 +145,14 @@ def validate_public_key(x, y) -> tuple[int, int]:
 
     if not is_on_babyjub_curve(parsed_x, parsed_y):
         raise MaciKeyError("La llave pública no pertenece a la curva Baby Jubjub.")
+
+    # Estar en la curva NO basta: el cofactor 8 deja puntos de orden bajo que
+    # satisfacen la ecuación pero degeneran el cifrado.
+    if not is_in_prime_subgroup(parsed_x, parsed_y):
+        raise MaciKeyError(
+            "La llave pública tiene orden bajo: no pertenece al subgrupo primo "
+            "de Baby Jubjub."
+        )
 
     return parsed_x, parsed_y
 

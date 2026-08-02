@@ -349,3 +349,47 @@ async def test_tally_of_an_unknown_poll_is_empty_not_invented(client):
     body = (await client.get("/api/maci/polls/no-existe/tally")).json()
     assert body["message_count"] == 0
     assert body["results"] is None
+
+
+# === Puntos de orden bajo (hallazgo de Codex) ===
+
+# Punto de orden 2 en Baby Jubjub: (0, -1). Está EN la curva y no es (0,1),
+# así que la comprobación de ecuación por sí sola lo aceptaba.
+ORDER2_X = 0
+ORDER2_Y = maci_service.BN254_FIELD - 1
+
+
+def test_low_order_points_are_on_the_curve_but_not_valid_keys():
+    """Estar en la curva NO basta: el cofactor 8 deja puntos de orden bajo.
+
+    Cifrar hacia uno degenera el espacio de claves —el resultado toma muy
+    pocos valores— y filtra la clave privada del coordinador.
+    """
+    assert maci_service.is_on_babyjub_curve(ORDER2_X, ORDER2_Y) is True
+    assert maci_service.is_in_prime_subgroup(ORDER2_X, ORDER2_Y) is False
+
+    with pytest.raises(maci_service.MaciKeyError) as exc:
+        maci_service.validate_public_key(ORDER2_X, ORDER2_Y)
+    assert "orden bajo" in str(exc.value)
+
+
+def test_generator_is_in_the_prime_subgroup():
+    """Contraprueba: el generador publicado sí debe pasar."""
+    assert maci_service.is_in_prime_subgroup(BASE_X, BASE_Y) is True
+    assert maci_service.is_in_prime_subgroup(DOUBLE_X, DOUBLE_Y) is True
+
+
+async def test_endpoint_rejects_low_order_keys(client):
+    headers = await _mint_member(client, VOTER)
+
+    response = await client.post(
+        "/api/maci/keys",
+        json={
+            "wallet_address": VOTER.address,
+            "public_key": _key(ORDER2_X, ORDER2_Y),
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert "orden bajo" in response.json()["detail"]
