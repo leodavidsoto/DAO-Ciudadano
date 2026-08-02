@@ -15,6 +15,8 @@ import secrets
 import logging
 import re
 
+from .rate_limit_store import build_store
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,15 +41,26 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         sensitive_paths_limit: int = 30,
         window_seconds: int = 60,
         trusted_proxy_ips: str = "",
+        redis_url: str = "",
+        store=None,
     ):
         super().__init__(app)
         self.requests_per_minute = requests_per_minute
         self.sensitive_paths_limit = sensitive_paths_limit
         self.window_seconds = max(1, window_seconds)
-        self.requests = defaultdict(list)
+        # Los buckets viven en el almacén: memoria por defecto, Redis si está
+        # configurado (ROADMAP 3.8). Sin Redis el límite es POR PROCESO.
+        # Se acepta un almacén ya construido para que main pueda conservar la
+        # referencia y exponer su estado en /health/ready. Starlette instancia
+        # los middlewares de forma perezosa, así que buscarlo por
+        # introspección desde el endpoint sería frágil.
+        self.store = store if store is not None else build_store(redis_url)
         self.failed_attempts = defaultdict(int)
         self.last_seen: dict[str, float] = {}
         self._last_sweep = time.time()
+        # Se conserva para que los tests existentes y el diagnóstico sigan
+        # pudiendo inspeccionar/limpiar el estado en proceso.
+        self.requests = defaultdict(list)
         self.trusted_proxy_networks = self._parse_trusted_proxy_networks(
             trusted_proxy_ips
         )
@@ -77,30 +90,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # additionally share one stricter per-IP budget; using the path itself
         # as a key would let callers evade it by rotating election/proposal IDs.
         is_sensitive = self._is_sensitive_path(path)
-        buckets = [
-            (f"global:{client_ip}", self.requests_per_minute, "global"),
-        ]
+        buckets = [(f"global:{client_ip}", self.requests_per_minute)]
         if is_sensitive:
-            buckets.append(
-                (f"sensitive:{client_ip}", self.sensitive_paths_limit, "sensitive")
-            )
+            buckets.append((f"sensitive:{client_ip}", self.sensitive_paths_limit))
 
-        for key, _, _ in buckets:
-            self.requests[key] = [
-                timestamp
-                for timestamp in self.requests[key]
-                if now - timestamp < self.window_seconds
-            ]
+        # Se consultan TODOS los buckets aunque uno ya haya excedido: parar en
+        # el primero dejaría el bucket sensible sin registrar la petición y una
+        # IP podría agotar el global para no gastar el estricto.
+        allowed = True
+        for key, limit in buckets:
+            if not await self.store.allow(key, limit, self.window_seconds):
+                allowed = False
 
-        exceeded_scope = next(
-            (
-                scope
-                for key, limit, scope in buckets
-                if len(self.requests[key]) >= limit
-            ),
-            None,
-        )
-        if exceeded_scope:
+        if not allowed:
             logger.warning(f"Rate limit exceeded: {client_ip} on {path}")
             return JSONResponse(
                 status_code=429,
@@ -109,17 +111,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     "retry_after": self.window_seconds
                 }
             )
-        
+
         # Progressive slowdown for failed attempts.
         # Must be asyncio.sleep: time.sleep here would block the event loop
         # for every concurrent request, not just the abusive client.
         if self.failed_attempts[client_ip] > 5:
             delay = min(self.failed_attempts[client_ip] * 0.5, 30)  # Max 30 seconds
             await asyncio.sleep(delay)
-        
-        # A sensitive request is recorded in both budgets.
-        for key, _, _ in buckets:
-            self.requests[key].append(now)
         
         # Process request
         response = await call_next(request)

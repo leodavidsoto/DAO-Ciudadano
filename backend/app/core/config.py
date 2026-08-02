@@ -128,6 +128,9 @@ class Settings(BaseSettings):
     # X-Forwarded-For. Vacía por defecto: el peer TCP es la única identidad
     # confiable y un cliente no puede evadir límites inventando la cabecera.
     TRUSTED_PROXY_IPS: str = os.environ.get('TRUSTED_PROXY_IPS', '')
+    # Redis compartido para el rate limiter (ROADMAP 3.8). Vacio = contadores
+    # en memoria de proceso: el limite deja de ser global entre workers.
+    REDIS_URL: str = os.environ.get('REDIS_URL', '')
 
     @property
     def is_production(self) -> bool:

@@ -40,3 +40,8 @@ web3==7.16.0                # minteo real on-chain (app/services/chain_service.p
 #   openai, aiohttp, prometheus-client, python-jose, passlib, bcrypt,
 #   email-validator, anyio.
 # httpx pasó a requirements-dev.txt: solo lo usa tests/conftest.py.
+
+# Rate limiter compartido entre workers (ROADMAP 3.8). Sin esto los
+# contadores viven en memoria de proceso y el limite deja de ser global.
+# ~250 KB, sin dependencias compiladas: cabe en el plan free de Render.
+redis==6.4.0

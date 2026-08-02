@@ -80,6 +80,12 @@ app = FastAPI(
 # === Security Middleware Stack ===
 # Order matters: first added = last executed
 
+# El almacén se construye acá para conservar la referencia: /health/ready
+# necesita reportar si el límite es global o por proceso.
+from app.core.rate_limit_store import build_store as _build_rate_limit_store
+
+rate_limit_store = _build_rate_limit_store(settings.REDIS_URL)
+
 # 1. Rate Limiting (outermost - first line of defense)
 app.add_middleware(
     RateLimitMiddleware,
@@ -90,6 +96,7 @@ app.add_middleware(
     sensitive_paths_limit=settings.RATE_LIMIT_SENSITIVE_REQUESTS,
     window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
     trusted_proxy_ips=settings.TRUSTED_PROXY_IPS,
+    store=rate_limit_store,
 )
 
 # 2. Request Validation
@@ -197,6 +204,12 @@ async def health_check():
 
     indexes_ready = Database.indexes_ready
     healthy = db_healthy and indexes_ready and configuration["ready"]
+
+    # Estado del rate limiter: un operador tiene que poder distinguir "límite
+    # global" de "límite por proceso" sin leer los logs (ROADMAP 3.8).
+    from app.core.rate_limit_store import describe as describe_rate_limit
+
+    rate_limit = describe_rate_limit(rate_limit_store)
     status_label = (
         "healthy"
         if healthy and configuration["production_ready"]
@@ -210,6 +223,7 @@ async def health_check():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "database": {"healthy": db_healthy},
         "indexes": {"ready": indexes_ready},
+        "rate_limit": rate_limit,
         "configuration": configuration,
     }
     return JSONResponse(status_code=200 if healthy else 503, content=body)

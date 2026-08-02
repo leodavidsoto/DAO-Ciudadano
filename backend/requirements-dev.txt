@@ -9,6 +9,9 @@ pytest==8.3.4
 pytest-asyncio==0.24.0
 mongomock-motor==0.0.36    # MongoDB async en memoria, sin contenedor
 httpx==0.28.1              # AsyncClient en tests/conftest.py
+# El extra [lua] es imprescindible: sin el, fakeredis no ejecuta el script de
+# ventana deslizante y el camino Redis quedaria sin probar.
+fakeredis[lua]==2.37.0
 
 # === Calidad de código ===
 black==24.10.0

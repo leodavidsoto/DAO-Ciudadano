@@ -18,6 +18,7 @@ os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("MINT_MODE", "demo")
 
 import httpx
+import asyncio
 import pytest
 from mongomock_motor import AsyncMongoMockClient
 
@@ -27,6 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.database import Database  # noqa: E402
 from app.core.security_middleware import fraud_detector  # noqa: E402
 from main import app  # noqa: E402
+
+
+_stores_to_reset = []
 
 
 def _reset_rate_limiter(asgi_app):
@@ -39,10 +43,13 @@ def _reset_rate_limiter(asgi_app):
     seen = set()
     while node is not None and id(node) not in seen:
         seen.add(id(node))
-        if hasattr(node, "failed_attempts") and hasattr(node, "requests"):
+        if hasattr(node, "failed_attempts") and hasattr(node, "store"):
             node.requests.clear()
             node.failed_attempts.clear()
             node.last_seen.clear()
+            # El estado real vive en el almacén desde ROADMAP 3.8; se limpia
+            # de forma asíncrona en el propio fixture.
+            _stores_to_reset.append(node.store)
         node = getattr(node, "app", None)
 
 
@@ -52,7 +59,10 @@ async def client():
     Database.client = AsyncMongoMockClient()
     Database.db = Database.client["test_dao_ciudadana"]
     await Database.ensure_indexes()
+    _stores_to_reset.clear()
     _reset_rate_limiter(app)
+    for store in _stores_to_reset:
+        await store.reset()
     # The fraud detector is a process-global singleton; clear its in-memory
     # history so vote/delegation patterns from one test can't flag the next.
     fraud_detector.vote_history.clear()
