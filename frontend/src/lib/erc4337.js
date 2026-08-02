@@ -290,6 +290,12 @@ const verifyActiveProvider = async (provider, expectedOwner, expectedChainId) =>
             'WALLET_UNAVAILABLE'
         );
     }
+    if (provider.isMetaMask !== true) {
+        throw new AccountAbstractionError(
+            'La operación requiere la instancia MetaMask conectada por SIWE.',
+            'METAMASK_PROVIDER_REQUIRED'
+        );
+    }
     const [accounts, chainHex] = await Promise.all([
         provider.request({ method: 'eth_accounts' }),
         provider.request({ method: 'eth_chainId' }),
@@ -519,7 +525,7 @@ const validateOperationEnvelope = (response) => {
  */
 export const mintMembershipWithSafe = async ({
     proof,
-    provider = globalThis.ethereum,
+    provider,
     getConfig,
     prepareMint,
     submitMint,
@@ -576,10 +582,14 @@ export const mintMembershipWithSafe = async ({
             normalizedProof.walletAddress,
             config.chainId
         );
-        signature = await safeAccount.signUserOperation({
-            ...preparedOperation,
-            chainId: config.chainId,
-        });
+        signature = normalizeHex(
+            await safeAccount.signUserOperation({
+                ...preparedOperation,
+                chainId: config.chainId,
+            }),
+            'La firma SafeOp devuelta por MetaMask',
+            77
+        );
     } catch (error) {
         if (error?.code === 4001 || error?.cause?.code === 4001) {
             throw new AccountAbstractionError(

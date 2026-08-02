@@ -469,6 +469,15 @@ export const OnboardingProvider = ({ children }) => {
 
     const mintSBT = useCallback(async () => {
         if (!wallet.address) return;
+        if (
+            !wallet.eip1193Provider ||
+            typeof wallet.eip1193Provider.request !== 'function'
+        ) {
+            setError(
+                'La sesión perdió su proveedor MetaMask; vuelve al paso de wallet antes de autorizar la operación.'
+            );
+            return;
+        }
         setLoading(true);
         setError('');
         try {
@@ -490,16 +499,19 @@ export const OnboardingProvider = ({ children }) => {
                     'La red o el contrato cambiaron después de generar la prueba; no se enviará.'
                 );
             }
-            const response = await membershipAPI.mintWithProof({
-                walletAddress: wallet.address,
-                membershipContract: currentDeployment.contractAddress,
-                chainId: currentDeployment.chainId,
-                pA: proofResult.pA,
-                pB: proofResult.pB,
-                pC: proofResult.pC,
-                nullifierHash: proofResult.nullifierHash,
-                identityRoot: proofResult.identityRoot,
-            });
+            const response = await membershipAPI.mintWithProof(
+                {
+                    walletAddress: wallet.address,
+                    membershipContract: currentDeployment.contractAddress,
+                    chainId: currentDeployment.chainId,
+                    pA: proofResult.pA,
+                    pB: proofResult.pB,
+                    pC: proofResult.pC,
+                    nullifierHash: proofResult.nullifierHash,
+                    identityRoot: proofResult.identityRoot,
+                },
+                wallet.eip1193Provider
+            );
 
             if (response.data.ok) {
                 setMint({ ...response.data, status: 'active' });
@@ -545,6 +557,7 @@ export const OnboardingProvider = ({ children }) => {
     }, [
         wallet.address,
         wallet.chainId,
+        wallet.eip1193Provider,
         identity,
         fetchExistingMembership,
         loadStats,

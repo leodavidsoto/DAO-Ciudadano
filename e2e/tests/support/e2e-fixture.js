@@ -230,9 +230,14 @@ export const installEip1193Fixture = async (page) => {
                 return provider;
             },
             async request({ method, params = [] }) {
-                window.__E2E_RPC_LOG__.push({ method, params });
+                const rpcCall = { method, params };
+                window.__E2E_RPC_LOG__.push(rpcCall);
                 if (['personal_sign', 'eth_sign', 'eth_signTypedData_v4'].includes(method)) {
-                    return window.__e2eSignWalletPayload({ method, params });
+                    const result = await window.__e2eSignWalletPayload({ method, params });
+                    // Preserve the throwaway signature in the browser-only log
+                    // so the spec can independently recover the signing owner.
+                    rpcCall.result = result;
+                    return result;
                 }
                 switch (method) {
                     case 'eth_accounts':
@@ -301,11 +306,15 @@ export const installEip1193Fixture = async (page) => {
             },
         };
 
+        // Keep a browser-only handle to the provider that established SIWE.
+        // The spec later replaces window.ethereum with a trap provider; a
+        // correct mint must continue through this pinned instance.
+        window.__E2E_PINNED_PROVIDER__ = provider;
         Object.defineProperty(window, 'ethereum', {
-            configurable: false,
+            configurable: true,
             enumerable: true,
             value: provider,
-            writable: false,
+            writable: true,
         });
     }, rpcFixture);
 };

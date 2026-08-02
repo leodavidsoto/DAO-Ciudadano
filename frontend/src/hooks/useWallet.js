@@ -55,6 +55,11 @@ const useWallet = () => {
     const [balance, setBalance] = useState(null);
     const [chainId, setChainId] = useState(null);
     const [provider, setProvider] = useState(null);
+    // Keep the exact injected provider that established the SIWE session.
+    // BrowserProvider is useful for ethers reads, but ERC-4337 must call
+    // eth_signTypedData_v4 on this pinned EIP-1193 object instead of looking
+    // up a potentially different global provider at mint time.
+    const [eip1193Provider, setEip1193Provider] = useState(null);
     const [signer, setSigner] = useState(null);
     const [isConnecting, setIsConnecting] = useState(false);
     const [error, setError] = useState(null);
@@ -128,11 +133,16 @@ const useWallet = () => {
     }, []);
 
     // Connect wallet
-    const connect = useCallback(async () => {
-        // Re-check MetaMask installation
-        const hasMetaMask = typeof window !== 'undefined' &&
-            typeof window.ethereum !== 'undefined' &&
-            window.ethereum.isMetaMask;
+    const connect = useCallback(async (providerOverride = null) => {
+        // Pin the provider for the whole authorization flow. `providerOverride`
+        // is used only when reconnecting after an event from that same object.
+        const injectedProvider =
+            providerOverride && typeof providerOverride.request === 'function'
+                ? providerOverride
+                : (typeof window !== 'undefined' ? window.ethereum : null);
+        const hasMetaMask =
+            injectedProvider?.isMetaMask === true &&
+            typeof injectedProvider.request === 'function';
 
         if (!hasMetaMask) {
             const errorMsg = 'MetaMask no está instalado. Por favor instálalo desde metamask.io';
@@ -145,7 +155,7 @@ const useWallet = () => {
 
         try {
             // Request accounts
-            const accounts = await window.ethereum.request({
+            const accounts = await injectedProvider.request({
                 method: 'eth_requestAccounts',
             });
 
@@ -154,7 +164,7 @@ const useWallet = () => {
             }
 
             // Create ethers provider
-            const browserProvider = new BrowserProvider(window.ethereum);
+            const browserProvider = new BrowserProvider(injectedProvider);
             const signerInstance = await browserProvider.getSigner();
             const network = await browserProvider.getNetwork();
             const balanceWei = await browserProvider.getBalance(accounts[0]);
@@ -168,6 +178,7 @@ const useWallet = () => {
             await signInWithEthereum(signerInstance, accounts[0]);
 
             setProvider(browserProvider);
+            setEip1193Provider(injectedProvider);
             setSigner(signerInstance);
             setAddress(accounts[0]);
             setChainId(Number(network.chainId));
@@ -180,6 +191,7 @@ const useWallet = () => {
                 ok: true,
                 address: accounts[0],
                 chainId: Number(network.chainId),
+                eip1193Provider: injectedProvider,
             };
         } catch (err) {
             console.error('Wallet connection error:', err);
@@ -211,6 +223,7 @@ const useWallet = () => {
         setBalance(null);
         setChainId(null);
         setProvider(null);
+        setEip1193Provider(null);
         setSigner(null);
         setError(null);
         localStorage.removeItem('auth_token');
@@ -219,10 +232,19 @@ const useWallet = () => {
 
     // Switch network
     const switchNetwork = useCallback(async (targetChainId) => {
-        if (!isMetaMaskInstalled) return { ok: false, error: 'MetaMask not installed' };
+        const activeProvider =
+            eip1193Provider ||
+            (typeof window !== 'undefined' ? window.ethereum : null);
+        if (
+            !isMetaMaskInstalled ||
+            activeProvider?.isMetaMask !== true ||
+            typeof activeProvider.request !== 'function'
+        ) {
+            return { ok: false, error: 'MetaMask not installed' };
+        }
 
         try {
-            await window.ethereum.request({
+            await activeProvider.request({
                 method: 'wallet_switchEthereumChain',
                 params: [{ chainId: `0x${targetChainId.toString(16)}` }],
             });
@@ -232,11 +254,15 @@ const useWallet = () => {
             console.error('Network switch error:', err);
             return { ok: false, error: err.message };
         }
-    }, [isMetaMaskInstalled]);
+    }, [eip1193Provider, isMetaMaskInstalled]);
 
     // Listen for account changes
     useEffect(() => {
         if (!isMetaMaskInstalled) return;
+        const activeProvider =
+            eip1193Provider ||
+            (typeof window !== 'undefined' ? window.ethereum : null);
+        if (!activeProvider || typeof activeProvider.on !== 'function') return;
 
         const handleAccountsChanged = async (accounts) => {
             if (accounts.length === 0) {
@@ -247,7 +273,7 @@ const useWallet = () => {
                 // all session state and ask the new account to sign its own
                 // one-time challenge.
                 disconnect();
-                await connect();
+                await connect(activeProvider);
             }
         };
 
@@ -255,26 +281,32 @@ const useWallet = () => {
             setChainId(parseInt(chainIdHex, 16));
         };
 
-        window.ethereum.on('accountsChanged', handleAccountsChanged);
-        window.ethereum.on('chainChanged', handleChainChanged);
+        activeProvider.on('accountsChanged', handleAccountsChanged);
+        activeProvider.on('chainChanged', handleChainChanged);
 
         return () => {
-            window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
-            window.ethereum.removeListener('chainChanged', handleChainChanged);
+            activeProvider.removeListener?.('accountsChanged', handleAccountsChanged);
+            activeProvider.removeListener?.('chainChanged', handleChainChanged);
         };
-    }, [address, connect, disconnect, isMetaMaskInstalled]);
+    }, [address, connect, disconnect, eip1193Provider, isMetaMaskInstalled]);
 
     // Check if already connected on mount
     useEffect(() => {
         if (!isMetaMaskInstalled) return;
+        // This effect is only for initial discovery. Once connect() pins the
+        // provider, adding that state as a dependency would immediately call
+        // connect() a second time and repeat eth_requestAccounts/RPC reads.
+        const activeProvider =
+            typeof window !== 'undefined' ? window.ethereum : null;
+        if (!activeProvider || typeof activeProvider.request !== 'function') return;
 
         const checkConnection = async () => {
             try {
-                const accounts = await window.ethereum.request({
+                const accounts = await activeProvider.request({
                     method: 'eth_accounts',
                 });
                 if (accounts.length > 0) {
-                    await connect();
+                    await connect(activeProvider);
                 }
             } catch (err) {
                 console.error('Check connection error:', err);
@@ -290,6 +322,7 @@ const useWallet = () => {
         balance,
         chainId,
         provider,
+        eip1193Provider,
         signer,
         isConnecting,
         error,

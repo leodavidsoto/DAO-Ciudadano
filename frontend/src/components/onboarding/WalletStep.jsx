@@ -14,6 +14,8 @@ const WalletStep = () => {
         setWallet,
         setStep,
         setMint,
+        setIdentity,
+        setError,
         wallet: onboardingWallet,
         fetchExistingMembership,
         requestIdentityCredential,
@@ -24,6 +26,7 @@ const WalletStep = () => {
         address,
         balance,
         chainId,
+        eip1193Provider,
         networkInfo,
         shortAddress,
         isConnecting,
@@ -43,7 +46,11 @@ const WalletStep = () => {
     const isWrongNetwork = isConnected && chainId != null && Number(chainId) !== REQUIRED_CHAIN_ID;
 
     const goToMint = async () => {
-        const connectedWallet = { address, chainId };
+        if (!eip1193Provider || typeof eip1193Provider.request !== 'function') {
+            setError('MetaMask se desconectó; vuelve a conectarlo antes de autorizar la operación.');
+            return;
+        }
+        const connectedWallet = { address, chainId, eip1193Provider };
         setWallet(connectedWallet);
         const identity = await requestIdentityCredential(connectedWallet);
         if (identity) setStep('mint');
@@ -53,21 +60,37 @@ const WalletStep = () => {
     // reconnects on mount and handleConnect never runs. Without this effect the
     // flow renders "WALLET CONECTADA" and stops there forever.
     useEffect(() => {
-        if (!isConnected || !address) return;
+        if (!isConnected || !address || !eip1193Provider) {
+            if (onboardingWallet.address) {
+                setWallet({});
+                setIdentity(null);
+                setMint({});
+            }
+            return;
+        }
         const sameAddress =
             onboardingWallet.address?.toLowerCase() === address.toLowerCase();
         const sameChain =
             onboardingWallet.chainId != null &&
             chainId != null &&
             Number(onboardingWallet.chainId) === Number(chainId);
-        if (sameAddress && sameChain) return;
-        setWallet({ address, chainId });
+        const sameProvider = onboardingWallet.eip1193Provider === eip1193Provider;
+        if (sameAddress && sameChain && sameProvider) return;
+        if (onboardingWallet.address && (!sameAddress || !sameChain)) {
+            setIdentity(null);
+            setMint({});
+        }
+        setWallet({ address, chainId, eip1193Provider });
     }, [
         isConnected,
         address,
         chainId,
+        eip1193Provider,
         onboardingWallet.address,
         onboardingWallet.chainId,
+        onboardingWallet.eip1193Provider,
+        setIdentity,
+        setMint,
         setWallet,
     ]);
 
@@ -123,6 +146,7 @@ const WalletStep = () => {
             setWallet({
                 address: result.address,
                 chainId: result.chainId,
+                eip1193Provider: result.eip1193Provider,
             });
         }
     };
@@ -133,8 +157,8 @@ const WalletStep = () => {
     };
 
     // Already connected from context or a previous connection.
-    const walletConnected = isConnected || onboardingWallet.address;
-    const displayAddress = address || onboardingWallet.address;
+    const walletConnected = isConnected && Boolean(eip1193Provider);
+    const displayAddress = walletConnected ? address : null;
     const activeMembership = existingToken?.status === 'active' && existingToken?.valid === true
         ? existingToken
         : null;

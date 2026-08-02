@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getAddress, verifyTypedData } from 'ethers';
 import { Keypair, Message, PCommand, PubKey } from 'maci-domainobjs';
 import { groth16 } from 'snarkjs';
 import {
@@ -90,11 +91,45 @@ test('simula emisión ZK subsidiada y publica una papeleta MACI cifrada', async 
     await expect(
         page.getByRole('heading', { name: 'CREACIÓN DE CREDENCIAL CIUDADANA' })
     ).toBeVisible({ timeout: 60_000 });
-    await page.getByRole('button', { name: 'CREAR CREDENCIAL', exact: true }).click();
+
+    // Replace the ambient provider after the SIWE-bound instance has been
+    // stored in onboarding state. Any regression to globalThis.ethereum will
+    // hit this trap; the non-custodial flow must keep using the pinned object.
+    await page.evaluate(() => {
+        window.__E2E_REPLACEMENT_RPC_LOG__ = [];
+        window.ethereum = {
+            isMetaMask: true,
+            async request(payload) {
+                window.__E2E_REPLACEMENT_RPC_LOG__.push(payload);
+                if (['personal_sign', 'eth_sign', 'eth_signTypedData_v4']
+                    .includes(payload.method)) {
+                    throw new Error('The mint asked the unpinned global provider to sign');
+                }
+                // Public deployment reads may still discover the ambient RPC.
+                // Forward those so this trap isolates the custody boundary:
+                // authorization must stay on the SIWE-pinned provider.
+                return window.__E2E_PINNED_PROVIDER__.request(payload);
+            },
+        };
+    });
+    await page.getByRole('button', {
+        name: 'AUTORIZAR EMISIÓN (SUBSIDIADA POR EL ESTADO)',
+        exact: true,
+    }).click();
     await expect(
         page.getByRole('heading', { name: 'SBT CONFIRMADO EN BLOCKCHAIN' })
     ).toBeVisible({ timeout: 120_000 });
     await expect(page.getByText(`#${E2E_FIXTURE.tokenId}`, { exact: true }).first()).toBeVisible();
+
+    const replacementRpcLog = await page.evaluate(() => {
+        const calls = window.__E2E_REPLACEMENT_RPC_LOG__ || [];
+        window.ethereum = window.__E2E_PINNED_PROVIDER__;
+        return calls;
+    });
+    expect(replacementRpcLog.length).toBeGreaterThan(0);
+    expect(replacementRpcLog.filter(({ method }) =>
+        ['personal_sign', 'eth_sign', 'eth_signTypedData_v4'].includes(method)
+    )).toEqual([]);
 
     expect(backend.identityCredentialRequests).toHaveLength(1);
     expect(backend.preparedMintRequests).toHaveLength(1);
@@ -138,6 +173,33 @@ test('simula emisión ZK subsidiada y publica una papeleta MACI cifrada', async 
     expect(preparedMint).not.toHaveProperty('identity');
     expect(backend.submittedMintRequests[0].user_operation.signature)
         .not.toBe(preparedMint.user_operation.signature);
+
+    const rpcLog = await page.evaluate(() => window.__E2E_RPC_LOG__ || []);
+    const safeSignatureCalls = rpcLog.filter(
+        ({ method }) => method === 'eth_signTypedData_v4'
+    );
+    expect(safeSignatureCalls).toHaveLength(1);
+    const safeSignatureCall = safeSignatureCalls[0];
+    expect(getAddress(safeSignatureCall.params[0])).toBe(E2E_FIXTURE.userAddress);
+    const safeTypedData = typeof safeSignatureCall.params[1] === 'string'
+        ? JSON.parse(safeSignatureCall.params[1])
+        : safeSignatureCall.params[1];
+    expect(safeTypedData.primaryType).toBe('SafeOp');
+    expect(getAddress(safeTypedData.domain.verifyingContract))
+        .toBe(E2E_FIXTURE.safe4337Module);
+    expect(Number(safeTypedData.domain.chainId)).toBe(E2E_FIXTURE.chainId);
+    expect(getAddress(safeTypedData.message.entryPoint))
+        .toBe(E2E_FIXTURE.entryPoint);
+    expect(getAddress(safeTypedData.message.safe))
+        .toBe(getAddress(backend.submittedMintRequests[0].safe_address));
+    const safeTypes = { ...safeTypedData.types };
+    delete safeTypes.EIP712Domain;
+    expect(getAddress(verifyTypedData(
+        safeTypedData.domain,
+        safeTypes,
+        safeTypedData.message,
+        safeSignatureCall.result
+    ))).toBe(E2E_FIXTURE.userAddress);
 
     await page.goto('/dashboard/propuestas');
     await expect(page.getByText('Privacidad activa')).toBeVisible();

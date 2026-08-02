@@ -28,7 +28,11 @@ export default defineConfig({
         video: 'retain-on-failure',
     },
     webServer: {
-        command: 'npm exec -- craco start',
+        // Use the package lifecycle so `prestart` verifies and syncs the
+        // canonical circuit artifacts into the ignored public/zk directory.
+        // Calling craco directly makes a clean checkout depend on stale local
+        // assets and can silently test a different proving key.
+        command: 'npm start',
         cwd: resolve(repositoryDirectory, 'frontend'),
         url: frontendUrl,
         // Never attach to a developer's server: CRA bakes REACT_APP_* at

@@ -10,14 +10,6 @@ import { CyberPanel, CyberLoader, SuccessDisplay, DemoBadge } from './CyberUI';
 import { HolographicCard } from '@/components/effects';
 import { useOnboarding } from '@/context';
 
-const MINT_STAGES = [
-    { text: 'VALIDANDO SOLICITUD...', progress: 20 },
-    { text: 'COMPROBANDO MEMBRESÍA...', progress: 40 },
-    { text: 'PREPARANDO REGISTRO...', progress: 60 },
-    { text: 'ESPERANDO RESPUESTA...', progress: 80 },
-    { text: 'VERIFICANDO RESULTADO...', progress: 95 },
-];
-
 // Confetti burst effect
 const Confetti = ({ show }) => {
     const [pieces, setPieces] = useState([]);
@@ -108,22 +100,13 @@ const MintStep = () => {
     const [showConfetti, setShowConfetti] = useState(false);
     const hasVerifiedIdentity = Boolean(identity);
 
-    // Simulate minting stages
+    // The proof, sponsorship request, wallet approval and confirmation are
+    // asynchronous. Until the transport exposes real phase events, show one
+    // honest indeterminate state instead of advancing through invented stages.
     useEffect(() => {
         if (loading) {
-            let stageIndex = 0;
-            setMintProgress(MINT_STAGES[0].progress);
-            setCurrentStage(MINT_STAGES[0].text);
-
-            const interval = setInterval(() => {
-                stageIndex++;
-                if (stageIndex < MINT_STAGES.length) {
-                    setMintProgress(MINT_STAGES[stageIndex].progress);
-                    setCurrentStage(MINT_STAGES[stageIndex].text);
-                }
-            }, 600);
-
-            return () => clearInterval(interval);
+            setMintProgress(65);
+            setCurrentStage('PROCESANDO EMISIÓN NO CUSTODIAL...');
         }
     }, [loading]);
 
@@ -156,11 +139,12 @@ const MintStep = () => {
                         {hasVerifiedIdentity ? (
                             <>
                                 <p className="text-gray-400 text-sm mb-6 font-mono">
-                                    Se solicitará tu membresía sin asumir que existe en blockchain
+                                    MetaMask te mostrará la operación Safe ERC-4337 completa. El backend
+                                    patrocina el gas, pero no puede firmar ni autorizar por ti.
                                 </p>
                                 <Button onClick={mintSBT} className="cyber-button-premium group">
                                     <Sparkles className="w-4 h-4 mr-2 group-hover:animate-spin" />
-                                    CREAR CREDENCIAL
+                                    AUTORIZAR EMISIÓN (SUBSIDIADA POR EL ESTADO)
                                 </Button>
                             </>
                         ) : (

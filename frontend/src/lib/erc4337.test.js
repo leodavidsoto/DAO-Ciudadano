@@ -25,6 +25,7 @@ const SBT = '0x3333333333333333333333333333333333333333';
 const FACTORY = '0x4444444444444444444444444444444444444444';
 const PAYMASTER = '0x5555555555555555555555555555555555555555';
 const PINNED_OWNER = { address: OWNER, type: 'local' };
+const SIGNED_SAFE_OP = `0x${'bb'.repeat(77)}`;
 
 const proof = {
     walletAddress: OWNER,
@@ -57,6 +58,7 @@ const configResponse = {
 };
 
 const provider = {
+    isMetaMask: true,
     request: jest.fn(async ({ method }) => {
         if (method === 'eth_accounts') return [OWNER];
         if (method === 'eth_chainId') return '0xaa36a7';
@@ -70,7 +72,7 @@ const createSafeFixture = () => ({
     getFactoryArgs: jest.fn(async () => ({ factory: FACTORY, factoryData: '0x1234' })),
     getNonce: jest.fn(async () => 4n),
     getStubSignature: jest.fn(async () => '0xaaaa'),
-    signUserOperation: jest.fn(async () => '0xbbbb'),
+    signUserOperation: jest.fn(async () => SIGNED_SAFE_OP),
 });
 
 const sponsoredOperation = {
@@ -245,7 +247,7 @@ test('validates sponsorship, signs final fields locally and submits once', async
         chainId: 11155111,
     }));
     expect(submitMint).toHaveBeenCalledTimes(1);
-    expect(submitMint.mock.calls[0][0].user_operation.signature).toBe('0xbbbb');
+    expect(submitMint.mock.calls[0][0].user_operation.signature).toBe(SIGNED_SAFE_OP);
     expect(result.data).toEqual(expect.objectContaining({ ok: true, token_id: 7 }));
 });
 
@@ -394,5 +396,46 @@ test('does not submit when the citizen rejects the final Safe signature', async 
         submitMint,
         getOperation: jest.fn(),
     })).rejects.toMatchObject({ code: 'USER_REJECTED_SIGNATURE' });
+    expect(submitMint).not.toHaveBeenCalled();
+});
+
+test.each([
+    [undefined, 'WALLET_UNAVAILABLE'],
+    [{ ...provider, isMetaMask: false }, 'METAMASK_PROVIDER_REQUIRED'],
+])('fails closed without the pinned MetaMask provider', async (
+    candidateProvider,
+    expectedCode
+) => {
+    await expect(mintMembershipWithSafe({
+        proof,
+        provider: candidateProvider,
+        getConfig: jest.fn(async () => configResponse),
+        prepareMint: jest.fn(),
+        submitMint: jest.fn(),
+        getOperation: jest.fn(),
+    })).rejects.toMatchObject({ code: expectedCode });
+    expect(toSafeSmartAccount).not.toHaveBeenCalled();
+});
+
+test('does not submit a malformed Safe signature', async () => {
+    const safe = createSafeFixture();
+    safe.signUserOperation.mockResolvedValue('0xbbbb');
+    toSafeSmartAccount.mockResolvedValue(safe);
+    const submitMint = jest.fn();
+
+    await expect(mintMembershipWithSafe({
+        proof,
+        provider,
+        getConfig: jest.fn(async () => configResponse),
+        prepareMint: jest.fn(async () => ({
+            data: {
+                ok: true,
+                operation_id: 'operation-1',
+                user_operation: sponsoredOperation,
+            },
+        })),
+        submitMint,
+        getOperation: jest.fn(),
+    })).rejects.toThrow(/firma SafeOp.*hexadecimal/i);
     expect(submitMint).not.toHaveBeenCalled();
 });

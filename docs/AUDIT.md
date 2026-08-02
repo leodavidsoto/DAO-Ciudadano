@@ -422,7 +422,7 @@ que nunca se muestra con JS activo).
 |---|---|---|---|---|
 | P-51 | La suite Playwright arrancaba CRA con `craco start` directamente, saltándose `prestart/zk:sync`. En un checkout limpio podía ejecutar sin los tres artefactos ZK de `public/zk` o reutilizar residuos locales; además no existía un job E2E en CI | `e2e/playwright.config.js`; `.github/workflows/ci.yml` | Alta (integridad de pruebas) | ✅ Corregido: usa `npm start`, reconstruye los artefactos desde el manifiesto verificado y la CI instala Chromium y ejecuta Playwright en cada PR |
 | P-52 | El flujo guardaba solo dirección/red y, al mintear, `erc4337.js` caía a `globalThis.ethereum`. La instancia que estableció SIWE no quedaba fijada hasta la firma de la UserOperation | `frontend/src/hooks/useWallet.js`; `WalletStep.jsx`; `OnboardingContext.jsx`; `lib/api.js`; `lib/erc4337.js` | Alta (autorización) | ✅ Corregido: la instancia MetaMask EIP-1193 viaja explícitamente en memoria, sin fallback global; cuenta y red se revalidan antes de construir y firmar, y la firma Safe v0.7 debe medir 77 bytes. El E2E sustituye el provider global tras SIWE y prueba que ninguna solicitud de firma se desvía |
-| P-53 | El router ERC-4337 añadido en `a49883e` no implementa todavía el contrato del cliente: `PrepareMintRequest` exige `proof`, mientras el frontend envía `account + mint`; además intenta decodificar el `callData` exterior de `Safe4337Module.executeUserOpWithErrorString` directamente con la ABI del SBT. El camino integrado devolvería 422 antes de patrocinar una operación válida | `backend/app/routers/erc4337.py:65`; `backend/app/routers/erc4337.py:112`; `REQUEST_TO_CLAUDE.md:177` | **Alta (integración bloqueada)** | 🔴 Abierto en backend: recalcular la Safe ciudadana, decodificar primero el envoltorio Safe4337 y alinear el modelo con el payload documentado. También debe eliminar la dependencia de una `ERC4337_ACCOUNT_ADDRESS` global y validar la prueba completa. La suite E2E usa un fixture contractual y no afirma haber probado Pimlico/backend reales |
+| P-53 | El router ERC-4337 añadido en `a49883e` no implementa todavía el contrato del cliente: `PrepareMintRequest` exige `proof`, mientras el frontend envía `account + mint`; además intenta decodificar el `callData` exterior de `Safe4337Module.executeUserOpWithErrorString` directamente con la ABI del SBT. El camino integrado devolvería 422 antes de patrocinar una operación válida | `backend/app/routers/erc4337.py:65`; `backend/app/routers/erc4337.py:112`; `REQUEST_TO_CLAUDE.md:177` | **Alta (integración bloqueada)** | 🟡 Parcialmente mitigado, integración bloqueada: falta recalcular la Safe ciudadana, decodificar primero el envoltorio Safe4337, alinear el modelo con el payload documentado y validar la prueba completa. `d9f40d0` ya eliminó correctamente la dependencia de una `ERC4337_ACCOUNT_ADDRESS` global y añadió una sonda real del bundler, pero no modificó este router. La suite E2E usa un fixture contractual y no afirma haber probado el flujo integrado con Pimlico |
 
 ### Evidencia ejecutada
 
@@ -438,6 +438,16 @@ que nunca se muestra con JS activo).
   descifró/validó la papeleta MACI capturada.
 - El nuevo job `E2E · Playwright` y la suite unitaria de frontend quedaron como
   gates de `.github/workflows/ci.yml`.
+- Trusted setup real: `trusted_setup.sh` autenticó el Powers of Tau oficial,
+  compiló el circuito y publicó atómicamente la contribución #1 en
+  `circuits/build/trusted-setup/production-20260801-participant-1/` tras
+  **4 h 21 min 18,05 s** de ejecución.
+  `trusted_setup.test.sh` pasó y una segunda ejecución de `snarkjs zkey verify`
+  terminó en **`ZKey Ok!`**. SHA-256 de `verify_identity_phase2.zkey`:
+  `040f52b9fe5d4eb40525db9f3ce905213f900869db03ff9fb340a7b874719795`.
+  El recibo declara honestamente `participant_independence=not-attested-by-script`,
+  `beacon=not-applied` y `promotion_status=not-promoted`: es una contribución
+  Phase 2 verificada, no una ceremonia de producción final.
 
 ---
 

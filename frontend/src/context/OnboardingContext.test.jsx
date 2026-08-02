@@ -49,6 +49,10 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 
 const WALLET = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 const MEMBERSHIP_CONTRACT = '0x0000000000000000000000000000000000000002';
+const EIP1193_PROVIDER = {
+    isMetaMask: true,
+    request: jest.fn(),
+};
 const IDENTITY = {
     signature: 'private-signed-identity',
     identityRoot: '11',
@@ -109,7 +113,11 @@ beforeEach(async () => {
         );
     });
     await act(async () => {
-        context.setWallet({ address: WALLET, chainId: 11155111 });
+        context.setWallet({
+            address: WALLET,
+            chainId: 11155111,
+            eip1193Provider: EIP1193_PROVIDER,
+        });
         context.setIdentity(IDENTITY);
     });
 });
@@ -124,16 +132,19 @@ test('mint sends only contract arguments after a positive local verification', a
     });
 
     expect(membershipAPI.mintWithProof).toHaveBeenCalledTimes(1);
-    expect(membershipAPI.mintWithProof).toHaveBeenCalledWith({
-        walletAddress: WALLET,
-        membershipContract: MEMBERSHIP_CONTRACT,
-        chainId: '11155111',
-        pA: PROOF_RESULT.pA,
-        pB: PROOF_RESULT.pB,
-        pC: PROOF_RESULT.pC,
-        nullifierHash: PROOF_RESULT.nullifierHash,
-        identityRoot: PROOF_RESULT.identityRoot,
-    });
+    expect(membershipAPI.mintWithProof).toHaveBeenCalledWith(
+        {
+            walletAddress: WALLET,
+            membershipContract: MEMBERSHIP_CONTRACT,
+            chainId: '11155111',
+            pA: PROOF_RESULT.pA,
+            pB: PROOF_RESULT.pB,
+            pC: PROOF_RESULT.pC,
+            nullifierHash: PROOF_RESULT.nullifierHash,
+            identityRoot: PROOF_RESULT.identityRoot,
+        },
+        EIP1193_PROVIDER
+    );
     expect(JSON.stringify(membershipAPI.mintWithProof.mock.calls[0][0]))
         .not.toContain(IDENTITY.signature);
     expect(context.step).toBe('success');
@@ -152,6 +163,20 @@ test.each([false, null])(
         expect(context.zk.status).toBe('error');
     }
 );
+
+test('mint fails closed when the pinned MetaMask provider is missing', async () => {
+    await act(async () => {
+        context.setWallet({ address: WALLET, chainId: 11155111 });
+    });
+
+    await act(async () => {
+        await context.mintSBT();
+    });
+
+    expect(membershipAPI.mintWithProof).not.toHaveBeenCalled();
+    expect(generateIdentityProof).not.toHaveBeenCalled();
+    expect(context.error).toMatch(/proveedor MetaMask/i);
+});
 
 test('does not ask the issuer for a credential without a civil grant', async () => {
     await act(async () => {

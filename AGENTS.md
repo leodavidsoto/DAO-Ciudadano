@@ -105,9 +105,9 @@ npx hardhat coverage
 
 **Dependencias:** `requirements.txt` es solo producción y está mínimo a propósito (Render free: 512 MB y arranque en frío). `requirements-dev.txt` añade tests y linters, y es lo que instala el CI. `python-multipart` y `pymongo` no aparecen en ningún `import` pero son obligatorias — están documentadas en el propio archivo.
 
-**CI:** GitHub Actions con 5 jobs (backend pytest + `pip-audit`, contratos
-Hardhat + auditoría npm, slither, build estricto del frontend + auditoría npm y
-gates estáticos/test/auditoría de mobile).
+**CI:** GitHub Actions con 6 jobs (backend pytest + `pip-audit`, contratos
+Hardhat + auditoría npm, slither, tests/build estricto del frontend + auditoría
+npm, E2E Playwright y gates estáticos/test/auditoría de mobile).
 Las Actions están fijadas por SHA. Debe quedar en verde antes de mergear; además
 falta configurar un ruleset de `main` que haga obligatorios esos checks.
 

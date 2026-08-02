@@ -129,10 +129,11 @@ export const membershipAPI = {
     // The Safe SDK is loaded only at mint time. Pimlico credentials never
     // enter the browser: the authenticated backend prepares/sponsors the exact
     // operation, then the citizen signs every final v0.7 field locally.
-    mintWithProof: async (proof) => {
+    mintWithProof: async (proof, eip1193Provider) => {
         const { mintMembershipWithSafe } = await import('./erc4337');
         return mintMembershipWithSafe({
             proof,
+            provider: eip1193Provider,
             getConfig: () => erc4337API.getConfig(),
             prepareMint: (payload) => erc4337API.prepareMint(payload),
             submitMint: (payload) => erc4337API.submitMint(payload),
