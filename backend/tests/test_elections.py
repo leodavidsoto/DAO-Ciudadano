@@ -261,8 +261,38 @@ async def test_production_election_vote_is_blocked_until_ballots_are_signed(
         headers=headers,
     )
 
+    # El bloqueo dejó de ser incondicional: ahora depende de que la exigencia
+    # de papeletas firmadas esté activada (ROADMAP 3.2/3.3).
     assert response.status_code == 503
-    assert "EIP-712" in response.json()["detail"]
+    assert "SIGNED_BALLOTS_REQUIRED" in response.json()["detail"]
+
+
+async def test_production_with_signed_ballots_demands_a_signature(
+    client, monkeypatch
+):
+    """Con la exigencia activada, votar sin firma se rechaza explícitamente."""
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "SIWE_DOMAIN", "estamosdao.cl")
+    monkeypatch.setattr(settings, "SIWE_URI", "https://estamosdao.cl")
+    monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", True)
+    await members_collection().insert_one({
+        "wallet_address": ADDR_A,
+        "token_id": 98,
+        "status": "active",
+        "issuance_mode": "onchain",
+        "identity_verified": True,
+        "tx_hash": "0x" + "ef" * 32,
+    })
+    headers = await _sign_in(client, _ACCOUNT_A)
+
+    response = await client.post(
+        "/api/governance/elections/prod-election/vote",
+        json={"voter_address": ADDR_A, "candidate_address": ADDR_B},
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert "firmada" in response.json()["detail"]
 
 
 # === Candidacies ===
@@ -543,3 +573,167 @@ async def test_closed_election_without_votes_seats_nobody(client):
 
     reps = (await client.get("/api/governance/representatives")).json()
     assert reps == []
+
+
+# === Papeletas firmadas (ROADMAP 3.2 / 3.3) ===
+
+from eth_account.messages import encode_typed_data  # noqa: E402
+
+from app.services import ballot_service  # noqa: E402
+
+
+def _sign_election_ballot(account, election_id, candidate, nonce):
+    encoded = encode_typed_data(
+        full_message=ballot_service.election_typed_data(
+            election_id, account.address.lower(), candidate, nonce
+        )
+    )
+    return account.sign_message(encoded).signature.hex()
+
+
+async def _open_voting_election(client):
+    """Elección con candidatura registrada y en período de votación."""
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    election_id = (await _create_election(client)).json()["id"]
+    await _nominate(client, election_id, ADDR_B)
+    # Adelantar a la fase de votación.
+    await elections_collection().update_one(
+        {"id": election_id},
+        {"$set": {"nominations_end_at": datetime.now(timezone.utc) - timedelta(days=1)}},
+    )
+    return election_id
+
+
+async def test_signed_election_ballot_is_persisted_and_verifiable(client, monkeypatch):
+    """Criterio de 3.2: un tercero recomputa el resultado sin confiar en el servidor."""
+    monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", True)
+    election_id = await _open_voting_election(client)
+    headers = await _sign_in(client, _ACCOUNT_A)
+    nonce = "eleccion-nonce-1"
+    signature = _sign_election_ballot(_ACCOUNT_A, election_id, ADDR_B, nonce)
+
+    response = await client.post(
+        f"/api/governance/elections/{election_id}/vote",
+        json={
+            "voter_address": ADDR_A,
+            "candidate_address": ADDR_B,
+            "nonce": nonce,
+            "signature": signature,
+        },
+        headers=headers,
+    )
+    assert response.json()["ok"] is True
+
+    evidence = (
+        await client.get(f"/api/governance/elections/{election_id}/ballots")
+    ).json()
+
+    assert len(evidence) == 1
+    assert evidence[0]["signature"] == signature
+    assert evidence[0]["signature_scheme"] == "EIP-712"
+    assert evidence[0]["signature_valid"] is True
+    assert evidence[0]["chain_id"] == settings.SIWE_CHAIN_ID
+
+
+async def test_replayed_election_nonce_is_rejected(client, monkeypatch):
+    """Criterio de 3.3: reenviar un voto firmado da error."""
+    monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", True)
+    first_election = await _open_voting_election(client)
+    headers = await _sign_in(client, _ACCOUNT_A)
+    nonce = "nonce-reutilizado"
+
+    first = await client.post(
+        f"/api/governance/elections/{first_election}/vote",
+        json={
+            "voter_address": ADDR_A, "candidate_address": ADDR_B,
+            "nonce": nonce,
+            "signature": _sign_election_ballot(_ACCOUNT_A, first_election, ADDR_B, nonce),
+        },
+        headers=headers,
+    )
+    assert first.json()["ok"] is True
+
+    # Otra elección, mismo votante y mismo nonce: el nonce ya está gastado.
+    second_election = (await _create_election(client, title="Segunda elección")).json()["id"]
+    await _nominate(client, second_election, ADDR_B)
+    await elections_collection().update_one(
+        {"id": second_election},
+        {"$set": {"nominations_end_at": datetime.now(timezone.utc) - timedelta(days=1)}},
+    )
+
+    replay = await client.post(
+        f"/api/governance/elections/{second_election}/vote",
+        json={
+            "voter_address": ADDR_A, "candidate_address": ADDR_B,
+            "nonce": nonce,
+            "signature": _sign_election_ballot(_ACCOUNT_A, second_election, ADDR_B, nonce),
+        },
+        headers=headers,
+    )
+
+    assert replay.status_code == 409
+    assert "ya fue usada" in replay.json()["detail"]
+
+
+async def test_a_proposal_signature_cannot_be_used_as_an_election_vote(client, monkeypatch):
+    """Separación de dominio: el primaryType entra en el structHash.
+
+    Sin ella, quien firmara "a favor" en una propuesta estaría firmando
+    también un voto en cualquier elección con el mismo nonce.
+    """
+    monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", True)
+    election_id = await _open_voting_election(client)
+    headers = await _sign_in(client, _ACCOUNT_A)
+    nonce = "nonce-cruzado"
+
+    # Firma con el tipo de PROPUESTA, enviada como voto de elección.
+    proposal_signature = _ACCOUNT_A.sign_message(
+        encode_typed_data(
+            full_message=ballot_service.typed_data(
+                election_id, ADDR_A, ADDR_B, nonce
+            )
+        )
+    ).signature.hex()
+
+    response = await client.post(
+        f"/api/governance/elections/{election_id}/vote",
+        json={
+            "voter_address": ADDR_A, "candidate_address": ADDR_B,
+            "nonce": nonce, "signature": proposal_signature,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 401
+
+
+async def test_signature_from_another_wallet_is_rejected(client, monkeypatch):
+    monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", True)
+    election_id = await _open_voting_election(client)
+    headers = await _sign_in(client, _ACCOUNT_A)
+    nonce = "nonce-ajeno"
+
+    # Firma de C, enviada como si fuera de A.
+    foreign = _sign_election_ballot(_ACCOUNT_C, election_id, ADDR_B, nonce)
+
+    response = await client.post(
+        f"/api/governance/elections/{election_id}/vote",
+        json={
+            "voter_address": ADDR_A, "candidate_address": ADDR_B,
+            "nonce": nonce, "signature": foreign,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 401
+
+
+async def test_election_ballot_schema_is_served_and_distinct(client):
+    """El cliente no debe mantener una copia manual del schema."""
+    schema = (await client.get("/api/governance/elections/ballot-schema")).json()
+    proposal_schema = (await client.get("/api/governance/ballot-schema")).json()
+
+    assert schema["primaryType"] == "ElectionBallot"
+    assert proposal_schema["primaryType"] == "Ballot"
+    assert "candidate" in str(schema["types"]["ElectionBallot"])

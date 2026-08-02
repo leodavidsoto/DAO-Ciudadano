@@ -26,6 +26,25 @@ from ..core.database import ballot_nonces_collection
 
 logger = logging.getLogger(__name__)
 
+# Papeleta de ELECCIÓN. `primaryType` distinto de "Ballot" a propósito: el
+# structHash de EIP-712 incluye el nombre del tipo, así que una firma de
+# propuesta no puede reutilizarse como voto de elección ni al revés. Sin esa
+# separación, quien firmara "a favor" en una propuesta estaría firmando
+# también un voto en cualquier elección con el mismo nonce.
+ELECTION_BALLOT_TYPES = {
+    "EIP712Domain": [
+        {"name": "name", "type": "string"},
+        {"name": "version", "type": "string"},
+        {"name": "chainId", "type": "uint256"},
+    ],
+    "ElectionBallot": [
+        {"name": "electionId", "type": "string"},
+        {"name": "voter", "type": "address"},
+        {"name": "candidate", "type": "address"},
+        {"name": "nonce", "type": "string"},
+    ],
+}
+
 BALLOT_TYPES = {
     "EIP712Domain": [
         {"name": "name", "type": "string"},
@@ -123,6 +142,105 @@ async def verify(proposal_id: str, voter_address: str, choice: str, nonce: str, 
         )
     except PyMongoError as exc:
         logger.error("No se pudo registrar el nonce de la papeleta: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No se pudo registrar la papeleta por un problema de "
+                "almacenamiento. Tu voto NO quedó emitido; intenta de nuevo."
+            ),
+        ) from exc
+
+
+# === Papeletas de elección (ROADMAP 3.2 / 3.3) ===============================
+
+
+def election_typed_data(
+    election_id: str,
+    voter: str,
+    candidate: str,
+    nonce: str,
+    chain_id: Optional[int] = None,
+) -> dict:
+    return {
+        "types": ELECTION_BALLOT_TYPES,
+        "primaryType": "ElectionBallot",
+        "domain": domain(chain_id),
+        "message": {
+            "electionId": election_id,
+            "voter": voter,
+            "candidate": candidate,
+            "nonce": nonce,
+        },
+    }
+
+
+def recover_election_signer(
+    election_id: str,
+    voter: str,
+    candidate: str,
+    nonce: str,
+    signature: str,
+    chain_id: Optional[int] = None,
+) -> str:
+    encoded = encode_typed_data(
+        full_message=election_typed_data(
+            election_id, voter, candidate, nonce, chain_id
+        )
+    )
+    return Account.recover_message(encoded, signature=signature)
+
+
+async def verify_election_ballot(
+    election_id: str,
+    voter_address: str,
+    candidate_address: str,
+    nonce: str,
+    signature: str,
+) -> None:
+    """Verifica la firma y consume el nonce. 401/409/503 según el motivo.
+
+    El nonce se comparte con las papeletas de propuestas (misma colección y
+    mismo índice único por votante). Es más estricto de lo necesario —un nonce
+    gastado en una propuesta no sirve en una elección— pero evita tener dos
+    espacios de nonces que razonar por separado, y el cliente los genera al
+    azar de todas formas.
+    """
+    if not nonce:
+        raise HTTPException(status_code=422, detail="Falta el nonce de la papeleta.")
+
+    try:
+        recovered = recover_election_signer(
+            election_id, voter_address, candidate_address, nonce, signature
+        )
+    except Exception:
+        raise HTTPException(status_code=401, detail="Firma de la papeleta inválida.")
+
+    if recovered.lower() != voter_address.lower():
+        raise HTTPException(
+            status_code=401,
+            detail="La firma de la papeleta no corresponde a la dirección del votante.",
+        )
+
+    # Mismo criterio que en las propuestas: solo DuplicateKeyError significa
+    # replay. Un fallo de almacenamiento que se reportara como "ya usada"
+    # dejaría un voto legítimo sin registrar bajo una explicación falsa.
+    try:
+        await ballot_nonces_collection().insert_one({
+            "voter_address": voter_address.lower(),
+            "nonce": nonce,
+            "scope": "election",
+            "election_id": election_id,
+        })
+    except DuplicateKeyError:
+        raise HTTPException(
+            status_code=409,
+            detail="Esta papeleta ya fue usada (nonce repetido). Genera una nueva.",
+        )
+    except PyMongoError as exc:
+        logger.error(
+            "No se pudo registrar el nonce de la papeleta de elección: %s",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=503,
             detail=(

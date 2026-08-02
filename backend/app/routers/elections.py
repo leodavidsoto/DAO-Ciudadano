@@ -31,6 +31,7 @@ from ..core.database import (
     representatives_collection,
 )
 from ..core.security_middleware import fraud_detector, verify_eth_address
+from ..services import ballot_service
 from ..services.governance_service import governance_service
 from .deps import current_address, ensure_active_member, ensure_acts_as_self
 
@@ -140,6 +141,10 @@ class CandidacyResponse(BaseModel):
 class ElectionVoteRequest(BaseModel):
     voter_address: str
     candidate_address: str
+    # Papeleta firmada EIP-712 (ROADMAP 3.2/3.3). Ver
+    # GET /governance/elections/ballot-schema.
+    nonce: Optional[str] = None
+    signature: Optional[str] = None
 
     @field_validator('voter_address', 'candidate_address')
     @classmethod
@@ -335,6 +340,28 @@ async def list_elections(
     ]
 
 
+# IMPORTANTE: esta ruta literal debe declararse ANTES de
+# /elections/{election_id}. FastAPI resuelve por orden de registro, así que al
+# revés "ballot-schema" se interpreta como un id de elección y devuelve 404.
+@router.get("/elections/ballot-schema")
+async def get_election_ballot_schema():
+    """Types + domain EIP-712 de la papeleta de elección.
+
+    Se sirve desde aquí para que frontend y móvil no mantengan una copia
+    manual que se desincronice de lo que el backend verifica realmente.
+
+    `primaryType` es "ElectionBallot", distinto del "Ballot" de las
+    propuestas: el structHash incluye el nombre del tipo, así que una firma no
+    vale en el otro contexto.
+    """
+    return {
+        "types": ballot_service.ELECTION_BALLOT_TYPES,
+        "primaryType": "ElectionBallot",
+        "domain": ballot_service.domain(),
+        "signed_ballots_required": settings.SIGNED_BALLOTS_REQUIRED,
+    }
+
+
 @router.get("/elections/{election_id}", response_model=ElectionResponse)
 async def get_election(election_id: str):
     """Get a single election by id."""
@@ -399,14 +426,26 @@ async def vote_in_election(
     request: ElectionVoteRequest = Depends(verified_election_voter),
 ):
     """Vote for a candidate. One ballot per member, weighted by delegations."""
-    if settings.is_production:
+    # Producción exige papeleta firmada. Antes esto era un 503 incondicional
+    # porque las elecciones no tenían firma; ahora la tienen, así que el
+    # bloqueo pasa a depender de que la exigencia esté activada.
+    if settings.is_production and not settings.SIGNED_BALLOTS_REQUIRED:
         raise HTTPException(
             status_code=503,
             detail=(
-                "El voto en elecciones está bloqueado en producción hasta "
-                "implementar y persistir papeletas EIP-712 verificables."
+                "El voto en elecciones está bloqueado: producción requiere "
+                "SIGNED_BALLOTS_REQUIRED=true."
             ),
         )
+    if settings.SIGNED_BALLOTS_REQUIRED and not request.signature:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Esta elección requiere una papeleta firmada (EIP-712). "
+                "Ver GET /governance/elections/ballot-schema."
+            ),
+        )
+
     election = await _get_election_or_404(election_id)
 
     if election["status"] != "voting":
@@ -462,6 +501,21 @@ async def vote_in_election(
 
     weight = await governance_service.voting_power(request.voter_address)
 
+    if request.signature:
+        # El nonce firmado tiene que ser el que se registra: si el cliente no
+        # lo manda, no hay forma de saber cuál firmó.
+        if not request.nonce:
+            return ElectionVoteResponse(
+                ok=False, error="Falta el nonce de la papeleta firmada"
+            )
+        await ballot_service.verify_election_ballot(
+            election_id,
+            request.voter_address,
+            request.candidate_address,
+            request.nonce,
+            request.signature,
+        )
+
     vote = {
         "id": str(uuid.uuid4())[:8],
         "election_id": election_id,
@@ -469,6 +523,12 @@ async def vote_in_election(
         "candidate_address": request.candidate_address,
         "weight": weight,
         "timestamp": datetime.now(timezone.utc),
+        # Se persisten para que cualquiera pueda reverificar el resultado sin
+        # confiar en el servidor (criterio de aceptación de 3.2).
+        "nonce": request.nonce,
+        "signature": request.signature,
+        "signature_scheme": "EIP-712" if request.signature else None,
+        "chain_id": settings.SIWE_CHAIN_ID if request.signature else None,
     }
     try:
         await election_votes_collection().insert_one(vote)
@@ -570,3 +630,75 @@ async def list_representatives():
         )
         for rep in reps
     ]
+
+
+# === Papeletas verificables (ROADMAP 3.2) ====================================
+
+
+class ElectionBallotEvidence(BaseModel):
+    election_id: str
+    voter_address: str
+    candidate_address: str
+    weight: int
+    nonce: Optional[str] = None
+    timestamp: datetime
+    signature: Optional[str] = None
+    signature_scheme: Optional[str] = None
+    chain_id: Optional[int] = None
+    signature_valid: bool
+
+
+@router.get(
+    "/elections/{election_id}/ballots",
+    response_model=List[ElectionBallotEvidence],
+)
+async def get_election_ballot_evidence(
+    election_id: str,
+    limit: int = Query(default=100, ge=1, le=MAX_PAGE_SIZE),
+):
+    """Papeletas públicas, recomputables por cualquiera.
+
+    Es lo que hace que el resultado no dependa de confiar en el servidor: con
+    estos datos, un tercero recupera el firmante de cada papeleta y suma los
+    pesos por su cuenta.
+    """
+    await _get_election_or_404(election_id)
+
+    records = await election_votes_collection().find(
+        {"election_id": election_id}
+    ).sort("timestamp", 1).limit(limit).to_list(limit)
+
+    evidence = []
+    for record in records:
+        signature = record.get("signature")
+        chain_id = record.get("chain_id")
+        signature_valid = False
+        if signature and chain_id:
+            try:
+                recovered = ballot_service.recover_election_signer(
+                    election_id,
+                    record.get("voter_address", ""),
+                    record.get("candidate_address", ""),
+                    record.get("nonce", ""),
+                    signature,
+                    chain_id,
+                )
+                signature_valid = (
+                    recovered.lower() == record.get("voter_address", "").lower()
+                )
+            except Exception:
+                signature_valid = False
+
+        evidence.append(ElectionBallotEvidence(
+            election_id=election_id,
+            voter_address=record.get("voter_address", ""),
+            candidate_address=record.get("candidate_address", ""),
+            weight=record.get("weight", 1),
+            nonce=record.get("nonce"),
+            timestamp=record.get("timestamp"),
+            signature=signature,
+            signature_scheme=record.get("signature_scheme"),
+            chain_id=chain_id,
+            signature_valid=signature_valid,
+        ))
+    return evidence

@@ -152,8 +152,12 @@ def deployment_blockers() -> list[str]:
         )
     if not settings.SIGNED_BALLOTS_REQUIRED:
         blockers.append("SIGNED_BALLOTS_REQUIRED debe ser true en producción")
+    # Las papeletas de elecciones ya implementan EIP-712 con nonce único
+    # (ROADMAP 3.2/3.3). Lo que queda bloqueando es el tally transaccional:
+    # papeleta y recuento siguen siendo dos escrituras separadas.
     blockers.append(
-        "las papeletas de elecciones aún no implementan firma EIP-712"
+        "el recuento de elecciones aún no es transaccional ni reconstruible "
+        "desde las papeletas (ROADMAP 3.5)"
     )
     if settings.MEMBERSHIP_SOURCE == "mongo":
         blockers.append(

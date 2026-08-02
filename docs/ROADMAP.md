@@ -149,8 +149,8 @@ Objetivo: cerrar C-3, A-4, A-5, A-9 y M-10.
 | # | Tarea | Criterio de aceptación |
 |---|---|---|
 | 3.1 | **Verificación de membresía para votar**: consultar `hasMembership(address)` on-chain (con caché corta) antes de aceptar un voto o una propuesta | Una dirección sin SBT recibe 403 |
-| 3.2 | 🟡 **Votos firmados**: propuestas ya firman EIP-712, persisten mensaje/firma y exponen papeletas para reverificación; falta llevar el mismo esquema a elecciones | Cualquier tercero puede recomputar el resultado sin confiar en el servidor |
-| 3.3 | 🟡 **Protección de replay real**: nonce único e índice compuesto implementados para propuestas; falta elecciones | Reenviar un voto firmado da error |
+| 3.2 | ✅ **Completada** (02-08-2026). Propuestas y elecciones firman EIP-712, persisten firma/nonce/chainId y exponen papeletas públicas | Cualquier tercero puede recomputar el resultado sin confiar en el servidor |
+| 3.3 | ✅ **Completada** (02-08-2026). Nonce único compartido por propuestas y elecciones sobre el mismo índice | Reenviar un voto firmado da 409 |
 | 3.4 | **Activar el antifraude** ya escrito: llamar `check_rapid_voting` y `check_delegation_chain` desde los endpoints | Los tests de patrones sospechosos pasan |
 | 3.5 | **Peso de voto por delegación**: `cast_vote` calcula el peso real a partir de las delegaciones recibidas | Delegar cambia el resultado de forma medible |
 | 3.6 | **Tesorería real**: leer balances de un Safe multisig vía API o RPC; precio de ETH desde un oráculo o API de precios, no hardcodeado | Ningún número de tesorería es una constante en el código |
@@ -279,8 +279,11 @@ filas. La existencia de los circuitos no habilita votación privada.
 - **P-54** (`AUDIT.md`): el coordinador puede excluir mensajes mal firmados.
   Aceptado a sabiendas para el piloto; exige un verificador EdDSA con salida
   booleana antes de cualquier uso vinculante.
-- Ninguno de los tres circuitos tiene ceremonia multi-parte. Quien generó los
-  zkey actuales puede fabricar pruebas falsas.
+- Ninguno de los tres circuitos tiene ceremonia multi-parte. `verify_identity`
+  cuenta con una primera contribución Phase 2 verificada y no promovida en
+  `build/trusted-setup/production-20260801-participant-1`, pero todavía faltan
+  participantes independientes y beacon final. Quien conozca el residuo de una
+  ceremonia de una sola parte puede fabricar pruebas falsas.
 
 
 ---
@@ -316,3 +319,42 @@ cada propuesta. Hay un test que lo fija.
 Lua con `fakeredis[lua]`, lo que valida la lógica de la ventana, pero no
 sustituye a una prueba contra un servidor. Antes de producción hay que
 levantar Redis y repetirlas.
+
+
+---
+
+## Cierre de 3.2 y 3.3 — papeletas firmadas en elecciones (02-08-2026)
+
+Las propuestas ya firmaban EIP-712; faltaba el mismo esquema en elecciones.
+
+**Separación de dominio.** El tipo es `ElectionBallot(string electionId,
+address voter, address candidate, string nonce)`, con `primaryType` distinto
+del `Ballot` de propuestas. El nombre del tipo entra en el structHash de
+EIP-712, así que una firma no vale en el otro contexto: sin eso, quien firmara
+"a favor" en una propuesta estaría firmando también un voto en cualquier
+elección con el mismo nonce. Hay un test que lo comprueba emitiendo una firma
+de propuesta contra el endpoint de elecciones.
+
+**Nonce compartido.** Propuestas y elecciones usan la misma colección
+`ballot_nonces` y el mismo índice único por `(voter_address, nonce)`. Es más
+estricto de lo necesario —un nonce gastado en una propuesta no sirve en una
+elección— pero evita razonar sobre dos espacios de nonces, y el cliente los
+genera al azar.
+
+**Nuevos endpoints:**
+- `GET /governance/elections/ballot-schema` — types y domain, para que
+  frontend y móvil no mantengan una copia manual desincronizada.
+- `GET /governance/elections/{id}/ballots` — papeletas públicas con
+  `signature_valid` recomputado, que es lo que permite auditar el resultado
+  sin confiar en el servidor.
+
+**Bloqueo de producción actualizado.** El 503 incondicional del voto en
+elecciones se sustituyó por el mismo gate que usan las propuestas
+(`SIGNED_BALLOTS_REQUIRED`). El bloqueador de readiness pasó de "falta firma
+EIP-712" a lo que realmente queda: **el recuento sigue sin ser transaccional
+ni reconstruible desde las papeletas** (ROADMAP 3.5).
+
+**Bug encontrado al probarlo.** `/elections/ballot-schema` quedaba eclipsada
+por `/elections/{election_id}`: FastAPI resuelve por orden de registro, así
+que "ballot-schema" se interpretaba como un id de elección y devolvía 404. Se
+reordenó y quedó anotado en el código para que no se repita.
