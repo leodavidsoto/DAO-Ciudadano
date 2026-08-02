@@ -10,7 +10,6 @@ import { Button } from '../ui/button';
 const MembershipQR = ({
     tokenId,
     walletAddress,
-    assuranceLevel = 'AL1',
     memberName = null
 }) => {
     const [copied, setCopied] = useState(false);
@@ -118,7 +117,7 @@ const MembershipQR = ({
                         {walletAddress?.slice(0, 8)}…{walletAddress?.slice(-6)}
                     </div>
                     <div>
-                        <span className="civic-tag civic-tag-blue">Nivel {assuranceLevel}</span>
+                        <span className="civic-tag civic-tag-blue">Prueba ZK</span>
                     </div>
                 </div>
 

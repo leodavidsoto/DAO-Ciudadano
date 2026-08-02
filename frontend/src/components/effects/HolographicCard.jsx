@@ -8,7 +8,6 @@ import { Shield, Fingerprint, Cpu } from 'lucide-react';
 const HolographicCard = ({
     tokenId,
     walletAddress,
-    assuranceLevel = 'AL2',
     className = ''
 }) => {
     const cardRef = useRef(null);
@@ -63,7 +62,7 @@ const HolographicCard = ({
                             </span>
                         </div>
                         <div className="holographic-badge">
-                            {assuranceLevel}
+                            ZK
                         </div>
                     </div>
 

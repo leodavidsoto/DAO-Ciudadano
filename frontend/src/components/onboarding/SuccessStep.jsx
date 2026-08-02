@@ -68,7 +68,6 @@ const SuccessStep = () => {
                             <HolographicCard
                                 tokenId={mint.token_id}
                                 walletAddress={wallet.address}
-                                assuranceLevel={clave?.assurance_level || 'AL1'}
                             />
                         </div>
 
@@ -81,7 +80,6 @@ const SuccessStep = () => {
                             <MembershipQR
                                 tokenId={mint.token_id}
                                 walletAddress={wallet.address}
-                                assuranceLevel={clave?.assurance_level || 'AL1'}
                                 memberName={clave?.nombre}
                             />
                         </div>

@@ -102,11 +102,11 @@ const MintProgressRing = ({ progress, stage }) => {
 
 const MintStep = () => {
     const navigate = useNavigate();
-    const { loading, mint, wallet, clave, nfc, mintSBT, setStep } = useOnboarding();
+    const { loading, mint, wallet, identity, mintSBT, setStep } = useOnboarding();
     const [mintProgress, setMintProgress] = useState(0);
     const [currentStage, setCurrentStage] = useState('');
     const [showConfetti, setShowConfetti] = useState(false);
-    const hasVerifiedIdentity = nfc.verified === true && Boolean(nfc.doc_hash);
+    const hasVerifiedIdentity = Boolean(identity);
 
     // Simulate minting stages
     useEffect(() => {
@@ -170,7 +170,7 @@ const MintStep = () => {
                                 </p>
                                 <p className="mt-3 text-sm text-gray-400">
                                     No se creó una membresía, NFT ni transacción. Para continuar haría falta
-                                    una verificación de identidad real emitida por el servidor; este cliente no la simula.
+                                    una credencial identity firmada y su ruta Merkle emitidas por el servidor; este cliente no las simula.
                                 </p>
                                 <div className="mt-5 flex flex-wrap justify-center gap-3">
                                     <Button
@@ -201,7 +201,6 @@ const MintStep = () => {
                             <HolographicCard
                                 tokenId={mint.token_id}
                                 walletAddress={wallet.address}
-                                assuranceLevel={clave?.assurance_level || 'AL1'}
                             />
                         ) : (
                             <DemoBadge label="REGISTRO PILOTO OFF-CHAIN — no es un NFT ni un SBT en blockchain" />

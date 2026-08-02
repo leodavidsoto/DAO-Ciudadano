@@ -10,7 +10,15 @@ import { useOnboarding } from '@/context';
 import { useWallet } from '@/hooks';
 
 const WalletStep = () => {
-    const { setWallet, setStep, setMint, wallet: onboardingWallet, fetchExistingMembership } = useOnboarding();
+    const {
+        setWallet,
+        setStep,
+        setMint,
+        wallet: onboardingWallet,
+        fetchExistingMembership,
+        requestIdentityCredential,
+        zk,
+    } = useOnboarding();
     const {
         connect,
         address,
@@ -34,9 +42,11 @@ const WalletStep = () => {
     const REQUIRED_CHAIN_ID = 11155111; // Sepolia
     const isWrongNetwork = isConnected && chainId != null && Number(chainId) !== REQUIRED_CHAIN_ID;
 
-    const goToMint = () => {
-        setWallet({ address, chainId });
-        setStep('mint');
+    const goToMint = async () => {
+        const connectedWallet = { address, chainId };
+        setWallet(connectedWallet);
+        const identity = await requestIdentityCredential(connectedWallet);
+        if (identity) setStep('mint');
     };
 
     // MetaMask may already be authorized for this site, in which case useWallet
@@ -44,9 +54,22 @@ const WalletStep = () => {
     // flow renders "WALLET CONECTADA" and stops there forever.
     useEffect(() => {
         if (!isConnected || !address) return;
-        if (onboardingWallet.address === address) return;
+        const sameAddress =
+            onboardingWallet.address?.toLowerCase() === address.toLowerCase();
+        const sameChain =
+            onboardingWallet.chainId != null &&
+            chainId != null &&
+            Number(onboardingWallet.chainId) === Number(chainId);
+        if (sameAddress && sameChain) return;
         setWallet({ address, chainId });
-    }, [isConnected, address, chainId, onboardingWallet.address, setWallet]);
+    }, [
+        isConnected,
+        address,
+        chainId,
+        onboardingWallet.address,
+        onboardingWallet.chainId,
+        setWallet,
+    ]);
 
     // A wallet that already holds an SBT must not be sent to the mint step:
     // the backend rejects duplicates and the user hits a dead end reading
@@ -273,11 +296,20 @@ const WalletStep = () => {
                         {membershipLookupComplete && !existingToken && (
                             <Button
                                 onClick={goToMint}
-                                disabled={isWrongNetwork}
+                                disabled={isWrongNetwork || zk.status === 'enrolling'}
                                 className="cyber-button-premium mt-5 w-full group"
                             >
-                                CONTINUAR
-                                <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+                                {zk.status === 'enrolling' ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                        EMITIENDO CREDENCIAL ZK...
+                                    </>
+                                ) : (
+                                    <>
+                                        CONTINUAR
+                                        <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+                                    </>
+                                )}
                             </Button>
                         )}
                     </SuccessDisplay>

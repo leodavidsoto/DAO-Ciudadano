@@ -1,67 +1,52 @@
 /**
- * ZK-Client — generación local de pruebas de conocimiento cero (ADR-001, D-2).
+ * Browser-side Groth16 client for MembershipEligibility(25).
  *
- * El paradigma que resuelve el ADR: el navegador prueba localmente que el
- * ciudadano posee un documento válido, y solo publica un `nullifier`. El RUT,
- * la MRZ y cualquier dato del documento NUNCA salen del dispositivo.
+ * The issuer returns a signed, wallet-bound identity credential containing a
+ * Merkle witness. The signature is retained only as provenance for that
+ * credential; it is never sent to the mint endpoint and is not confused with
+ * the SIWE signature that only proves control of a wallet.
  *
- * Este módulo envuelve `snarkjs` (groth16) sobre el circuito
- * `circuits/verify_identity.circom`, cuyas señales son:
+ * Circuit boundary (fixed order):
+ *   public  [identityRoot, nullifierHash, recipient, scope]
+ *   private [identitySecret, pathElements[25], pathIndices[25]]
  *
- *   entradas privadas : documentIdHash, secret     (jamás se transmiten)
- *   entrada pública   : registryKeyId
- *   salidas públicas  : nullifier, registryKeyIdOut
- *
- *   nullifier = Poseidon(documentIdHash, secret)
- *
- * ─────────────────────────────────────────────────────────────────────────
- * LÍMITES REALES DE ESTA PRUEBA — léelos antes de confiar en ella
- * ─────────────────────────────────────────────────────────────────────────
- * Lo que el circuito prueba HOY: que quien genera la prueba conoce un
- * `documentIdHash` y un `secret`, y que el nullifier deriva de ambos. Eso da
- * unicidad (anti-Sybil) sin revelar el RUT.
- *
- * Lo que NO prueba: que esos datos vengan del Registro Civil. El circuito aún
- * no verifica la firma de EF.SOD, así que un `documentIdHash` inventado
- * produce una prueba aritméticamente válida. Está documentado en
- * `circuits/README.md`, que dice explícitamente que no debe desplegarse así.
- *
- * Además, la ceremonia de confianza de `compile.sh` es de una sola parte:
- * quien la ejecutó conoce el toxic waste y puede fabricar pruebas falsas.
- *
- * Por eso este módulo NUNCA afirma "identidad verificada". Emite una prueba
- * de unicidad y rotula lo que garantiza. La verificación civil real la aporta
- * el claim firmado por el emisor, que es dominio del backend.
- *
- * ─────────────────────────────────────────────────────────────────────────
- * FALLA CERRADO
- * ─────────────────────────────────────────────────────────────────────────
- * Los artefactos (.wasm y .zkey) no viven en el repositorio: se generan con
- * `circuits/compile.sh` y se publican como assets del build. Si no están,
- * `generateIdentityProof` lanza `ZkNotProvisionedError` en vez de devolver
- * algo parecido a una prueba. No hay ruta de degradación silenciosa: una
- * prueba fabricada sería peor que no tener ZK.
+ * The identity secret is generated and stored locally. It must first be used
+ * to create the issuer commitment with `deriveIdentityCommitment`; the issuer
+ * then inserts that commitment in an approved tree and returns the witness.
  */
+import { BrowserProvider, Contract, getAddress, verifyMessage } from 'ethers';
 
-// Orden del campo escalar de BN254 (la curva que usa groth16 en snarkjs).
-// Toda señal del circuito debe ser un entero menor que este valor.
-const BN254_SCALAR_FIELD =
+export const BN254_SCALAR_FIELD =
     21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+export const BN254_BASE_FIELD =
+    21888242871839275222246405745257275088696311157297823662689037894645226208583n;
+export const IDENTITY_TREE_DEPTH = 25;
 
-// Los artefactos se sirven como assets estáticos del build, no como fuentes.
-// Ver `circuits/README.md`: pesan demasiado para versionarlos.
-const WASM_URL = process.env.REACT_APP_ZK_WASM_URL || '/zk/verify_identity.wasm';
-const ZKEY_URL = process.env.REACT_APP_ZK_ZKEY_URL || '/zk/verify_identity_final.zkey';
-const VKEY_URL = process.env.REACT_APP_ZK_VKEY_URL || '/zk/verification_key.json';
+const publicBase = String(process.env.PUBLIC_URL || '').replace(/\/$/, '');
+export const ZK_ARTIFACT_URLS = Object.freeze({
+    wasm:
+        process.env.REACT_APP_ZK_WASM_URL ||
+        `${publicBase}/zk/verify_identity.wasm`,
+    zkey:
+        process.env.REACT_APP_ZK_ZKEY_URL ||
+        `${publicBase}/zk/verify_identity_final.zkey`,
+    verificationKey:
+        process.env.REACT_APP_ZK_VKEY_URL ||
+        `${publicBase}/zk/verification_key.json`,
+});
 
-// Clave del registro civil contra la que se genera la prueba. El circuito la
-// ata a la prueba para que una generada contra un registro no valga en otro.
-// Sin valor configurado no se inventa uno: se exige explícitamente.
-const REGISTRY_KEY_ID = process.env.REACT_APP_ZK_REGISTRY_KEY_ID || '';
+const SECRET_STORAGE_KEY = 'zk_identity_secret_v2';
+const IDENTITY_CREDENTIAL_DOMAIN = 'DAO Ciudadana Identity Credential v1';
+const IDENTITY_ISSUER_ADDRESS =
+    process.env.REACT_APP_ZK_IDENTITY_ISSUER_ADDRESS || '';
+const MEMBERSHIP_CONTRACT_ADDRESS =
+    process.env.REACT_APP_MEMBERSHIP_CONTRACT_ADDRESS || '';
+const MEMBERSHIP_SCOPE_ABI = [
+    'function membershipScope() view returns (uint256)',
+    'function isIdentityRootApproved(uint256 identityRoot) view returns (bool)',
+];
+let poseidonPromise;
 
-const SECRET_STORAGE_KEY = 'zk_identity_secret_v1';
-
-/** Los artefactos del circuito no están publicados en este despliegue. */
 export class ZkNotProvisionedError extends Error {
     constructor(message, missing = []) {
         super(message);
@@ -70,7 +55,6 @@ export class ZkNotProvisionedError extends Error {
     }
 }
 
-/** La generación o verificación de la prueba falló. */
 export class ZkProofError extends Error {
     constructor(message) {
         super(message);
@@ -78,32 +62,189 @@ export class ZkProofError extends Error {
     }
 }
 
-// === Utilidades de campo ===
+function getLocalStorage() {
+    try {
+        if (!globalThis.localStorage) {
+            throw new Error('localStorage is unavailable');
+        }
+        return globalThis.localStorage;
+    } catch {
+        throw new ZkProofError(
+            'El almacenamiento seguro del navegador no está disponible; no se puede conservar el secreto de identidad.'
+        );
+    }
+}
+
+function normalizeFieldElement(value, label, { allowZero = false } = {}) {
+    let normalized;
+    try {
+        if (
+            typeof value === 'number' &&
+            (!Number.isSafeInteger(value) || value < 0)
+        ) {
+            throw new Error('unsafe number');
+        }
+        if (
+            !['bigint', 'number', 'string'].includes(typeof value) ||
+            (typeof value === 'string' && !value.trim())
+        ) {
+            throw new Error('missing value');
+        }
+        normalized = BigInt(value);
+    } catch {
+        throw new ZkProofError(`${label} no es un elemento de campo válido.`);
+    }
+
+    if (normalized < 0n || normalized >= BN254_SCALAR_FIELD) {
+        throw new ZkProofError(`${label} está fuera del campo escalar BN254.`);
+    }
+    if (!allowZero && normalized === 0n) {
+        throw new ZkProofError(`${label} no puede ser cero.`);
+    }
+    return normalized.toString();
+}
+
+function normalizeRecipient(address) {
+    try {
+        const checksumAddress = getAddress(String(address || ''));
+        if (BigInt(checksumAddress) === 0n) {
+            throw new Error('zero address');
+        }
+        return {
+            address: checksumAddress,
+            signal: BigInt(checksumAddress).toString(),
+        };
+    } catch {
+        throw new ZkProofError('La wallet receptora no es una dirección EVM válida.');
+    }
+}
+
+function credentialValue(credential, camelCase, snakeCase) {
+    return credential?.[camelCase] ?? credential?.[snakeCase];
+}
 
 /**
- * Reduce bytes arbitrarios a un elemento del campo escalar de BN254.
- *
- * Sin la reducción modular, un digest de 256 bits puede superar el orden del
- * campo y snarkjs lo rechazaría (o peor, lo truncaría de forma no evidente).
+ * Validate and normalize the issuer credential for local-only proof creation.
+ * Python backends may return snake_case; browser code may use camelCase.
  */
+export function normalizeIdentityCredential(identity, recipientAddress) {
+    if (!identity || typeof identity !== 'object' || Array.isArray(identity)) {
+        throw new ZkProofError(
+            'Falta la credencial identity firmada por el emisor.'
+        );
+    }
+
+    const signature =
+        identity.signature ?? identity.signedClaim ?? identity.signed_claim;
+    if (typeof signature !== 'string' || !signature.trim()) {
+        throw new ZkProofError(
+            'La credencial identity no contiene la firma del emisor.'
+        );
+    }
+
+    const recipient = normalizeRecipient(recipientAddress);
+    const credentialRecipient = credentialValue(
+        identity,
+        'recipient',
+        'wallet_address'
+    );
+    if (!credentialRecipient) {
+        throw new ZkProofError(
+            'La credencial identity no declara la wallet receptora.'
+        );
+    }
+    const boundRecipient = normalizeRecipient(credentialRecipient);
+    if (boundRecipient.address !== recipient.address) {
+        throw new ZkProofError(
+            'La credencial identity pertenece a otra wallet; se descartó antes de generar la prueba.'
+        );
+    }
+
+    const identityRoot = normalizeFieldElement(
+        credentialValue(identity, 'identityRoot', 'identity_root'),
+        'La raíz de identidad'
+    );
+    const scope = normalizeFieldElement(
+        credentialValue(identity, 'scope', 'membership_scope'),
+        'El scope de membresía'
+    );
+    const commitment = normalizeFieldElement(
+        credentialValue(identity, 'commitment', 'identity_commitment'),
+        'El commitment de identidad'
+    );
+
+    const rawPathElements = credentialValue(
+        identity,
+        'pathElements',
+        'path_elements'
+    );
+    const rawPathIndices = credentialValue(
+        identity,
+        'pathIndices',
+        'path_indices'
+    );
+    if (
+        !Array.isArray(rawPathElements) ||
+        rawPathElements.length !== IDENTITY_TREE_DEPTH
+    ) {
+        throw new ZkProofError(
+            `La ruta Merkle debe contener exactamente ${IDENTITY_TREE_DEPTH} elementos.`
+        );
+    }
+    if (
+        !Array.isArray(rawPathIndices) ||
+        rawPathIndices.length !== IDENTITY_TREE_DEPTH
+    ) {
+        throw new ZkProofError(
+            `La ruta Merkle debe contener exactamente ${IDENTITY_TREE_DEPTH} índices.`
+        );
+    }
+
+    const pathElements = rawPathElements.map((value, index) =>
+        normalizeFieldElement(value, `El elemento Merkle ${index}`, {
+            allowZero: true,
+        })
+    );
+    const pathIndices = rawPathIndices.map((value, index) => {
+        const normalized = String(value);
+        if (normalized !== '0' && normalized !== '1') {
+            throw new ZkProofError(`El índice Merkle ${index} debe ser 0 o 1.`);
+        }
+        return normalized;
+    });
+
+    return {
+        // The signature and witness stay in memory for local verification and
+        // proving; buildZkMintPayload deliberately omits both from the relayer.
+        identityRoot,
+        scope,
+        commitment,
+        signature: signature.trim(),
+        recipient: recipient.address,
+        recipientSignal: recipient.signal,
+        pathElements,
+        pathIndices,
+    };
+}
+
 export function bytesToFieldElement(bytes) {
     let value = 0n;
     for (const byte of bytes) {
         value = (value << 8n) | BigInt(byte);
     }
     const reduced = value % BN254_SCALAR_FIELD;
-    // El circuito rechaza el cero (colisionaría nullifiers trivialmente).
     return reduced === 0n ? 1n : reduced;
 }
 
-/** SHA-256 sobre una cadena, reducido a elemento de campo. */
 export async function hashToField(text) {
     if (typeof text !== 'string' || !text) {
-        throw new ZkProofError('No se puede derivar un elemento de campo de un valor vacío.');
+        throw new ZkProofError(
+            'No se puede derivar un elemento de campo de un valor vacío.'
+        );
     }
     if (!globalThis.crypto?.subtle) {
         throw new ZkProofError(
-            'Web Crypto no está disponible. La generación de pruebas exige un contexto seguro (HTTPS o localhost).'
+            'Web Crypto no está disponible. La generación de pruebas exige HTTPS o localhost.'
         );
     }
     const digest = await globalThis.crypto.subtle.digest(
@@ -113,70 +254,276 @@ export async function hashToField(text) {
     return bytesToFieldElement(new Uint8Array(digest));
 }
 
-// === Secreto del ciudadano ===
-
-/**
- * Devuelve el secreto local, creándolo la primera vez.
- *
- * Es lo que impide que un tercero que conozca el RUT recalcule el nullifier y
- * rastree a la persona. Consecuencia importante: si se pierde, el ciudadano
- * genera un nullifier distinto para el mismo documento. Por eso hay
- * `exportSecret`/`importSecret`: la recuperación es un requisito del producto,
- * no un extra.
- */
 export function getOrCreateSecret() {
-    const stored = globalThis.localStorage?.getItem(SECRET_STORAGE_KEY);
-    if (stored) return stored;
+    const storage = getLocalStorage();
+    const stored = storage.getItem(SECRET_STORAGE_KEY);
+    if (stored) {
+        return normalizeFieldElement(stored, 'El secreto de identidad');
+    }
 
     if (!globalThis.crypto?.getRandomValues) {
         throw new ZkProofError(
-            'No hay generador criptográfico disponible; no se puede crear un secreto seguro.'
+            'No hay un generador criptográfico disponible para crear el secreto de identidad.'
         );
     }
-    const random = new Uint8Array(31); // 248 bits: siempre cabe en el campo
+    const random = new Uint8Array(31);
     globalThis.crypto.getRandomValues(random);
     const secret = bytesToFieldElement(random).toString();
-    globalThis.localStorage?.setItem(SECRET_STORAGE_KEY, secret);
+    storage.setItem(SECRET_STORAGE_KEY, secret);
     return secret;
 }
 
 export function hasSecret() {
-    return Boolean(globalThis.localStorage?.getItem(SECRET_STORAGE_KEY));
+    try {
+        const secret = getLocalStorage().getItem(SECRET_STORAGE_KEY);
+        if (!secret) return false;
+        normalizeFieldElement(secret, 'El secreto de identidad');
+        return true;
+    } catch {
+        return false;
+    }
 }
 
-/** Exporta el secreto para que el ciudadano pueda respaldarlo. */
 export function exportSecret() {
-    return globalThis.localStorage?.getItem(SECRET_STORAGE_KEY) || null;
+    const secret = getLocalStorage().getItem(SECRET_STORAGE_KEY);
+    return secret
+        ? normalizeFieldElement(secret, 'El secreto de identidad')
+        : null;
 }
 
-/** Restaura un secreto respaldado (misma cédula -> mismo nullifier). */
 export function importSecret(secret) {
-    const trimmed = String(secret || '').trim();
-    if (!/^\d+$/.test(trimmed)) {
-        throw new ZkProofError('El secreto debe ser un entero decimal.');
-    }
-    const value = BigInt(trimmed);
-    if (value <= 0n || value >= BN254_SCALAR_FIELD) {
-        throw new ZkProofError('El secreto está fuera del campo escalar admitido.');
-    }
-    globalThis.localStorage?.setItem(SECRET_STORAGE_KEY, trimmed);
-    return trimmed;
+    const normalized = normalizeFieldElement(secret, 'El secreto de identidad');
+    getLocalStorage().setItem(SECRET_STORAGE_KEY, normalized);
+    return normalized;
 }
 
-/** Olvida el secreto de este dispositivo. Sin respaldo, es irreversible. */
 export function forgetSecret() {
-    globalThis.localStorage?.removeItem(SECRET_STORAGE_KEY);
+    getLocalStorage().removeItem(SECRET_STORAGE_KEY);
 }
 
-// === Disponibilidad de los artefactos ===
+async function loadPoseidon() {
+    if (!poseidonPromise) {
+        poseidonPromise = Promise.all([
+            import('poseidon-lite/poseidon2'),
+            import('poseidon-lite/poseidon3'),
+        ])
+            .then(([twoInputs, threeInputs]) => ({
+                poseidon2: twoInputs.poseidon2,
+                poseidon3: threeInputs.poseidon3,
+            }))
+            .catch(() => {
+                poseidonPromise = undefined;
+                throw new ZkProofError(
+                    'No se pudo cargar Poseidon para derivar el nullifier.'
+                );
+            });
+    }
+    return poseidonPromise;
+}
+
+async function poseidonHash(inputs) {
+    const { poseidon2, poseidon3 } = await loadPoseidon();
+    const hasher = inputs.length === 2 ? poseidon2 : poseidon3;
+    if (!hasher || ![2, 3].includes(inputs.length)) {
+        throw new ZkProofError('Poseidon recibió una aridad no soportada.');
+    }
+    return hasher(inputs.map((value) => BigInt(value))).toString();
+}
+
+/** Derive the public nullifier committed by the circuit. */
+export async function deriveNullifier(identitySecret, scope) {
+    const secretSignal = normalizeFieldElement(
+        identitySecret,
+        'El secreto de identidad'
+    );
+    const scopeSignal = normalizeFieldElement(scope, 'El scope de membresía');
+    return poseidonHash([secretSignal, scopeSignal]);
+}
+
+/**
+ * Derive the wallet-bound commitment that the issuer must insert in its tree.
+ * Only this public commitment, never the local secret, may be sent to issuer.
+ */
+export async function deriveIdentityCommitment({ recipient, scope }) {
+    const wallet = normalizeRecipient(recipient);
+    const scopeSignal = normalizeFieldElement(scope, 'El scope de membresía');
+    return poseidonHash([
+        getOrCreateSecret(),
+        wallet.signal,
+        scopeSignal,
+    ]);
+}
+
+/**
+ * Read the binding scope from the actual contract and, when provided, ensure
+ * the wallet currently selected in the provider is still the intended one.
+ */
+export async function readMembershipDeployment(
+    expectedChainId,
+    identityRoot = null,
+    expectedRecipient = null
+) {
+    if (!MEMBERSHIP_CONTRACT_ADDRESS) {
+        throw new ZkNotProvisionedError(
+            'Este despliegue no configuró el contrato de membresía.',
+            ['REACT_APP_MEMBERSHIP_CONTRACT_ADDRESS']
+        );
+    }
+    if (!globalThis.ethereum) {
+        throw new ZkProofError(
+            'No hay un proveedor EVM disponible para consultar el scope de membresía.'
+        );
+    }
+
+    let contractAddress;
+    try {
+        contractAddress = getAddress(MEMBERSHIP_CONTRACT_ADDRESS);
+    } catch {
+        throw new ZkNotProvisionedError(
+            'La dirección configurada del contrato de membresía no es válida.',
+            ['REACT_APP_MEMBERSHIP_CONTRACT_ADDRESS']
+        );
+    }
+
+    try {
+        const provider = new BrowserProvider(globalThis.ethereum);
+        const network = await provider.getNetwork();
+        const connectedChainId = Number(network.chainId);
+        if (!Number.isSafeInteger(connectedChainId) || connectedChainId <= 0) {
+            throw new ZkProofError(
+                'La wallet reportó un identificador de red inválido.'
+            );
+        }
+        if (
+            expectedChainId != null &&
+            network.chainId !== BigInt(expectedChainId)
+        ) {
+            throw new ZkProofError(
+                'La red conectada cambió antes de emitir la credencial identity.'
+            );
+        }
+        if (expectedRecipient != null) {
+            const expectedWallet = normalizeRecipient(expectedRecipient);
+            const accounts = await provider.send('eth_accounts', []);
+            if (!Array.isArray(accounts) || accounts.length === 0) {
+                throw new ZkProofError(
+                    'La wallet se desconectó antes de completar la prueba.'
+                );
+            }
+            const activeWallet = normalizeRecipient(accounts[0]);
+            if (activeWallet.address !== expectedWallet.address) {
+                throw new ZkProofError(
+                    'La cuenta activa cambió; vuelve a autorizar la credencial con la wallet seleccionada.'
+                );
+            }
+        }
+        const contract = new Contract(
+            contractAddress,
+            MEMBERSHIP_SCOPE_ABI,
+            provider
+        );
+        const scope = normalizeFieldElement(
+            await contract.membershipScope(),
+            'El scope on-chain de membresía'
+        );
+        if (identityRoot != null) {
+            const rootSignal = normalizeFieldElement(
+                identityRoot,
+                'La raíz de identidad'
+            );
+            if (!(await contract.isIdentityRootApproved(rootSignal))) {
+                throw new ZkProofError(
+                    'La raíz de la credencial identity no está aprobada por el contrato.'
+                );
+            }
+        }
+        return {
+            chainId: network.chainId.toString(),
+            contractAddress,
+            scope,
+        };
+    } catch (error) {
+        if (error instanceof ZkProofError) throw error;
+        throw new ZkProofError(
+            'No se pudo consultar membershipScope() en el contrato configurado.'
+        );
+    }
+}
+
+/** Canonical EIP-191 message the issuer signs after inserting commitment. */
+export function buildIdentityCredentialMessage({
+    recipient,
+    identityRoot,
+    scope,
+    commitment,
+}) {
+    const wallet = normalizeRecipient(recipient);
+    const rootSignal = normalizeFieldElement(
+        identityRoot,
+        'La raíz de identidad'
+    );
+    const scopeSignal = normalizeFieldElement(scope, 'El scope de membresía');
+    const commitmentSignal = normalizeFieldElement(
+        commitment,
+        'El commitment de identidad'
+    );
+    return [
+        IDENTITY_CREDENTIAL_DOMAIN,
+        `recipient:${wallet.address.toLowerCase()}`,
+        `identityRoot:${rootSignal}`,
+        `scope:${scopeSignal}`,
+        `commitment:${commitmentSignal}`,
+    ].join('\n');
+}
+
+function verifyIdentityCredentialSignature(credential) {
+    if (!IDENTITY_ISSUER_ADDRESS) {
+        throw new ZkNotProvisionedError(
+            'Este despliegue no configuró la dirección del emisor de identity.',
+            ['REACT_APP_ZK_IDENTITY_ISSUER_ADDRESS']
+        );
+    }
+
+    let expectedIssuer;
+    let recoveredIssuer;
+    try {
+        expectedIssuer = getAddress(IDENTITY_ISSUER_ADDRESS);
+        recoveredIssuer = verifyMessage(
+            buildIdentityCredentialMessage(credential),
+            credential.signature
+        );
+    } catch {
+        throw new ZkProofError(
+            'La firma de la credencial identity no tiene un formato válido.'
+        );
+    }
+    if (recoveredIssuer !== expectedIssuer) {
+        throw new ZkProofError(
+            'La credencial identity no fue firmada por el emisor configurado.'
+        );
+    }
+}
+
+/**
+ * Verify the issuer signature and return only the protocol fields needed by
+ * the prover. Any extra response fields (including accidental PII) are
+ * discarded before the credential is retained by React state.
+ */
+export function verifyIdentityCredential(identity, recipientAddress) {
+    const credential = normalizeIdentityCredential(identity, recipientAddress);
+    verifyIdentityCredentialSignature(credential);
+    return credential;
+}
+
+/** Drop cached Poseidon modules, mainly to isolate deterministic tests. */
+export async function releaseZkResources() {
+    poseidonPromise = undefined;
+}
 
 async function artifactExists(url) {
     try {
-        // HEAD evita descargar el .zkey (decenas de MB) solo para comprobar.
         const response = await fetch(url, { method: 'HEAD' });
         if (!response.ok) return false;
-        // Un SPA suele responder index.html a rutas desconocidas: un HTML aquí
-        // significa que el asset no existe, aunque el status sea 200.
         const type = response.headers.get('content-type') || '';
         return !type.includes('text/html');
     } catch {
@@ -184,155 +531,257 @@ async function artifactExists(url) {
     }
 }
 
-/**
- * Comprueba si este despliegue puede generar pruebas.
- * Devuelve `{ ready, missing }` — nunca lanza, para que la interfaz pueda
- * mostrar el estado sin envolverlo en try/catch.
- */
 export async function checkZkAvailability() {
-    const missing = [];
-    if (!REGISTRY_KEY_ID) missing.push('REACT_APP_ZK_REGISTRY_KEY_ID');
-
-    const [wasmOk, zkeyOk] = await Promise.all([
-        artifactExists(WASM_URL),
-        artifactExists(ZKEY_URL),
-    ]);
-    if (!wasmOk) missing.push(WASM_URL);
-    if (!zkeyOk) missing.push(ZKEY_URL);
-
+    const entries = Object.values(ZK_ARTIFACT_URLS);
+    const results = await Promise.all(entries.map(artifactExists));
+    const missing = entries.filter((_, index) => !results[index]);
+    if (!IDENTITY_ISSUER_ADDRESS) {
+        missing.push('REACT_APP_ZK_IDENTITY_ISSUER_ADDRESS');
+    } else {
+        try {
+            getAddress(IDENTITY_ISSUER_ADDRESS);
+        } catch {
+            missing.push('REACT_APP_ZK_IDENTITY_ISSUER_ADDRESS');
+        }
+    }
+    if (!MEMBERSHIP_CONTRACT_ADDRESS) {
+        missing.push('REACT_APP_MEMBERSHIP_CONTRACT_ADDRESS');
+    } else {
+        try {
+            getAddress(MEMBERSHIP_CONTRACT_ADDRESS);
+        } catch {
+            missing.push('REACT_APP_MEMBERSHIP_CONTRACT_ADDRESS');
+        }
+    }
     return { ready: missing.length === 0, missing };
 }
 
-/** ¿Está activada la ruta de minteo con prueba ZK en este despliegue? */
+// Kept as a compatibility helper for current UI consumers. The production
+// contract has no legacy hash-based mint path, so ZK is no longer optional.
 export function isZkMintEnabled() {
-    return String(process.env.REACT_APP_ZK_MINT || '').toLowerCase() === 'true';
+    return true;
 }
 
-// === Generación de la prueba ===
-
-/**
- * snarkjs pesa varios MB. Se importa bajo demanda para no cargarlo en el
- * bundle inicial de quien solo entra a leer propuestas.
- */
 async function loadSnarkjs() {
     try {
         return await import('snarkjs');
-    } catch (error) {
-        throw new ZkProofError('No se pudo cargar la biblioteca de pruebas (snarkjs).');
+    } catch {
+        throw new ZkProofError(
+            'No se pudo cargar la biblioteca de pruebas (snarkjs).'
+        );
     }
 }
 
-/**
- * Genera la prueba ZK localmente.
- *
- * @param {object} params
- * @param {string} params.documentId  Identificador del documento leído del chip
- *                                    (contenido de DG1). No se transmite: solo
- *                                    se usa para derivar `documentIdHash`.
- * @returns {Promise<object>} prueba, señales públicas, nullifier y calldata
- *                            lista para el verificador Solidity.
- */
-export async function generateIdentityProof({ documentId }) {
-    if (!documentId) {
+function toBytes32(value) {
+    const normalized = normalizeFieldElement(value, 'El nullifier');
+    return `0x${BigInt(normalized).toString(16).padStart(64, '0')}`;
+}
+
+function normalizeProofCoordinate(value, label) {
+    let coordinate;
+    try {
+        coordinate = BigInt(value);
+    } catch {
+        throw new ZkProofError(`${label} no es una coordenada BN254 válida.`);
+    }
+    if (coordinate < 0n || coordinate >= BN254_BASE_FIELD) {
+        throw new ZkProofError(`${label} está fuera del campo base BN254.`);
+    }
+    // Claude's relayer parses coordinates with Python int(value), so the HTTP
+    // protocol uses canonical decimal strings even though snarkjs exports hex.
+    return coordinate.toString();
+}
+
+function assertPublicSignals(publicSignals, expectedSignals) {
+    if (!Array.isArray(publicSignals) || publicSignals.length !== 4) {
         throw new ZkProofError(
-            'Falta el identificador del documento. Sin una lectura real del chip no hay nada que probar.'
+            'El prover devolvió un número inesperado de señales públicas.'
+        );
+    }
+    const normalized = publicSignals.map((value, index) =>
+        normalizeFieldElement(value, `La señal pública ${index}`)
+    );
+    if (normalized.some((value, index) => value !== expectedSignals[index])) {
+        throw new ZkProofError(
+            'La prueba no quedó ligada a la raíz, nullifier, wallet y scope esperados.'
+        );
+    }
+    return normalized;
+}
+
+function isPair(value) {
+    return Array.isArray(value) && value.length === 2;
+}
+
+async function toSolidityCalldata(
+    snarkjs,
+    proof,
+    publicSignals,
+    expectedSignals
+) {
+    let flat;
+    try {
+        const raw = await snarkjs.groth16.exportSolidityCallData(
+            proof,
+            publicSignals
+        );
+        flat = JSON.parse(`[${raw}]`);
+    } catch {
+        throw new ZkProofError(
+            'No se pudo convertir la prueba al formato del contrato.'
         );
     }
 
+    const [pA, pB, pC, exportedSignals] = flat;
+    if (
+        !isPair(pA) ||
+        !isPair(pC) ||
+        !isPair(pB) ||
+        !pB.every(isPair)
+    ) {
+        throw new ZkProofError(
+            'snarkjs devolvió puntos Groth16 con dimensiones inválidas.'
+        );
+    }
+    assertPublicSignals(exportedSignals, expectedSignals);
+    return {
+        pA: pA.map((value, index) =>
+            normalizeProofCoordinate(value, `pA[${index}]`)
+        ),
+        pB: pB.map((row, rowIndex) =>
+            row.map((value, columnIndex) =>
+                normalizeProofCoordinate(
+                    value,
+                    `pB[${rowIndex}][${columnIndex}]`
+                )
+            )
+        ),
+        pC: pC.map((value, index) =>
+            normalizeProofCoordinate(value, `pC[${index}]`)
+        ),
+    };
+}
+
+/**
+ * Generate a wallet-bound proof locally.
+ *
+ * `identity.signature` is required as issuer provenance, but it never enters
+ * the witness or returned payload. Eligibility comes from Merkle inclusion in
+ * an identity root approved by the contract.
+ */
+export async function generateIdentityProof({
+    identity,
+    recipient,
+    expectedScope,
+}) {
+    const credential = verifyIdentityCredential(identity, recipient);
+    if (
+        expectedScope != null &&
+        credential.scope !==
+            normalizeFieldElement(expectedScope, 'El scope on-chain de membresía')
+    ) {
+        throw new ZkProofError(
+            'La credencial identity pertenece a otro contrato o red.'
+        );
+    }
     const availability = await checkZkAvailability();
     if (!availability.ready) {
         throw new ZkNotProvisionedError(
-            'Este despliegue no tiene publicados los artefactos del circuito, así que no puede generar una prueba. ' +
-            'Genera el circuito con circuits/compile.sh y publica el .wasm y el .zkey como assets del build.',
+            'Este despliegue no publicó los artefactos exactos del circuito ZK.',
             availability.missing
         );
     }
 
-    const snarkjs = await loadSnarkjs();
-
-    const documentIdHash = await hashToField(documentId);
-    const secret = getOrCreateSecret();
-    const registryKeyId = await hashToField(REGISTRY_KEY_ID);
-
+    const identitySecret = getOrCreateSecret();
+    const localCommitment = await poseidonHash([
+        identitySecret,
+        credential.recipientSignal,
+        credential.scope,
+    ]);
+    if (localCommitment !== credential.commitment) {
+        throw new ZkProofError(
+            'La credencial identity no corresponde al secreto local y la wallet receptora.'
+        );
+    }
+    const nullifierSignal = await deriveNullifier(
+        identitySecret,
+        credential.scope
+    );
+    const expectedSignals = [
+        credential.identityRoot,
+        nullifierSignal,
+        credential.recipientSignal,
+        credential.scope,
+    ];
     const input = {
-        documentIdHash: documentIdHash.toString(),
-        secret,
-        registryKeyId: registryKeyId.toString(),
+        identitySecret,
+        pathElements: credential.pathElements,
+        pathIndices: credential.pathIndices,
+        identityRoot: credential.identityRoot,
+        nullifierHash: nullifierSignal,
+        recipient: credential.recipientSignal,
+        scope: credential.scope,
     };
 
+    const snarkjs = await loadSnarkjs();
     let proof;
     let publicSignals;
     try {
         ({ proof, publicSignals } = await snarkjs.groth16.fullProve(
             input,
-            WASM_URL,
-            ZKEY_URL
+            ZK_ARTIFACT_URLS.wasm,
+            ZK_ARTIFACT_URLS.zkey
         ));
     } catch (error) {
-        // El mensaje del prover puede incluir rutas y detalles del circuito;
-        // no se refleja tal cual al ciudadano.
         console.error('ZK proof generation failed:', error);
         throw new ZkProofError(
-            'No se pudo generar la prueba en este dispositivo. Revisa que los artefactos del circuito correspondan al circuito compilado.'
+            'No se pudo generar la prueba. La credencial puede no corresponder a esta wallet, secreto o circuito.'
         );
     }
 
-    // Convención de circom: primero las señales de salida, después las
-    // entradas declaradas públicas. Para verify_identity.circom eso es
-    // [nullifier, registryKeyIdOut, registryKeyId].
-    const [nullifier, registryKeyIdOut] = publicSignals;
-
-    if (registryKeyIdOut !== registryKeyId.toString()) {
-        throw new ZkProofError(
-            'La prueba no quedó atada a la clave de registro esperada; se descarta.'
-        );
-    }
+    const normalizedSignals = assertPublicSignals(
+        publicSignals,
+        expectedSignals
+    );
+    const { pA, pB, pC } = await toSolidityCalldata(
+        snarkjs,
+        proof,
+        normalizedSignals,
+        expectedSignals
+    );
 
     return {
         proof,
-        publicSignals,
-        nullifier,
-        registryKeyId: registryKeyId.toString(),
-        solidity: await toSolidityCalldata(snarkjs, proof, publicSignals),
+        publicSignals: normalizedSignals,
+        pA,
+        pB,
+        pC,
+        nullifierHash: toBytes32(nullifierSignal),
+        identityRoot: credential.identityRoot,
+        recipient: credential.recipient,
+        scope: credential.scope,
     };
 }
 
-/**
- * Formatea la prueba como la espera un verificador Groth16 de Solidity
- * (`uint[2] a, uint[2][2] b, uint[2] c, uint[] input`).
- *
- * Se delega en `exportSolidityCallData` de snarkjs en vez de reordenar los
- * componentes a mano: el punto G2 exige un intercambio de coordenadas que es
- * fácil de invertir y produce una prueba que falla sin explicación.
- */
-async function toSolidityCalldata(snarkjs, proof, publicSignals) {
-    const raw = await snarkjs.groth16.exportSolidityCallData(proof, publicSignals);
-    // Devuelve algo como: ["0x..","0x.."],[["0x..",..],..],["0x..",".."],["0x.."]
-    const flat = JSON.parse(`[${raw}]`);
-    return { a: flat[0], b: flat[1], c: flat[2], input: flat[3] };
-}
-
-/**
- * Verifica la prueba en el propio navegador antes de enviarla.
- *
- * No sustituye la verificación on-chain — el cliente no es una autoridad—,
- * pero evita gastar una transacción patrocinada en una prueba inválida.
- * Si la clave de verificación no está publicada, devuelve `null` (desconocido)
- * en lugar de `true`: no saber no es lo mismo que estar bien.
- */
 export async function verifyProofLocally(proof, publicSignals) {
-    let vkey;
+    let verificationKey;
     try {
-        const response = await fetch(VKEY_URL);
+        const response = await fetch(ZK_ARTIFACT_URLS.verificationKey);
         if (!response.ok) return null;
-        vkey = await response.json();
+        const type = response.headers.get('content-type') || '';
+        if (type.includes('text/html')) return null;
+        verificationKey = await response.json();
     } catch {
         return null;
     }
 
     try {
         const snarkjs = await loadSnarkjs();
-        return await snarkjs.groth16.verify(vkey, publicSignals, proof);
+        return await snarkjs.groth16.verify(
+            verificationKey,
+            publicSignals,
+            proof
+        );
     } catch (error) {
         console.error('Local proof verification failed:', error);
         return false;

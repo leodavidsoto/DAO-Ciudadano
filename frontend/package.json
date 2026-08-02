@@ -43,6 +43,7 @@
     "input-otp": "^1.4.2",
     "lucide-react": "^0.468.0",
     "next-themes": "^0.4.6",
+    "poseidon-lite": "0.3.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.0.0",
     "react-day-picker": "^9.4.4",
@@ -59,10 +60,16 @@
     "zod": "^3.24.1"
   },
   "scripts": {
+    "prestart": "npm run zk:sync",
     "start": "craco start",
+    "prebuild": "npm run zk:sync",
     "build": "GENERATE_SOURCEMAP=false craco build",
     "test": "craco test",
-    "audit": "npm audit --audit-level=high"
+    "audit": "npm audit --audit-level=high",
+    "zk:sync": "node scripts/sync-zk-artifacts.mjs"
+  },
+  "overrides": {
+    "underscore": "1.13.8"
   },
   "browserslist": {
     "production": [
