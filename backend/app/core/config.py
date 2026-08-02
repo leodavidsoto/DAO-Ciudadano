@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     ERC4337_ACCOUNT_ADDRESS: str = os.environ.get('ERC4337_ACCOUNT_ADDRESS', '')
     # SimpleAccount | safe | kernel. Determina como se firma la UserOperation.
     ERC4337_ACCOUNT_IMPLEMENTATION: str = os.environ.get('ERC4337_ACCOUNT_IMPLEMENTATION', '')
+    # Direccion del Safe4337Module. Es el verifyingContract del dominio
+    # EIP-712: si falta o es otra, el modulo rechaza la firma.
+    SAFE_4337_MODULE_ADDRESS: str = os.environ.get('SAFE_4337_MODULE_ADDRESS', '')
+    # Llave del propietario de la Safe. Solo sirve para umbral 1.
+    SAFE_OWNER_PRIVATE_KEY: str = os.environ.get('SAFE_OWNER_PRIVATE_KEY', '')
     # El nombre del metodo de patrocinio varia entre proveedores.
     PAYMASTER_SPONSOR_METHOD: str = os.environ.get('PAYMASTER_SPONSOR_METHOD', 'pm_sponsorUserOperation')
 

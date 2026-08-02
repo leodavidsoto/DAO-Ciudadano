@@ -20,22 +20,23 @@ colisiones de nonce. El EntryPoint usa nonces bidimensionales (`key`, `seq`),
 de modo que cada worker puede tomar una `key` distinta y enviar en paralelo
 sin coordinación.
 
-DECISIÓN PENDIENTE — bloquea la activación
-──────────────────────────────────────────
-Firmar una UserOperation exige saber **qué implementación de cuenta
-inteligente** la envía: SimpleAccount, Safe y Kernel construyen y validan la
-firma de forma distinta, y usan `initCode`/factory distintos. Esa decisión no
-está tomada y no la debe tomar sola una implementación: define qué contrato
-custodia la capacidad de retransmitir y cómo se recupera si se compromete.
+Cuenta elegida: Safe
+────────────────────
+La firma la implementa `safe_4337`, contra la estructura EIP-712 `SafeOp` que
+valida el Safe4337Module. Solo se admite `safe`: SimpleAccount y Kernel firman
+de otra forma, y aceptar un valor desconocido produciría firmas que el módulo
+rechaza sin explicar por qué.
 
-Por eso `sign_user_operation` no está implementada y este servicio falla
-cerrado. Devolver una firma inventada produciría UserOperations que el
-EntryPoint rechaza con `AA24 signature error` — un fallo opaco y caro de
-diagnosticar. Es el mismo criterio que `OnChainMembershipVerifier`.
+Limitación conocida: se firma con UNA llave, así que solo sirve para una Safe
+de umbral 1. Con umbral mayor hacen falta varias firmas concatenadas y
+ordenadas por dirección; el módulo lo rechaza ruidosamente, no en silencio.
 
-NO VERIFICADO CONTRA UN BUNDLER REAL: no hay credenciales ni cuenta desplegada
-en este entorno. El transporte está escrito contra la especificación
-(EntryPoint v0.7), pero no se ejecutó ningún envío.
+NO VERIFICADO CONTRA UN BUNDLER REAL: este entorno no tiene credenciales de
+Pimlico ni una Safe desplegada. La construcción sigue la especificación de
+EntryPoint v0.7 y Safe4337Module v0.3.0, y está cubierta por tests
+deterministas (typehash, dominio, empaquetado), pero no se ha ejecutado ni un
+solo envío. Por eso el transporte sigue apagado por configuración: el relayer
+EOA, que sí está probado, continúa siendo el camino activo.
 """
 import logging
 from dataclasses import dataclass
@@ -89,8 +90,18 @@ def configuration_errors() -> dict[str, str]:
     # Sin esto no se puede firmar: cada implementación firma distinto.
     if not settings.ERC4337_ACCOUNT_IMPLEMENTATION.strip():
         errors["ERC4337_ACCOUNT_IMPLEMENTATION"] = (
-            "falta: define cómo se firma la UserOperation (decisión pendiente)"
+            "falta: debe ser 'safe' (única implementación soportada)"
         )
+    elif settings.ERC4337_ACCOUNT_IMPLEMENTATION.strip().lower() != "safe":
+        errors["ERC4337_ACCOUNT_IMPLEMENTATION"] = (
+            "solo está implementada 'safe' (Safe4337Module)"
+        )
+
+    if settings.ERC4337_ACCOUNT_IMPLEMENTATION.strip().lower() == "safe":
+        if not settings.SAFE_4337_MODULE_ADDRESS.strip():
+            errors["SAFE_4337_MODULE_ADDRESS"] = "falta"
+        if not settings.SAFE_OWNER_PRIVATE_KEY.strip():
+            errors["SAFE_OWNER_PRIVATE_KEY"] = "falta"
 
     return errors
 
@@ -129,8 +140,12 @@ def status() -> dict:
         "configured": not errors,
         "missing": sorted(errors),
         "entrypoint_version": settings.ERC4337_ENTRYPOINT_VERSION,
-        # Se declara explícito: hoy el gas lo paga la EOA del relayer.
-        "signing_implemented": False,
+        "account_implementation": settings.ERC4337_ACCOUNT_IMPLEMENTATION or None,
+        # La firma Safe está implementada, pero nunca se ejecutó contra un
+        # bundler real. Se declaran por separado a propósito: "implementado"
+        # y "verificado" no son lo mismo, y confundirlos es como se despliega
+        # algo que falla con AA24 en producción.
+        "signing_implemented": True,
         "verified_against_bundler": False,
     }
 
@@ -212,21 +227,47 @@ def sponsor_user_operation(user_op: dict) -> dict:
 
 
 def sign_user_operation(user_op: dict) -> dict:
-    """Firma la UserOperation con la llave de la cuenta inteligente.
+    """Firma la UserOperation con la llave propietaria de la Safe.
 
-    NO IMPLEMENTADA a propósito. Requiere decidir la implementación de cuenta
-    (SimpleAccount / Safe / Kernel): cada una construye el hash y valida la
-    firma de forma distinta, y elegir mal produce `AA24 signature error` en el
-    EntryPoint —un fallo caro y opaco— en vez de un error claro aquí.
+    Delega en `safe_4337`, que construye la estructura EIP-712 `SafeOp` que el
+    Safe4337Module valida. Firmar el `userOpHash` del EntryPoint —el error
+    intuitivo— daría AA24 tras pagar la simulación.
 
-    Devolver una firma cualquiera para "dejarlo andando" sería exactamente la
-    capacidad fingida que este repositorio está eliminando.
+    Solo se admite `safe`: SimpleAccount y Kernel firman distinto, y aceptar
+    un valor desconocido produciría firmas que el módulo rechaza sin decir por
+    qué.
     """
-    raise NotImplementedError(
-        "Falta decidir la implementación de cuenta inteligente ERC-4337 "
-        "(SimpleAccount / Safe / Kernel) antes de poder firmar UserOperations. "
-        "Ver docs/ROADMAP.md D-1 y el ADR correspondiente."
-    )
+    from . import safe_4337
+
+    cfg = config()
+    implementation = cfg.account_implementation.strip().lower()
+    if implementation != "safe":
+        raise PaymasterUnavailable(
+            f"Implementación de cuenta no soportada: {implementation!r}. "
+            "Solo está implementada 'safe' (Safe4337Module)."
+        )
+
+    module_address = settings.SAFE_4337_MODULE_ADDRESS.strip()
+    if not module_address:
+        raise PaymasterUnavailable(
+            "Falta SAFE_4337_MODULE_ADDRESS: sin la dirección del módulo el "
+            "dominio EIP-712 es otro y el módulo rechaza la firma."
+        )
+
+    owner_key = settings.SAFE_OWNER_PRIVATE_KEY.strip()
+    if not owner_key:
+        raise PaymasterUnavailable("Falta SAFE_OWNER_PRIVATE_KEY.")
+
+    try:
+        return safe_4337.sign_user_operation(
+            user_op,
+            private_key=owner_key,
+            entrypoint=cfg.entrypoint,
+            chain_id=settings.SIWE_CHAIN_ID,
+            module_address=module_address,
+        )
+    except safe_4337.SafeSigningError as exc:
+        raise UserOperationError(str(exc)) from exc
 
 
 def send_user_operation(user_op: dict) -> str:
@@ -275,19 +316,63 @@ def mint_via_user_operation(
     call_data = build_mint_calldata(
         wallet_address, proof_a, proof_b, proof_c, nullifier_hash, identity_root
     )
+
     user_op = {
         "sender": cfg.account_address,
+        "nonce": hex(entrypoint_nonce(cfg.account_address)),
         "callData": call_data,
-        # El nonce lo aporta el EntryPoint (bidimensional): resolverlo forma
-        # parte del trabajo que queda junto con la firma.
-        "nonce": None,
     }
 
-    sponsored = sponsor_user_operation(user_op)
-    signed = sign_user_operation(sponsored)  # NotImplementedError, a propósito
-    user_op_hash = send_user_operation(signed)
+    # 1. Estimar gas, 2. pedir patrocinio, 3. firmar, 4. enviar. El orden
+    #    importa: el Paymaster firma sobre los límites de gas ya fijados.
+    user_op = {**user_op, **estimate_user_operation_gas(user_op)}
+    user_op = sponsor_user_operation(user_op)
+    user_op = sign_user_operation(user_op)
+
+    user_op_hash = send_user_operation(user_op)
     receipt = wait_for_receipt(user_op_hash)
 
     if not receipt.get("success"):
         raise UserOperationError("La UserOperation se revirtió on-chain.")
+
+    # El tokenId lo resuelve el llamador leyendo el contrato: el recibo de una
+    # UserOperation no expone el valor de retorno de la llamada interna.
     return user_op_hash, None
+
+
+def entrypoint_nonce(account_address: str, key: int = 0) -> int:
+    """Nonce bidimensional del EntryPoint.
+
+    Cada worker puede usar una `key` distinta y enviar en paralelo sin
+    coordinación: es lo que resuelve el lock de nonce local al proceso que
+    documenta la trampa 11 de HANDOFF.
+    """
+    from web3 import Web3
+
+    cfg = config()
+    w3 = Web3(Web3.HTTPProvider(settings.SEPOLIA_RPC_URL, request_kwargs={"timeout": 10}))
+    entrypoint = w3.eth.contract(
+        address=Web3.to_checksum_address(cfg.entrypoint),
+        abi=[{
+            "inputs": [
+                {"name": "sender", "type": "address"},
+                {"name": "key", "type": "uint192"},
+            ],
+            "name": "getNonce",
+            "outputs": [{"name": "nonce", "type": "uint256"}],
+            "stateMutability": "view",
+            "type": "function",
+        }],
+    )
+    return int(entrypoint.functions.getNonce(
+        Web3.to_checksum_address(account_address), key
+    ).call())
+
+
+def estimate_user_operation_gas(user_op: dict) -> dict:
+    """Pide al bundler los límites de gas de la operación."""
+    cfg = config()
+    result = _rpc("eth_estimateUserOperationGas", [user_op, cfg.entrypoint])
+    if not isinstance(result, dict):
+        raise UserOperationError("El bundler no devolvió una estimación de gas.")
+    return result

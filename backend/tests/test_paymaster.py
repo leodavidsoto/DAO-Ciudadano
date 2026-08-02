@@ -41,11 +41,35 @@ def test_rejects_unknown_entrypoint_version(monkeypatch):
     assert "ERC4337_ENTRYPOINT_VERSION" in pm.configuration_errors()
 
 
-def test_signing_fails_loudly_instead_of_faking_a_signature():
-    """Una firma inventada produciría AA24 en el EntryPoint, no un error claro."""
-    with pytest.raises(NotImplementedError) as exc:
+def test_unsupported_account_implementation_fails_loudly(monkeypatch):
+    """Solo 'safe' está implementada.
+
+    SimpleAccount y Kernel firman de otra forma: aceptarlas produciría firmas
+    que el módulo rechaza con AA24 tras pagar la simulación, en vez de un
+    error claro aquí.
+    """
+    monkeypatch.setattr(settings, "BUNDLER_RPC_URL", "https://bundler.example")
+    monkeypatch.setattr(settings, "ERC4337_ACCOUNT_ADDRESS", "0x" + "11" * 20)
+    monkeypatch.setattr(settings, "ERC4337_ACCOUNT_IMPLEMENTATION", "kernel")
+
+    # Se rechaza ya en la validación de configuración —antes de intentar
+    # firmar— y el error nombra la variable culpable.
+    assert "ERC4337_ACCOUNT_IMPLEMENTATION" in pm.configuration_errors()
+    with pytest.raises(pm.PaymasterUnavailable) as exc:
         pm.sign_user_operation({"sender": "0x" + "11" * 20})
-    assert "cuenta inteligente" in str(exc.value)
+    assert "ERC4337_ACCOUNT_IMPLEMENTATION" in str(exc.value)
+
+
+def test_safe_signing_requires_the_module_address(monkeypatch):
+    """Sin la dirección del módulo el dominio EIP-712 es otro."""
+    monkeypatch.setattr(settings, "BUNDLER_RPC_URL", "https://bundler.example")
+    monkeypatch.setattr(settings, "ERC4337_ACCOUNT_ADDRESS", "0x" + "11" * 20)
+    monkeypatch.setattr(settings, "ERC4337_ACCOUNT_IMPLEMENTATION", "safe")
+    monkeypatch.setattr(settings, "SAFE_OWNER_PRIVATE_KEY", "0x" + "c3" * 32)
+    monkeypatch.setattr(settings, "SAFE_4337_MODULE_ADDRESS", "")
+
+    with pytest.raises(pm.PaymasterUnavailable):
+        pm.sign_user_operation({"sender": "0x" + "11" * 20})
 
 
 def test_mint_refuses_while_disabled():
@@ -60,11 +84,16 @@ def test_mint_refuses_while_disabled():
         )
 
 
-def test_status_does_not_claim_it_works():
-    """El estado debe decir que ni la firma ni la verificación existen."""
+def test_status_separates_implemented_from_verified():
+    """"Implementado" y "verificado" no son lo mismo.
+
+    La firma Safe existe, pero nunca se ejecutó contra un bundler real.
+    Confundir ambas cosas es como se despliega algo que falla con AA24 en
+    producción, así que el estado las declara por separado.
+    """
     status = pm.status()
     assert status["enabled"] is False
-    assert status["signing_implemented"] is False
+    assert status["signing_implemented"] is True
     assert status["verified_against_bundler"] is False
 
 

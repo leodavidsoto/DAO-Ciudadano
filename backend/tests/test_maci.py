@@ -226,3 +226,126 @@ async def test_status_does_not_claim_private_voting_works(client):
     assert body["private_voting"] is False
     assert body["coordinator_configured"] is False
     assert body["tally_proof"] is False
+
+
+# === Votos cifrados ===
+
+CIPHERTEXT = [str(i + 1) for i in range(10)]
+
+
+async def _registered_voter(client):
+    headers = await _mint_member(client, VOTER)
+    await client.post(
+        "/api/maci/keys",
+        json={"wallet_address": VOTER.address, "public_key": _key()},
+        headers=headers,
+    )
+    return headers
+
+
+def _vote(**overrides):
+    body = {
+        "poll_id": "consulta-1",
+        "wallet_address": VOTER.address,
+        "ephemeral_public_key": _key(),
+        "ciphertext": CIPHERTEXT,
+    }
+    body.update(overrides)
+    return body
+
+
+async def test_encrypted_vote_is_queued_with_its_order(client):
+    """El índice y el acumulador fijan el ORDEN, que decide el resultado."""
+    headers = await _registered_voter(client)
+
+    first = await client.post("/api/maci/vote", json=_vote(), headers=headers)
+    second = await client.post("/api/maci/vote", json=_vote(), headers=headers)
+
+    assert first.status_code == 200
+    assert first.json()["index"] == 0
+    assert second.json()["index"] == 1
+    # Encadenar hace que reordenar mensajes cambie el acumulador.
+    assert first.json()["message_chain"] != second.json()["message_chain"]
+
+
+async def test_vote_requires_a_registered_maci_key(client):
+    """Sin llave registrada el coordinador no puede procesar la papeleta."""
+    headers = await _mint_member(client, VOTER)
+
+    response = await client.post("/api/maci/vote", json=_vote(), headers=headers)
+
+    assert response.status_code == 409
+    assert "llave MACI" in response.json()["detail"]
+
+
+async def test_vote_cannot_be_cast_for_another_wallet(client):
+    headers = await _registered_voter(client)
+
+    response = await client.post(
+        "/api/maci/vote",
+        json=_vote(wallet_address=OUTSIDER.address),
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+
+
+async def test_ciphertext_shape_is_enforced(client):
+    """El circuito espera exactamente 10 elementos de campo."""
+    headers = await _registered_voter(client)
+
+    short = await client.post(
+        "/api/maci/vote", json=_vote(ciphertext=["1", "2"]), headers=headers
+    )
+    out_of_field = await client.post(
+        "/api/maci/vote",
+        json=_vote(ciphertext=[str(maci_service.BN254_FIELD)] + CIPHERTEXT[1:]),
+        headers=headers,
+    )
+
+    assert short.status_code == 422
+    assert out_of_field.status_code == 422
+
+
+async def test_a_vote_and_a_key_change_are_indistinguishable(client):
+    """El servidor no puede separar un voto de su anulación.
+
+    Si pudiera, un coaccionador podría exigir la prueba de cuál fue cuál — y
+    esa imposibilidad es la garantía central de MACI.
+    """
+    headers = await _registered_voter(client)
+
+    await client.post("/api/maci/vote", json=_vote(), headers=headers)
+    await client.post("/api/maci/vote", json=_vote(), headers=headers)
+
+    stored = await maci_service.maci_messages_collection().find(
+        {"poll_id": "consulta-1"}
+    ).to_list(length=10)
+
+    assert len(stored) == 2
+    # Ningún campo declara el tipo de mensaje: solo texto cifrado y su orden.
+    for message in stored:
+        assert "vote" not in message
+        assert "choice" not in message
+        assert "message_type" not in message
+
+
+# === Recuento ===
+
+async def test_tally_never_publishes_an_unverifiable_result(client):
+    """Un conteo sin prueba no es un resultado: es un número no verificable."""
+    headers = await _registered_voter(client)
+    await client.post("/api/maci/vote", json=_vote(), headers=headers)
+
+    body = (await client.get("/api/maci/polls/consulta-1/tally")).json()
+
+    assert body["message_count"] == 1
+    assert body["tallied"] is False
+    assert body["results"] is None
+    assert body["tally_proof_verified"] is False
+
+
+async def test_tally_of_an_unknown_poll_is_empty_not_invented(client):
+    body = (await client.get("/api/maci/polls/no-existe/tally")).json()
+    assert body["message_count"] == 0
+    assert body["results"] is None

@@ -24,8 +24,10 @@ Detalles que importan y no son evidentes:
   historial para que el coordinador pueda reconstruir el orden.
 
 Lo que este módulo NO hace todavía, y por eso no se anuncia como votación
-privada: no cifra papeletas, no encola mensajes, no hay coordinador
-desplegado ni prueba de tally. Ver docs/ROADMAP.md fase 3.
+privada: no cifra ni descifra nada (el cifrado ocurre en el cliente y solo el
+coordinador puede revertirlo), no hay coordinador desplegado y no existe el
+circuito de tally. Encola mensajes y conserva su orden, que es todo lo que un
+servidor puede hacer sin poder leerlos. Ver docs/ROADMAP.md fase 3.
 """
 import logging
 from dataclasses import dataclass
@@ -191,3 +193,108 @@ async def get_public_key(wallet_address: str) -> Optional[MaciKeyRecord]:
 
 async def registered_key_count() -> int:
     return await maci_keys_collection().count_documents({})
+
+
+# === Mensajes cifrados y recuento (ADR-001, D-3) ===============================
+#
+# Un mensaje MACI es texto cifrado hacia la llave del coordinador. El backend
+# NO puede leerlo — ese es justamente el punto — así que su papel se limita a:
+# validar la forma, conservar el ORDEN y exponer el acumulador.
+#
+# El orden decide el resultado: en MACI vale el último mensaje válido de cada
+# llave, y así es como un votante coaccionado anula en secreto lo prometido.
+
+# El tamaño lo fija el circuito de MACI: 10 elementos de campo por mensaje.
+CIPHERTEXT_LENGTH = 10
+
+
+def maci_messages_collection():
+    return get_collection("maci_messages")
+
+
+def maci_polls_collection():
+    return get_collection("maci_polls")
+
+
+class MaciMessageError(ValueError):
+    """El mensaje cifrado no tiene la forma que espera el circuito."""
+
+
+def validate_ciphertext(ciphertext) -> list[int]:
+    """Cada elemento debe caber en el campo escalar. No se lee el contenido."""
+    if not isinstance(ciphertext, (list, tuple)):
+        raise MaciMessageError("El texto cifrado debe ser una lista.")
+    if len(ciphertext) != CIPHERTEXT_LENGTH:
+        raise MaciMessageError(
+            f"El texto cifrado debe tener {CIPHERTEXT_LENGTH} elementos."
+        )
+    parsed = []
+    for index, value in enumerate(ciphertext):
+        try:
+            element = int(str(value).strip())
+        except (TypeError, ValueError):
+            raise MaciMessageError(f"El elemento {index} no es un entero decimal.")
+        if element < 0 or element >= BN254_FIELD:
+            raise MaciMessageError(f"El elemento {index} está fuera del campo BN254.")
+        parsed.append(element)
+    return parsed
+
+
+async def publish_message(
+    poll_id: str,
+    wallet_address: str,
+    ephemeral_x,
+    ephemeral_y,
+    ciphertext,
+) -> dict:
+    """Encola un mensaje cifrado y devuelve su posición y el acumulador.
+
+    El acumulador encadena el hash anterior con el mensaje, igual que
+    MACICoordinator.publishMessage on-chain, para que ambos puedan
+    contrastarse. Se guarda `index` porque el orden es parte del resultado.
+    """
+    import hashlib
+
+    address = wallet_address.lower()
+    eph_x, eph_y = validate_public_key(ephemeral_x, ephemeral_y)
+    parsed = validate_ciphertext(ciphertext)
+
+    poll = await maci_polls_collection().find_one({"poll_id": poll_id})
+    previous_chain = poll["message_chain"] if poll else "0" * 64
+    index = int(poll["message_count"]) if poll else 0
+
+    payload = ":".join(
+        [previous_chain, str(eph_x), str(eph_y)] + [str(v) for v in parsed]
+    )
+    chain = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    await maci_messages_collection().insert_one({
+        "poll_id": poll_id,
+        # Se guarda la wallet para exigir membresía e inscripción, no para
+        # vincularla con el contenido: el mensaje es ilegible sin la llave del
+        # coordinador, y el emisor de un voto y el de una anulación son
+        # indistinguibles.
+        "wallet_address": address,
+        "index": index,
+        "ephemeral_x": str(eph_x),
+        "ephemeral_y": str(eph_y),
+        "ciphertext": [str(v) for v in parsed],
+        "message_chain": chain,
+        "published_at": datetime.now(timezone.utc),
+    })
+    await maci_polls_collection().update_one(
+        {"poll_id": poll_id},
+        {"$set": {"message_chain": chain, "message_count": index + 1}},
+        upsert=True,
+    )
+
+    return {"index": index, "message_chain": chain}
+
+
+async def poll_state(poll_id: str) -> dict:
+    poll = await maci_polls_collection().find_one({"poll_id": poll_id})
+    return {
+        "poll_id": poll_id,
+        "message_count": int(poll["message_count"]) if poll else 0,
+        "message_chain": poll["message_chain"] if poll else "0" * 64,
+    }
