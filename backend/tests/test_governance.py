@@ -368,13 +368,32 @@ async def test_expired_proposals_are_resolved(client):
     # Reached quorum with majority in favor -> passed
     await proposals_collection().update_one(
         {"id": passed_id},
-        {"$set": {"ends_at": past, "votes_for": 7, "votes_against": 3, "total_votes": 10}},
+        {"$set": {"ends_at": past}},
     )
+    await votes_collection().insert_one({
+        "proposal_id": passed_id,
+        "voter_address": ADDR_A,
+        "vote": "for",
+        "weight": 7
+    })
+    await votes_collection().insert_one({
+        "proposal_id": passed_id,
+        "voter_address": ADDR_B,
+        "vote": "against",
+        "weight": 3
+    })
+
     # No quorum -> expired
     await proposals_collection().update_one(
         {"id": expired_id},
-        {"$set": {"ends_at": past, "votes_for": 1, "total_votes": 1}},
+        {"$set": {"ends_at": past}},
     )
+    await votes_collection().insert_one({
+        "proposal_id": expired_id,
+        "voter_address": ADDR_A,
+        "vote": "for",
+        "weight": 1
+    })
 
     listing = (await client.get("/api/governance/proposals")).json()
     by_id = {p["id"]: p["status"] for p in listing}
