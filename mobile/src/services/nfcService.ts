@@ -157,6 +157,44 @@ class NFCService {
     }
 
     /**
+     * Read Chilean ID card using ISO-DEP with PACE protocol
+     * This is the scaffolding for the native module implementation described in ADR-003.
+     */
+    async readChileanIDPACE(can: string): Promise<NFCReadResult> {
+        try {
+            if (!this.isInitialized) {
+                await this.initialize();
+            }
+
+            await NfcManager.requestTechnology(NfcTech.IsoDep);
+
+            const tag = await NfcManager.getTag();
+            const serialNumber = tag?.id || 'unknown';
+
+            // TODO (Fase 4.2): Invocar NativeModules.PassportReader.startPACESession(can)
+            // Aquí es donde el puente nativo (Kotlin/Swift) hará el handshake PACE
+            // y validará la cadena de confianza del SOD contra CSCA Chile.
+            
+            return {
+                success: false,
+                identityVerified: false,
+                serialNumber,
+                error: 'MÓDULO NATIVO REQUERIDO: La autenticación PACE y validación del SOD ' +
+                       'requiere invocación a librerías criptográficas nativas. Consulta el ADR-003.',
+            };
+        } catch (error: any) {
+            console.error('PACE error:', error);
+            return {
+                success: false,
+                identityVerified: false,
+                error: error.message || 'Error estableciendo PACE',
+            };
+        } finally {
+            await this.cleanup();
+        }
+    }
+
+    /**
      * Lectura simple de un tag NDEF.
      *
      * ATENCIÓN: esto lee CUALQUIER tag NFC (una tarjeta de transporte, una

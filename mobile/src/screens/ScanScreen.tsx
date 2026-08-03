@@ -12,6 +12,7 @@ import {
     Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { TextInput } from 'react-native-gesture-handler';
 import nfcService from '../services/nfcService';
 
 interface ScanScreenProps {
@@ -22,6 +23,7 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
     const [isScanning, setIsScanning] = useState(false);
     const [nfcEnabled, setNfcEnabled] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [can, setCan] = useState('');
     const pulseAnim = React.useRef(new Animated.Value(1)).current;
 
     const checkNFCStatus = useCallback(async () => {
@@ -83,12 +85,11 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
         setIsScanning(true);
         setError(null);
         try {
-            // OJO: readSimpleTag() lee cualquier tag NFC y NO verifica
-            // identidad (identityVerified siempre false). La lectura
-            // autenticada de la cédula (BAC sobre DG1/EF.SOD) está en
-            // desarrollo; hasta entonces esto sirve para comprobar que el
-            // hardware NFC responde, no para registrar a nadie.
-            const result = await nfcService.readSimpleTag();
+            // Intentar leer la cédula usando PACE con el CAN proporcionado.
+            // Si el CAN no se provee o es solo modo diagnóstico, se puede usar readSimpleTag().
+            const result = can.length === 6 
+                ? await nfcService.readChileanIDPACE(can) 
+                : await nfcService.readSimpleTag();
 
             if (result.success && result.data) {
                 navigation.navigate('Success', {
@@ -97,7 +98,7 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                     identityVerified: result.identityVerified,
                 });
             } else {
-                setError(result.error || 'Error al leer el tag NFC');
+                setError(result.error || 'Error al leer la cédula mediante PACE');
             }
         } catch (err: any) {
             setError(err.message || 'Error inesperado');
@@ -121,8 +122,24 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                 </Text>
             </View>
 
-            {/* Scanner Area */}
+            {/* Scanner Area & CAN Input */}
             <View style={styles.scannerContainer}>
+                {!isScanning && (
+                    <View style={styles.inputContainer}>
+                        <Text style={styles.inputLabel}>Número de Acceso a la Tarjeta (CAN)</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="Ej: 123456"
+                            placeholderTextColor="#555"
+                            value={can}
+                            onChangeText={setCan}
+                            keyboardType="number-pad"
+                            maxLength={6}
+                        />
+                        <Text style={styles.inputHint}>Ingresa los 6 dígitos impresos en el frente de tu cédula.</Text>
+                    </View>
+                )}
+
                 <Animated.View
                     style={[
                         styles.scanCircle,
@@ -130,13 +147,14 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                             transform: [{ scale: pulseAnim }],
                             backgroundColor: isScanning ? '#00FFFF30' : '#00FFFF10',
                             borderColor: isScanning ? '#00FFFF' : '#00FFFF50',
+                            marginTop: isScanning ? 0 : 20,
                         },
                     ]}
                 >
                     <View style={styles.innerCircle}>
                         <Text style={styles.nfcIcon}>📡</Text>
                         <Text style={styles.scanText}>
-                            {isScanning ? 'Escaneando...' : 'Listo para escanear'}
+                            {isScanning ? 'Escaneando PACE...' : 'Listo'}
                         </Text>
                     </View>
                 </Animated.View>
@@ -223,6 +241,33 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
+        width: '100%',
+    },
+    inputContainer: {
+        width: '80%',
+        marginBottom: 20,
+    },
+    inputLabel: {
+        color: '#00FFFF',
+        fontSize: 14,
+        marginBottom: 8,
+    },
+    input: {
+        backgroundColor: '#0a0a2a',
+        borderWidth: 1,
+        borderColor: '#00FFFF50',
+        borderRadius: 8,
+        color: '#FFF',
+        fontSize: 24,
+        padding: 15,
+        textAlign: 'center',
+        letterSpacing: 4,
+    },
+    inputHint: {
+        color: '#888',
+        fontSize: 12,
+        marginTop: 8,
+        textAlign: 'center',
     },
     scanCircle: {
         width: 250,
