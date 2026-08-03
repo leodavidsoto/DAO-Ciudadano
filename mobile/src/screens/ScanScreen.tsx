@@ -10,9 +10,9 @@ import {
     TouchableOpacity,
     Animated,
     Alert,
+    TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { TextInput } from 'react-native-gesture-handler';
 import nfcService from '../services/nfcService';
 
 interface ScanScreenProps {
