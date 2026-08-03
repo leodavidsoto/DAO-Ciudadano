@@ -264,10 +264,17 @@ def feature_status() -> dict:
     despliegue. Esto sí, y sin adornos: cada entrada refleja configuración
     real, no intención.
     """
-    from ..services import chain_service, paymaster_service
+    from ..services import chain_service, paymaster_service, treasury_service
 
     erc4337 = paymaster_service.status()
     return {
+        "treasury": {
+            # Configuración, no sonda: el health check no debe golpear el RPC
+            # ni la API de precios en cada llamada.
+            "available": treasury_service.is_configured(),
+            "missing": sorted(treasury_service.configuration_errors()),
+            "price_provider": settings.ETH_PRICE_PROVIDER.strip() or "none",
+        },
         "membership_verification": {
             "source": settings.MEMBERSHIP_SOURCE,
             # Solo comprueba configuración: no se golpea el RPC en cada

@@ -29,7 +29,7 @@ from ..core.security_middleware import (
 )
 from ..core.config import settings
 from ..services.governance_service import MAX_DELEGATION_DEPTH, governance_service
-from ..services import ballot_service
+from ..services import ballot_service, treasury_service
 from ..services.membership_verifier import MembershipVerificationUnavailable
 from .deps import (
     MEMBERSHIP_UNAVAILABLE_DETAIL,
@@ -783,27 +783,26 @@ class TreasuryTransaction(BaseModel):
     timestamp: datetime
 
 
-# NOTE: On-chain balance reading is not wired yet (see ROADMAP Fase 3.6).
-# Until a real Safe multisig / RPC source is connected, treasury balances
-# are reported as unconfigured instead of fabricated values.
-
-
 @router.get("/treasury")
 async def get_treasury():
-    """Get treasury overview.
+    """Overview de la tesorería leído de fuentes reales (ROADMAP 3.6).
 
-    Balances are read from real sources only. While no on-chain source is
-    configured, `balances` is null and `configured` is false — never mock data.
+    El balance sale de `eth_getBalance` sobre el Safe configurado y el precio
+    de una API pública; ningún número vive en el código. Los tres estados son
+    distintos y se distinguen en la respuesta:
+
+    * sin configurar -> `configured: false`, `balances: null`
+    * configurada pero el RPC no responde -> `configured: true`,
+      `balances: null` y `error` con el motivo
+    * leída -> `balances` con el valor real, que puede ser 0
+
+    `total_usd_value` es `null` fuera de mainnet: el ETH de una testnet no
+    tiene precio de mercado y ponerle uno sería fabricar dinero.
     """
+    snapshot = await treasury_service.snapshot()
     tx_count = await treasury_transactions_collection().count_documents({})
 
-    return {
-        "configured": False,
-        "balances": None,
-        "total_eth_value": None,
-        "total_usd_value": None,
-        "transaction_count": tx_count
-    }
+    return {**snapshot, "transaction_count": tx_count}
 
 
 @router.get("/treasury/transactions", response_model=List[TreasuryTransaction])
@@ -829,12 +828,62 @@ async def get_treasury_transactions(
     return transactions
 
 
+async def _runway_months(snapshot: dict) -> tuple[Optional[float], Optional[str]]:
+    """Meses de autonomía al ritmo de gasto observado, o `None` y el motivo.
+
+    Se calcula solo cuando se puede hacer sin suposiciones:
+
+    * hace falta un balance real leído de la cadena,
+    * y gastos registrados **en la misma moneda** que ese balance. Mezclar ETH
+      con otras monedas exigiría un precio por cada una; en vez de inventar la
+      conversión, se devuelve `null` diciendo por qué.
+
+    El ritmo es el gasto total dividido por los meses observados, con un suelo
+    de un mes: sin él, tres gastos del mismo día darían un "ritmo mensual"
+    enorme y un runway de casi cero que no describe nada.
+    """
+    balance_eth = snapshot.get("total_eth_value")
+    if balance_eth is None:
+        return None, "no hay un balance on-chain disponible"
+
+    cursor = treasury_transactions_collection().find(
+        {"type": "expense"}, {"_id": 0, "amount": 1, "currency": 1, "timestamp": 1}
+    )
+    expenses = await cursor.to_list(length=1000)
+    if not expenses:
+        return None, "no hay gastos registrados"
+
+    other_currency = {
+        (e.get("currency") or "ETH").upper() for e in expenses
+    } - {"ETH"}
+    if other_currency:
+        return None, (
+            "hay gastos en " + ", ".join(sorted(other_currency))
+            + " y no se convierten sin un precio por moneda"
+        )
+
+    total_expense = sum(float(e.get("amount") or 0) for e in expenses)
+    if total_expense <= 0:
+        return None, "el gasto registrado es cero"
+
+    stamps = [e["timestamp"] for e in expenses if e.get("timestamp")]
+    span_days = 0.0
+    if len(stamps) >= 2:
+        oldest, newest = min(stamps), max(stamps)
+        span_days = (newest - oldest).total_seconds() / 86400
+
+    months_observed = max(1.0, span_days / 30.0)
+    monthly_burn = total_expense / months_observed
+    return round(balance_eth / monthly_burn, 1), None
+
+
 @router.get("/treasury/analytics")
 async def get_treasury_analytics():
     """Get treasury analytics computed from real recorded transactions.
 
-    Runway is null until a real balance source is configured (it cannot be
-    computed without a current balance).
+    `runway_months` ya no es `null` por definición: se calcula contra el
+    balance real cuando las monedas permiten hacerlo sin suponer nada, y
+    `runway_unavailable_reason` explica el caso contrario.
     """
     # Aggregate income/expenses from actual stored transactions
     pipeline = [
@@ -870,10 +919,14 @@ async def get_treasury_analytics():
             categories[cat] = {"income": 0, "expense": 0}
         categories[cat][tx_type] = r["total"]
 
+    snapshot = await treasury_service.snapshot()
+    runway, runway_reason = await _runway_months(snapshot)
+
     return {
         "total_income": income,
         "total_expenses": expenses,
         "net_flow": income - expenses,
         "by_category": categories,
-        "runway_months": None  # Requires a configured on-chain balance source
+        "runway_months": runway,
+        "runway_unavailable_reason": runway_reason,
     }

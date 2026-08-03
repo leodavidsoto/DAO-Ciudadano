@@ -182,15 +182,17 @@ Cosas que te van a costar tiempo si no las sabes de antemano:
 
 6. **`OnChainMembershipVerifier` ya consulta la cadena (ROADMAP 3.1), pero el despliegue sigue en `MEMBERSHIP_SOURCE=mongo`.** Cambiarlo a `onchain` solo tiene sentido cuando el contrato tenga membresías reales: hoy `totalSupply()` sigue en 0 y todo el mundo recibiría 403. Cuando la cadena no responde, la respuesta es **503, nunca 403** — `chain_service.has_membership` lanza `ChainReadError` en vez de devolver `False`. No lo "simplifiques" a un `except: return False`: convertiría una caída del RPC en la afirmación "esta persona no es miembro".
 
-7. **La delegación no es transitiva y es una decisión, no un olvido.** Está razonada en `governance_service.py`. Si la cambias, cambia también el razonamiento. Lo mismo vale para el campo `delegators` de cada papeleta: no es metadata decorativa, es lo que permite recomputar el `weight` y lo único que queda cuando alguien revoca una delegación cuyo peso su delegado ya emitió (P-61). Si lo quitas, el doble conteo vuelve en silencio.
+7. **La tesorería no le pone precio en dólares al ETH de testnet.** Si `chain_id != 1`, `total_usd_value` es `null` aunque haya proveedor de precio (`treasury_service.py`). No lo "arregles" quitando la comprobación: el ETH de Sepolia no vale nada y el panel estaría mostrando dinero inventado. Por la misma razón la respuesta declara `assets_covered: ["ETH"]` — los ERC-20 aún no se leen y el total no debe parecer completo.
 
-8. **`CORS_ORIGINS` y `REACT_APP_BACKEND_URL` deben cambiarse juntas.** Si no coinciden, el navegador bloquea todo y la app aparece rota sin error visible en pantalla. `CORS_ORIGIN_REGEX` sirve solo fuera de producción; producción exige orígenes HTTPS exactos y las aliases deben redirigir al dominio canónico.
+8. **La delegación no es transitiva y es una decisión, no un olvido.** Está razonada en `governance_service.py`. Si la cambias, cambia también el razonamiento. Lo mismo vale para el campo `delegators` de cada papeleta: no es metadata decorativa, es lo que permite recomputar el `weight` y lo único que queda cuando alguien revoca una delegación cuyo peso su delegado ya emitió (P-61). Si lo quitas, el doble conteo vuelve en silencio.
 
-9. **Arranque en frío:** Render free suspende el servicio tras ~15 min sin tráfico; la primera petición tarda 30–60 s. Además, si `MONGO_URL` está mal, el arranque bloquea 30 s creando índices antes de continuar con un warning.
+9. **`CORS_ORIGINS` y `REACT_APP_BACKEND_URL` deben cambiarse juntas.** Si no coinciden, el navegador bloquea todo y la app aparece rota sin error visible en pantalla. `CORS_ORIGIN_REGEX` sirve solo fuera de producción; producción exige orígenes HTTPS exactos y las aliases deben redirigir al dominio canónico.
 
-10. **Los procesos en segundo plano no sobreviven** entre comandos en entornos de sandbox. Si un `npm install` parece colgado, comprueba que el proceso siga vivo antes de esperarlo.
+10. **Arranque en frío:** Render free suspende el servicio tras ~15 min sin tráfico; la primera petición tarda 30–60 s. Además, si `MONGO_URL` está mal, el arranque bloquea 30 s creando índices antes de continuar con un warning.
 
-11. **El lock de nonce del minter es local al proceso.** Antes de escalar a varias
+11. **Los procesos en segundo plano no sobreviven** entre comandos en entornos de sandbox. Si un `npm install` parece colgado, comprueba que el proceso siga vivo antes de esperarlo.
+
+12. **El lock de nonce del minter es local al proceso.** Antes de escalar a varias
     instancias debe existir un coordinador distribuido. También hay que alinear el
     timeout del cliente (30 s) con la espera de recibo del backend (hasta 120 s).
     *Salida prevista:* el transporte ERC-4337 usa los nonces bidimensionales del

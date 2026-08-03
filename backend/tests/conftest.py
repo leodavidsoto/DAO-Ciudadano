@@ -36,8 +36,17 @@ for _external in (
     "MACI_COORDINATOR_ADDRESS",
     "IDENTITY_ISSUER_PRIVATE_KEY",
     "IDENTITY_PROVIDER",
+    # Tesorería (ROADMAP 3.6): sin esto, un `.env` con un Safe real haría que
+    # la suite intentara hablar con un RPC y con la API de precios.
+    "TREASURY_SAFE_ADDRESS",
+    "TREASURY_RPC_URL",
+    "ETH_PRICE_API_URL",
 ):
     os.environ[_external] = ""
+
+# El proveedor de precio se apaga por defecto en la suite: un test que quiera
+# precio lo activa y sustituye la llamada de red explícitamente.
+os.environ["ETH_PRICE_PROVIDER"] = "none"
 
 import httpx
 import asyncio

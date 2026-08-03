@@ -83,6 +83,33 @@ class Settings(BaseSettings):
     SBT_CONTRACT_ADDRESS: str = os.environ.get('SBT_CONTRACT_ADDRESS', '')
     MINTER_PRIVATE_KEY: str = os.environ.get('MINTER_PRIVATE_KEY', '')
 
+    # === Tesorería real (ROADMAP 3.6, app/services/treasury_service.py) ===
+    # Dirección del Safe cuyo balance se lee. Vacía = la tesorería se reporta
+    # como no configurada, nunca con números inventados.
+    TREASURY_SAFE_ADDRESS: str = os.environ.get('TREASURY_SAFE_ADDRESS', '')
+    # RPC propio de la tesorería. Vacío = se reutiliza SEPOLIA_RPC_URL. Se
+    # separa porque el Safe puede vivir en otra red que el contrato del SBT.
+    TREASURY_RPC_URL: str = os.environ.get('TREASURY_RPC_URL', '')
+    # El endpoint es público: sin caché, refrescar el dashboard en bucle
+    # convierte a cualquier visitante en un amplificador contra el RPC.
+    TREASURY_CACHE_TTL_SECONDS: int = int(
+        os.environ.get('TREASURY_CACHE_TTL_SECONDS', '60')
+    )
+    # coingecko | binance | none. `none` deshabilita el precio: los balances
+    # se siguen publicando en ETH, que es el dato que sí se leyó de la cadena.
+    ETH_PRICE_PROVIDER: str = os.environ.get('ETH_PRICE_PROVIDER', 'coingecko')
+    # Override del endpoint (proxy propio, plan de pago, mirror). Debe
+    # responder el mismo JSON que el proveedor declarado arriba.
+    ETH_PRICE_API_URL: str = os.environ.get('ETH_PRICE_API_URL', '')
+    ETH_PRICE_CACHE_TTL_SECONDS: int = int(
+        os.environ.get('ETH_PRICE_CACHE_TTL_SECONDS', '300')
+    )
+    # Cuánto se admite servir el último precio conocido marcándolo `stale`
+    # cuando el proveedor falla. Pasado esto, el precio se reporta ausente.
+    ETH_PRICE_STALE_MAX_SECONDS: int = int(
+        os.environ.get('ETH_PRICE_STALE_MAX_SECONDS', '3600')
+    )
+
     # === Emisor de credenciales ZK (ADR-001, D-2) ===
     # Llave que firma la credencial EIP-191 que el cliente verifica contra
     # REACT_APP_ZK_IDENTITY_ISSUER_ADDRESS. Distinta de MINTER_PRIVATE_KEY a

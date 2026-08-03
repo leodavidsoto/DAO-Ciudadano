@@ -855,3 +855,63 @@ La tarea 3.4 del ROADMAP pedía llamar también a `check_delegation_chain`. Esa
 función **ya no existe**: se eliminó en 3.8 porque duplicaba en memoria el grafo
 que MongoDB ya tenía. No se reintrodujo; la redacción del ROADMAP era lo
 desactualizado.
+
+---
+
+## Sexta pasada (03-08-2026) — tesorería real (3.6)
+
+`backend/app/services/treasury_service.py` (nuevo). `/governance/treasury`
+devolvía `configured: false` con balances `null`: honesto, pero no era un dato.
+Ahora el balance sale de `eth_getBalance` sobre `TREASURY_SAFE_ADDRESS` y el
+precio de CoinGecko o Binance (`ETH_PRICE_PROVIDER`). Ningún número vive en el
+código.
+
+Verificado contra fuentes reales, no solo con dobles de test:
+
+| Comprobación | Resultado |
+|---|---|
+| Sepolia, `MACICoordinator` | `chain_id` 11155111 leído de la cadena, balance 0.0, USD `null` |
+| Mainnet, dirección pública | 6,632 ETH × 1866,75 USD = 12 380,91 USD |
+| CoinGecko / Binance | 1866,75 y 1868,97 USD/ETH — los dos parsers contra la API real |
+
+### El ETH de testnet no se convierte a USD
+
+Es la decisión de diseño principal. Si `chain_id != 1`, `total_usd_value` es
+`null` con motivo explícito, aunque haya proveedor de precio configurado. Un
+Safe en Sepolia tiene ETH sin valor de mercado: mostrar "$X" en el panel del
+ciudadano sería el mismo fraude que la tesorería ficticia que se borró en la
+Fase 0, esta vez con un decimal creíble. El balance en ETH **sí** se publica,
+porque ese sí se leyó de la cadena.
+
+### Tres estados distinguibles
+
+`sin configurar` (`configured: false`), `configurada pero el RPC no responde`
+(`configured: true`, `balances: null`, `error`) y `leída` (`balances` con su
+valor, que puede ser `0.0`). Un fallo de lectura nunca se degrada a un balance
+de cero, que es la forma más fácil de anunciar una tesorería vacía que no lo
+está.
+
+### Alcance declarado: solo ETH nativo
+
+La respuesta incluye `assets_covered: ["ETH"]`. Los ERC-20 que pueda tener el
+Safe **no se leen todavía**, y sumarlos al total en USD exigiría un precio por
+token. Antes que publicar un total que ignora en silencio la mitad del
+patrimonio, la respuesta dice qué cubre. Queda como pendiente explícito de 3.6.
+
+### Defensas del feed de precio
+
+- Rango de cordura (1 – 1 000 000 USD): un proveedor que cambie de formato o
+  devuelva basura no multiplica el balance por un número cualquiera.
+- Degradación marcada: si el proveedor falla se sirve el último precio conocido
+  con `stale: true` hasta `ETH_PRICE_STALE_MAX_SECONDS`; pasado ese margen, se
+  reporta ausente. Un precio viejo sin etiqueta sería una afirmación falsa.
+- Caché del snapshot: `/governance/treasury` es público y sin autenticar; sin
+  caché, refrescar el panel en bucle convertiría a cualquier visitante en un
+  amplificador contra el RPC y contra la API de precios.
+
+### `runway_months` deja de ser `null` por definición
+
+Se calcula contra el balance real dividido por el gasto mensual observado, con
+un suelo de un mes (sin él, tres gastos del mismo día darían un runway de casi
+cero). Si hay gastos en otra moneda se devuelve `null` con
+`runway_unavailable_reason`, en vez de inventar la conversión.
