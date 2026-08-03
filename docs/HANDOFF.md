@@ -182,7 +182,7 @@ Cosas que te van a costar tiempo si no las sabes de antemano:
 
 6. **`OnChainMembershipVerifier` ya consulta la cadena (ROADMAP 3.1), pero el despliegue sigue en `MEMBERSHIP_SOURCE=mongo`.** Cambiarlo a `onchain` solo tiene sentido cuando el contrato tenga membresías reales: hoy `totalSupply()` sigue en 0 y todo el mundo recibiría 403. Cuando la cadena no responde, la respuesta es **503, nunca 403** — `chain_service.has_membership` lanza `ChainReadError` en vez de devolver `False`. No lo "simplifiques" a un `except: return False`: convertiría una caída del RPC en la afirmación "esta persona no es miembro".
 
-7. **La delegación no es transitiva y es una decisión, no un olvido.** Está razonada en `governance_service.py`. Si la cambias, cambia también el razonamiento.
+7. **La delegación no es transitiva y es una decisión, no un olvido.** Está razonada en `governance_service.py`. Si la cambias, cambia también el razonamiento. Lo mismo vale para el campo `delegators` de cada papeleta: no es metadata decorativa, es lo que permite recomputar el `weight` y lo único que queda cuando alguien revoca una delegación cuyo peso su delegado ya emitió (P-61). Si lo quitas, el doble conteo vuelve en silencio.
 
 8. **`CORS_ORIGINS` y `REACT_APP_BACKEND_URL` deben cambiarse juntas.** Si no coinciden, el navegador bloquea todo y la app aparece rota sin error visible en pantalla. `CORS_ORIGIN_REGEX` sirve solo fuera de producción; producción exige orígenes HTTPS exactos y las aliases deben redirigir al dominio canónico.
 

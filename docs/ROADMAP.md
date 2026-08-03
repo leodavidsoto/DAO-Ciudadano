@@ -139,21 +139,22 @@ Objetivo: cerrar C-5 y hacer que las fases siguientes no rompan lo anterior.
 
 Objetivo: cerrar C-3, A-4, A-5, A-9 y M-10.
 
-> **Estado 02-08-2026:** 3.1–3.5 y 3.7 implementados para propuestas. El verificador
-> on-chain ya existe y se elige con `MEMBERSHIP_SOURCE=onchain`; el despliegue sigue
-> en `mongo` hasta que el contrato tenga membresías reales (`totalSupply()` = 0), con
-> cuarentena demo/legacy en producción. El módulo de elecciones de
-> representantes sigue sin papeletas EIP-712 y votar se bloquea en producción.
-> Pendientes: firma de elecciones, atomicidad/reconciliación del tally, 3.6
-> (tesorería real) y 3.8 (Redis).
+> **Estado 03-08-2026:** 3.1–3.5 y 3.7–3.9 implementados, ya no solo para propuestas:
+> las elecciones comparten papeleta EIP-712, nonce, antifraude y peso delegado.
+> El verificador on-chain existe y se elige con `MEMBERSHIP_SOURCE=onchain`; el
+> despliegue sigue en `mongo` hasta que el contrato tenga membresías reales
+> (`totalSupply()` = 0), con cuarentena demo/legacy en producción. Votar en
+> producción exige `SIGNED_BALLOTS_REQUIRED=true` en ambos módulos; si no, 503.
+> **Pendientes de la fase: 3.6 (tesorería real) y 3.10 (tally transaccional),** que
+> es también el último bloqueador de readiness de esta fase.
 
 | # | Tarea | Criterio de aceptación |
 |---|---|---|
 | 3.1 | ✅ **Completada** (02-08-2026). `OnChainMembershipVerifier` consulta `hasMembership(address)` con caché en memoria (`MEMBERSHIP_CACHE_TTL_SECONDS`, 30 s) e invalidación al mintear. Un RPC caído responde 503, nunca 403. El peso por delegación usa el mismo verificador. | Una dirección sin SBT recibe 403 |
 | 3.2 | ✅ **Completada** (02-08-2026). Propuestas y elecciones firman EIP-712, persisten firma/nonce/chainId y exponen papeletas públicas | Cualquier tercero puede recomputar el resultado sin confiar en el servidor |
 | 3.3 | ✅ **Completada** (02-08-2026). Nonce único compartido por propuestas y elecciones sobre el mismo índice | Reenviar un voto firmado da 409 |
-| 3.4 | **Activar el antifraude** ya escrito: llamar `check_rapid_voting` y `check_delegation_chain` desde los endpoints | Los tests de patrones sospechosos pasan |
-| 3.5 | **Peso de voto por delegación**: `cast_vote` calcula el peso real a partir de las delegaciones recibidas | Delegar cambia el resultado de forma medible |
+| 3.4 | ✅ **Completada** (03-08-2026). `check_rapid_voting` se llama desde propuestas y elecciones y falla cerrado sin almacén. `check_delegation_chain` **ya no existe**: se eliminó en 3.8 porque duplicaba el grafo de MongoDB, y su única heurística propia (profundidad máxima) vive en `delegation_block_reason`, que ahora distingue ciclo de cadena profunda en vez de llamar "circular" a ambos. Cubierto por `tests/test_antifraud.py` (9 tests por HTTP). | Los tests de patrones sospechosos pasan |
+| 3.5 | ✅ **Completada** (03-08-2026). El peso aplicado sale de `contest_vote_weight`, que descuenta a los delegantes que ya votaron por su cuenta en esa consulta, y la papeleta persiste `delegators` para que el peso sea recomputable. Cierra el doble conteo P-61 en sus dos órdenes. | Delegar cambia el resultado de forma medible |
 | 3.6 | **Tesorería real**: leer balances de un Safe multisig vía API o RPC; precio de ETH desde un oráculo o API de precios, no hardcodeado | Ningún número de tesorería es una constante en el código |
 | 3.7 | ✅ **Enrutado y montaje de la UI de gobernanza**: `/` (landing), `/unete` (onboarding) y `/dashboard/{propuestas,elecciones,delegacion,tesoreria}` | Las secciones de gobernanza son alcanzables |
 | 3.8 | ✅ **Completada** (02-08-2026). Rate limiter y antifraude sobre Redis | Ventana deslizante atómica en Lua, historial de votos y penalización progresiva compartidos. Ya no queda estado en memoria de proceso. Degradación a memoria **visible** en `/health/ready`. Verificado con `fakeredis[lua]`, **no** contra un Redis real |

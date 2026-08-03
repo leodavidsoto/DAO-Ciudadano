@@ -800,3 +800,58 @@ Límites reconocidos, no disimulados:
   cierre efectivo de 1.13 depende de que el cliente lo use.
 - `main.py` ya no permite `allow_credentials=True` junto a `CORS_ORIGINS=*`:
   Starlette reflejaría cualquier origen y le entregaría la cookie de sesión.
+
+### P-61 (alta, corregida): el peso delegado se contaba dos veces
+
+`backend/app/routers/governance.py` y `.../elections.py` — el peso aplicado se
+calculaba con `voting_power()`, que suma *todos* los delegantes activos sin
+mirar si ya habían votado. Dos secuencias producían más votos que miembros:
+
+1. **A vota, luego delega en B, luego B vota.** El peso de A se contaba en su
+   propia papeleta y otra vez dentro del peso de B. Comprobado antes de
+   corregir: dos miembros, `votes_for = 3`.
+2. **A delega en B, B vota, A revoca y vota.** La comprobación existente
+   (`get_delegate_of`) solo mira la delegación *vigente*, y al revocar ya no
+   había ninguna. Mismo resultado: `votes_for = 3`.
+
+La segunda no se puede detectar mirando el grafo de delegaciones, porque la
+revocación borra la única evidencia. Por eso la papeleta pasa a persistir
+`delegators`: la lista exacta de direcciones cuyo peso incorporó. Con eso:
+
+- `contest_vote_weight()` excluye a los delegantes que ya votaron en esa misma
+  consulta (cubre la secuencia 1),
+- `weight_already_delegated_away()` encuentra la papeleta que ya gastó el peso
+  de quien intenta votar y responde **409** (cubre la secuencia 2),
+- y el `weight` deja de ser un número que solo el servidor puede justificar:
+  cualquiera puede recomputarlo desde las papeletas públicas, que es el
+  criterio de aceptación de 3.2.
+
+El bloqueo es **por consulta**, no global: el peso gastado en una propuesta no
+impide votar en otra. Cubierto en `tests/test_governance.py` (tres casos) y en
+elecciones.
+
+### P-62 (baja, corregida): "delegación circular" para cadenas que no lo son
+
+`backend/app/services/governance_service.py:167` — `find_delegation_cycle()`
+devolvía un booleano para dos rechazos distintos (ciclo real y cadena de más de
+`MAX_DELEGATION_DEPTH` saltos), y el router respondía "Delegación circular
+detectada" en ambos casos. A quien eligió a alguien con una cadena larga por
+detrás se le afirmaba algo falso sobre lo que había hecho, y el mensaje no
+permitía corregirlo.
+
+Ahora `delegation_block_reason()` devuelve `"cycle"` o `"depth"` y el router
+redacta cada uno por separado. `find_delegation_cycle()` queda como envoltorio.
+
+### 3.4: el antifraude estaba conectado, pero nada lo verificaba
+
+`check_rapid_voting` sí se llamaba desde propuestas y elecciones (A-4 se cerró
+en la tercera pasada), y falla cerrado cuando no hay almacén. Lo que no existía
+era una prueba de que se siguiera llamando: `tests/test_antifraud.py` cubre
+ahora el umbral documentado, que la ventana es por votante y no por propuesta,
+que las elecciones comparten la misma ventana, el fallo cerrado sin almacén, y
+las dos heurísticas del grafo de delegaciones.
+
+La tarea 3.4 del ROADMAP pedía llamar también a `check_delegation_chain`. Esa
+función **ya no existe**: se eliminó en 3.8 porque duplicaba en memoria el grafo
+que MongoDB ya tenía. No se reintrodujo; la redacción del ROADMAP era lo
+desactualizado.

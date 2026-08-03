@@ -28,7 +28,7 @@ from ..core.security_middleware import (
     hash_vote_data
 )
 from ..core.config import settings
-from ..services.governance_service import governance_service
+from ..services.governance_service import MAX_DELEGATION_DEPTH, governance_service
 from ..services import ballot_service
 from ..services.membership_verifier import MembershipVerificationUnavailable
 from .deps import (
@@ -411,6 +411,20 @@ async def cast_vote(
             ),
         )
 
+    # Revocar la delegación no devuelve un peso que el delegado ya emitió en
+    # esta propuesta: la papeleta ya está contada y no se reescribe (P-61).
+    spender = await governance_service.weight_already_delegated_away(
+        request.voter_address, votes_collection, "proposal_id", request.proposal_id
+    )
+    if spender:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Tu peso ya fue emitido en esta propuesta por {spender}, "
+                "a quien habías delegado. No puede contarse dos veces."
+            ),
+        )
+
     try:
         # Get proposal
         proposal = await proposals_collection().find_one({"id": request.proposal_id})
@@ -448,8 +462,11 @@ async def cast_vote(
         if existing_vote:
             return VoteResponse(ok=False, error="Already voted on this proposal")
         
-        # Voting power: own vote + delegations from active members (A-5)
-        weight = await governance_service.voting_power(request.voter_address)
+        # Voting power: own vote + delegations from active members that no
+        # hayan votado ya por su cuenta en ESTA propuesta (A-5, P-61).
+        weight, counted_delegators = await governance_service.contest_vote_weight(
+            request.voter_address, votes_collection, "proposal_id", request.proposal_id
+        )
 
         if request.signature:
             # El nonce firmado debe ser el mismo que se registra: si el
@@ -477,6 +494,9 @@ async def cast_vote(
             "voter_address": request.voter_address,
             "vote": request.vote,
             "weight": weight,
+            # Composición del peso: sin esto `weight` es un número que nadie
+            # puede recomputar desde las papeletas públicas (ROADMAP 3.2).
+            "delegators": counted_delegators,
             "nonce": nonce,
             "vote_hash": vote_hash,
             "timestamp": now,
@@ -620,12 +640,24 @@ async def delegate_vote(
                 ),
             )
 
-        # Authoritative cycle check against the stored delegation graph
-        # (catches a->b->c->a, not just the direct two-way cycle).
-        if await governance_service.find_delegation_cycle(
+        # Authoritative check against the stored delegation graph: detecta
+        # ciclos (a->b->c->a, no solo el de dos nodos) y cadenas demasiado
+        # profundas. Se responden distinto porque son problemas distintos y
+        # solo uno de ellos depende de a quién elegiste.
+        block_reason = await governance_service.delegation_block_reason(
             request.delegator_address, request.delegate_address
-        ):
+        )
+        if block_reason == "cycle":
             return DelegationResponse(ok=False, error="Delegación circular detectada")
+        if block_reason == "depth":
+            return DelegationResponse(
+                ok=False,
+                error=(
+                    f"{request.delegate_address} ya está al final de una cadena "
+                    f"de delegaciones de {MAX_DELEGATION_DEPTH} niveles. "
+                    "Elige a alguien que vote directamente."
+                ),
+            )
 
         # Cap on received delegations, enforced against the database
         delegator_count = await delegations_collection().count_documents({

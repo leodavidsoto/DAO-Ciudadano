@@ -479,6 +479,23 @@ async def vote_in_election(
             ),
         )
 
+    # Igual que en propuestas: revocar no recupera un peso que el delegado ya
+    # emitió en esta elección (P-61).
+    spender = await governance_service.weight_already_delegated_away(
+        request.voter_address,
+        election_votes_collection,
+        "election_id",
+        election_id,
+    )
+    if spender:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Tu peso ya fue emitido en esta elección por {spender}, "
+                "a quien habías delegado. No puede contarse dos veces."
+            ),
+        )
+
     candidacy = await candidacies_collection().find_one({
         "election_id": election_id,
         "candidate_address": request.candidate_address,
@@ -499,7 +516,12 @@ async def vote_in_election(
             error="Ya votaste en esta elección.",
         )
 
-    weight = await governance_service.voting_power(request.voter_address)
+    weight, counted_delegators = await governance_service.contest_vote_weight(
+        request.voter_address,
+        election_votes_collection,
+        "election_id",
+        election_id,
+    )
 
     if request.signature:
         # El nonce firmado tiene que ser el que se registra: si el cliente no
@@ -522,6 +544,7 @@ async def vote_in_election(
         "voter_address": request.voter_address,
         "candidate_address": request.candidate_address,
         "weight": weight,
+        "delegators": counted_delegators,
         "timestamp": datetime.now(timezone.utc),
         # Se persisten para que cualquiera pueda reverificar el resultado sin
         # confiar en el servidor (criterio de aceptación de 3.2).

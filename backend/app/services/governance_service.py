@@ -102,34 +102,105 @@ class GovernanceService:
 
     @classmethod
     async def voting_power(cls, address: str) -> int:
-        """1 (own vote) + active-member delegators. No transitive chains."""
+        """Peso POTENCIAL: 1 (voto propio) + delegantes miembros activos.
+
+        Es lo que se muestra en `/delegations/{address}`. El peso realmente
+        aplicado a una papeleta lo calcula `contest_vote_weight`, que además
+        descuenta a quien ya votó por su cuenta en esa misma consulta.
+        """
         return 1 + len(await cls.get_active_delegators(address))
 
-    @staticmethod
-    async def find_delegation_cycle(delegator: str, delegate: str) -> bool:
-        """True if `delegator -> delegate` would close a cycle in the stored graph.
+    @classmethod
+    async def contest_vote_weight(
+        cls,
+        address: str,
+        collection,
+        contest_field: str,
+        contest_id: str,
+    ) -> tuple[int, list[str]]:
+        """Peso aplicable en UNA consulta y los delegantes que lo componen.
 
-        Walks the delegate's OUTGOING delegations in MongoDB (the direction a
-        vote would travel). This is the authoritative check: the in-memory
-        FraudDetector complements it but loses its state on restart (M-2).
+        Excluye a los delegantes que ya votaron por su cuenta en esa misma
+        consulta. Sin esta exclusión, delegar DESPUÉS de haber votado contaba
+        el mismo peso dos veces: una en la papeleta propia y otra dentro del
+        peso del delegado (P-61).
+
+        Devuelve también la lista de delegantes contados para persistirla en
+        la papeleta: sin ella el `weight` es un número que nadie puede
+        recomputar, y es la mitad de lo que hace falta para detectar el orden
+        inverso (el delegado vota, el delegante revoca y vota).
+        """
+        delegators = await cls.get_active_delegators(address)
+        if not delegators:
+            return 1, []
+
+        cursor = collection().find({
+            contest_field: contest_id,
+            "voter_address": {"$in": delegators},
+        })
+        already_voted = {
+            v["voter_address"] for v in await cursor.to_list(length=len(delegators))
+        }
+        counted = [d for d in delegators if d not in already_voted]
+        return 1 + len(counted), counted
+
+    @staticmethod
+    async def weight_already_delegated_away(
+        address: str,
+        collection,
+        contest_field: str,
+        contest_id: str,
+    ) -> Optional[str]:
+        """Delegado que ya emitió el peso de `address` en esta consulta, o None.
+
+        Cubre el orden que la comprobación de `get_delegate_of` no alcanza: el
+        delegado vota, el delegante revoca la delegación y vota por su cuenta.
+        Al revocar se borra el vínculo, así que la única evidencia que queda de
+        que ese peso ya se gastó es la propia papeleta del delegado.
+        """
+        ballot = await collection().find_one({
+            contest_field: contest_id,
+            "delegators": address.lower(),
+        })
+        return ballot["voter_address"] if ballot else None
+
+    @staticmethod
+    async def delegation_block_reason(delegator: str, delegate: str) -> Optional[str]:
+        """`None` si `delegator -> delegate` es admisible; si no, POR QUÉ no.
+
+        Devuelve `"cycle"` o `"depth"`. Son cosas distintas y el router lo dice
+        distinto: decirle "delegación circular" a quien solo eligió a alguien
+        con una cadena larga por detrás es una afirmación falsa sobre lo que
+        hizo, y quien la lee no puede corregir el problema real.
+
+        Recorre las delegaciones SALIENTES del delegado en MongoDB (la
+        dirección en la que viajaría el voto). Es la comprobación
+        autoritativa: sustituye a la copia en memoria del FraudDetector, que
+        se vaciaba en cada reinicio (M-2, ROADMAP 3.8).
         """
         seen = {delegator.lower()}
         current = delegate.lower()
         for depth in range(MAX_DELEGATION_WALK):
             if current in seen:
-                return True
+                return "cycle"
             seen.add(current)
-            # Cadena demasiado profunda: se trata como sospechosa igual que un
-            # ciclo. Esta es la heurística que antes aportaba el detector en
-            # memoria, ahora sobre el grafo autoritativo.
+            # Cadena demasiado profunda: sospechosa aunque no cierre ciclo.
+            # Esta es la heurística que antes aportaba el detector en memoria,
+            # ahora sobre el grafo real.
             if depth >= MAX_DELEGATION_DEPTH:
-                return True
+                return "depth"
             nxt = await delegations_collection().find_one({"delegator": current})
             if not nxt:
-                return False
+                return None
             current = nxt["delegate"]
-        # Chain longer than the cap: treat as suspicious rather than looping
-        return True
+        # Más larga que el tope del recorrido: se trata como sospechosa en vez
+        # de seguir caminando indefinidamente.
+        return "depth"
+
+    @classmethod
+    async def find_delegation_cycle(cls, delegator: str, delegate: str) -> bool:
+        """Compatibilidad: `True` si la delegación debe rechazarse."""
+        return (await cls.delegation_block_reason(delegator, delegate)) is not None
 
     # === Elections ===
 

@@ -402,11 +402,69 @@ async def test_vote_weight_includes_active_delegators(client):
     assert proposal["votes_for"] == 3
     assert proposal["total_votes"] == 3
 
-    # The applied weight is persisted on the vote record
+    # The applied weight is persisted on the vote record, together with the
+    # delegators that compose it (sin eso el peso no es recomputable).
     record = await votes_collection().find_one({
         "proposal_id": proposal_id, "voter_address": ADDR_C.lower(),
     })
     assert record["weight"] == 3
+    assert sorted(record["delegators"]) == sorted([ADDR_A.lower(), ADDR_B.lower()])
+    assert record["weight"] == 1 + len(record["delegators"])
+
+
+# === Doble conteo del peso delegado (P-61) ===
+
+async def test_delegating_after_voting_does_not_count_the_weight_twice(client):
+    """A vota, después delega en B: su peso ya se gastó en su propia papeleta."""
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    proposal_id = (await _create_proposal(client)).json()["id"]
+
+    assert (await _vote(client, ADDR_A, proposal_id, "for")).json()["ok"] is True
+    assert (await _delegate(client, ADDR_A, ADDR_B)).json()["ok"] is True
+
+    vote_b = await _vote(client, ADDR_B, proposal_id, "for")
+
+    assert vote_b.json()["weight"] == 1  # NO cuenta a A otra vez
+    proposal = (await client.get(f"/api/governance/proposals/{proposal_id}")).json()
+    assert proposal["votes_for"] == 2  # dos miembros, dos votos
+
+
+async def test_revoking_does_not_recover_weight_already_cast_by_the_delegate(client):
+    """B ya emitió el peso de A; revocar después no lo devuelve."""
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    proposal_id = (await _create_proposal(client)).json()["id"]
+
+    await _delegate(client, ADDR_A, ADDR_B)
+    assert (await _vote(client, ADDR_B, proposal_id, "for")).json()["weight"] == 2
+    await _revoke_delegation(client, ADDR_A)
+
+    response = await _vote(client, ADDR_A, proposal_id, "for")
+
+    assert response.status_code == 409
+    assert ADDR_B.lower() in response.json()["detail"]
+    proposal = (await client.get(f"/api/governance/proposals/{proposal_id}")).json()
+    assert proposal["votes_for"] == 2
+
+
+async def test_the_block_is_per_proposal_not_global(client):
+    """El peso gastado en una propuesta no bloquea votar en otra."""
+    await _mint_member(client, ADDR_A)
+    await _mint_member(client, ADDR_B)
+    first = (await _create_proposal(client, title="Primera propuesta")).json()["id"]
+    second = (await _create_proposal(client, title="Segunda propuesta")).json()["id"]
+
+    await _delegate(client, ADDR_A, ADDR_B)
+    await _vote(client, ADDR_B, first, "for")
+    await _revoke_delegation(client, ADDR_A)
+
+    blocked = await _vote(client, ADDR_A, first, "for")
+    allowed = await _vote(client, ADDR_A, second, "for")
+
+    assert blocked.status_code == 409
+    assert allowed.json()["ok"] is True
+    assert allowed.json()["weight"] == 1
 
 
 async def test_delegator_cannot_vote_directly(client):
