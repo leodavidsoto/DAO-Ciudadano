@@ -51,7 +51,7 @@ curl -s -X POST https://ethereum-sepolia-rpc.publicnode.com \
 
 4. **Verifica contra el código y la cadena, no contra la documentación.** El README llegó a afirmar cosas que el código contradecía.
 
-5. **No simules capacidades que no existen.** `OnChainMembershipVerifier` lanza `NotImplementedError` a propósito: es mejor que falle explícito a que mienta.
+5. **No simules capacidades que no existen.** `chain_service.has_membership` lanza `ChainReadError` cuando el RPC falla en vez de devolver `False`, y la votación privada MACI declara `private_voting: false`: es mejor que falle explícito a que mienta.
 
 6. **Todo cambio en `contracts/` necesita tests antes del merge.** Sin excepción: es un contrato de identidad civil.
 
@@ -89,7 +89,7 @@ curl -s -X POST https://ethereum-sepolia-rpc.publicnode.com \
 # Backend
 cd backend && pip install -r requirements-dev.txt
 uvicorn main:app --reload --port 8000
-pytest -q                                   # 157 tests
+pytest -q                                   # 331 tests
 python -m pip_audit -r requirements.txt --strict
 
 # Frontend

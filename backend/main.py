@@ -27,6 +27,8 @@ from app.core.security_middleware import (
     SecurityHeadersMiddleware,
     RequestValidationMiddleware
 )
+from app.routers.deps import MEMBERSHIP_UNAVAILABLE_DETAIL
+from app.services.membership_verifier import MembershipVerificationUnavailable
 from app.routers import auth_router, wallet_router, membership_router, dashboard_router
 from app.routers.governance import router as governance_router
 from app.routers.elections import router as elections_router
@@ -115,14 +117,40 @@ app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # 5. CORS (innermost)
+# La sesión web viaja en una cookie (tarea 1.13), así que el navegador solo la
+# manda si el backend permite credenciales. Con `*` eso no es posible:
+# Starlette reflejaría CUALQUIER origen y le entregaría la cookie de sesión,
+# que es peor que no tener CORS. Producción ya prohíbe `*` en readiness; fuera
+# de producción se degrada a sin-credenciales en vez de abrir ese agujero.
+_cors_origins = settings.cors_origins_list
+_allow_credentials = "*" not in _cors_origins
+if not _allow_credentials:
+    logger.warning(
+        "CORS_ORIGINS='*': las cookies de sesión quedan deshabilitadas entre "
+        "orígenes. Declara orígenes exactos para usar la sesión por cookie."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
+    allow_origins=_cors_origins,
     allow_origin_regex=settings.CORS_ORIGIN_REGEX or None,
-    allow_credentials=True,
+    allow_credentials=_allow_credentials,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+# La fuente de membresía puede estar caída (RPC) en cualquier endpoint que
+# calcule peso de voto o compruebe delegados. 503 con un mensaje honesto: "no
+# pudimos comprobarlo" no es lo mismo que "no eres miembro" (403).
+@app.exception_handler(MembershipVerificationUnavailable)
+async def membership_unavailable_handler(
+    request: Request, exc: MembershipVerificationUnavailable
+):
+    logger.error("Membership verification unavailable: %s", exc)
+    return JSONResponse(
+        status_code=503, content={"detail": MEMBERSHIP_UNAVAILABLE_DETAIL}
+    )
 
 
 # Global exception handler

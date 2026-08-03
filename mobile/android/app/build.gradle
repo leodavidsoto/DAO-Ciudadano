@@ -70,7 +70,22 @@ def enableProguardInReleaseBuilds = false
  * give correct results when using with locales other than en-US. Note that
  * this variant is about 6MiB larger per architecture than default.
  */
-def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
+def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.0.1'
+
+def requestedVersionCode = providers.gradleProperty("daoVersionCode").orNull
+def requestedVersionName = providers.gradleProperty("daoVersionName").orNull
+def resolvedVersionCode = requestedVersionCode ?: "1"
+def resolvedVersionName = requestedVersionName ?: "1.0.0"
+if (!(resolvedVersionCode ==~ /[1-9][0-9]*/)) {
+    throw new GradleException("daoVersionCode must be a positive integer.")
+}
+if (!(resolvedVersionName ==~ /[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?/)) {
+    throw new GradleException("daoVersionName must be a semantic version.")
+}
+
+def allowUnsignedRelease =
+    providers.gradleProperty("daoAllowUnsignedRelease").orElse("false").get() == "true" &&
+    System.getenv("CI") == "true"
 
 // Release credentials must live outside the repository. A release build is
 // rejected unless every value is present; it must never fall back to the
@@ -84,10 +99,21 @@ def releaseSigningEnv = [
 def missingReleaseSigningEnv = releaseSigningEnv.findAll { key, value ->
     value == null || value.trim().isEmpty()
 }.keySet()
+def suppliedReleaseSigningEnv = releaseSigningEnv.findAll { key, value ->
+    value != null && !value.trim().isEmpty()
+}.keySet()
+def releaseSigningPartiallyConfigured =
+    !suppliedReleaseSigningEnv.isEmpty() && !missingReleaseSigningEnv.isEmpty()
 def releaseSigningConfigured = missingReleaseSigningEnv.isEmpty()
 def releaseKeystoreFile = releaseSigningConfigured
     ? file(releaseSigningEnv.DAO_ANDROID_KEYSTORE_FILE)
     : null
+
+def validateReleaseEnvironment = tasks.register("validateReleaseEnvironment", Exec) {
+    description = "Validates configuration embedded in the native Release bundle."
+    workingDir rootProject.projectDir.parentFile
+    commandLine "node", "scripts/verify-release-env.js"
+}
 
 android {
     ndkVersion rootProject.ext.ndkVersion
@@ -99,8 +125,8 @@ android {
         applicationId "com.daociudadanaapp"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode resolvedVersionCode.toInteger()
+        versionName resolvedVersionName
     }
     signingConfigs {
         debug {
@@ -136,16 +162,71 @@ gradle.taskGraph.whenReady { taskGraph ->
     def releaseTaskPresent = taskGraph.allTasks.any { task ->
         task.project == project && task.name.toLowerCase().contains("release")
     }
-    if (releaseTaskPresent && !releaseSigningConfigured) {
+    if (releaseTaskPresent && (requestedVersionCode == null || requestedVersionName == null)) {
         throw new GradleException(
-            "Release signing is not configured. Missing environment variables: " +
+            "Release builds require explicit -PdaoVersionCode and -PdaoVersionName values."
+        )
+    }
+    if (releaseTaskPresent && releaseSigningPartiallyConfigured) {
+        throw new GradleException(
+            "Release signing is partially configured. Missing environment variables: " +
             missingReleaseSigningEnv.join(", ")
         )
     }
-    if (releaseTaskPresent && !releaseKeystoreFile.isFile()) {
+    if (releaseTaskPresent && !releaseSigningConfigured && !allowUnsignedRelease) {
+        throw new GradleException(
+            "Release signing is not configured. Missing environment variables: " +
+            missingReleaseSigningEnv.join(", ") +
+            ". Unsigned release compilation is permitted only with " +
+            "CI=true and -PdaoAllowUnsignedRelease=true."
+        )
+    }
+    if (releaseTaskPresent && releaseSigningConfigured && !releaseKeystoreFile.isFile()) {
         throw new GradleException(
             "DAO_ANDROID_KEYSTORE_FILE does not point to a readable keystore file."
         )
+    }
+}
+
+tasks.matching { task -> task.name == "preReleaseBuild" }.configureEach {
+    dependsOn validateReleaseEnvironment
+}
+
+// React Native's bundle task does not know that this compile-time value is an
+// input. Declare it explicitly so local/incremental builds cannot reuse a JS
+// bundle produced for a different API origin.
+tasks.matching { task -> task.name == "createBundleReleaseJsAndAssets" }.configureEach {
+    inputs.property(
+        "daoApiBaseUrl",
+        providers.environmentVariable("DAO_API_BASE_URL")
+    )
+}
+
+// Validate the generated App Bundle with the exact bundletool version pulled
+// transitively by the pinned Android Gradle Plugin. That classpath is covered
+// by Gradle's strict dependency-verification metadata.
+def releaseBundleFile = layout.buildDirectory.file(
+    "outputs/bundle/release/app-release.aab"
+)
+tasks.register("validateReleaseBundle", JavaExec) {
+    group = "verification"
+    description = "Validates the Release AAB with AGP's authenticated bundletool."
+    dependsOn "bundleRelease"
+    classpath = rootProject.buildscript.configurations.classpath
+    mainClass = "com.android.tools.build.bundletool.BundleToolMain"
+    args "validate", "--bundle=${releaseBundleFile.get().asFile.absolutePath}"
+    inputs.file releaseBundleFile
+    def validationOutput = new ByteArrayOutputStream()
+    standardOutput = validationOutput
+    errorOutput = validationOutput
+    ignoreExitValue = true
+    doLast {
+        def result = executionResult.get()
+        if (result.exitValue != 0) {
+            logger.error(validationOutput.toString("UTF-8"))
+            throw new GradleException("bundletool rejected the Release AAB.")
+        }
+        logger.lifecycle("Release AAB passed bundletool validation.")
     }
 }
 

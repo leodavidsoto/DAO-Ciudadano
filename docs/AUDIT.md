@@ -734,3 +734,69 @@ La primera ejecución se dio por buena por error: se canalizó la salida a `tail
 y el `exit code 0` observado era el de `tail`, no el del script — que **había
 fallado**. Las ejecuciones posteriores capturan el estado real sin tubería de
 por medio.
+
+---
+
+## Quinta pasada (02-08-2026) — membresía on-chain y sesión web
+
+### C-3 (cierre real): `hasMembership()` on-chain con caché corta
+
+`backend/app/services/membership_verifier.py` — `OnChainMembershipVerifier` dejó
+de lanzar `NotImplementedError`: consulta `hasMembership(address)` del SBT vía
+`chain_service.has_membership()` (`backend/app/services/chain_service.py:552`),
+con caché en memoria de proceso (`MEMBERSHIP_CACHE_TTL_SECONDS`, 30 s por
+defecto) e invalidación explícita al mintear.
+
+Tres decisiones que conviene no revertir por accidente:
+
+- **Un RPC caído responde 503, no 403.** `has_membership()` lanza
+  `ChainReadError` en vez de devolver `False`; `deps.is_active_member` lo
+  traduce a 503. Un 403 afirmaría "esta persona no es miembro" cuando lo único
+  cierto es que no se pudo consultar.
+- **También se cachean las respuestas negativas.** Una dirección sin SBT que
+  reintenta es justo el tráfico que no debe llegar al RPC. Por eso el minteo
+  invalida la entrada: si no, quien acaba de recibir su credencial vería 403
+  durante el resto del TTL.
+- **La caché es por proceso.** Con varias instancias no hay coherencia entre
+  ellas más allá del TTL; por eso el TTL es corto y configurable. Compartirla en
+  Redis sería posible, pero añade una dependencia para ahorrar una lectura
+  `view` barata.
+
+`MEMBERSHIP_SOURCE` sigue en `mongo` en el despliegue: el contrato aún no tiene
+membresías (`totalSupply()` = 0) y cambiarlo hoy dejaría a todo el mundo fuera.
+`/health/ready` bloquea `onchain` si faltan `SEPOLIA_RPC_URL` o
+`SBT_CONTRACT_ADDRESS`.
+
+### P-60 (media, corregida): el peso por delegación usaba un filtro más débil que el gate
+
+`backend/app/services/governance_service.py:81` — `get_active_delegators()`
+consultaba `members` con `{"status": "active"}` a secas, mientras el gate de
+votar exigía además, en producción, `issuance_mode="onchain"`,
+`identity_verified=True` y `tx_hash` no vacío. Consecuencia: una fila demo o
+legacy no podía votar por sí misma, pero **sí sumaba peso** al delegado que la
+recibiera. Con `MEMBERSHIP_SOURCE=onchain` la divergencia habría sido mayor:
+peso de direcciones sin SBT.
+
+Corregido moviendo la consulta al propio verificador (`filter_members()`), que
+es ahora el único lugar donde se define qué cuenta como membresía activa.
+
+### Tarea 1.13 (backend): la sesión ya no obliga a `localStorage`
+
+`backend/app/core/session.py` (nuevo) — `/wallet/verify` fija el JWT en la
+cookie `dao_session` (`HttpOnly`, `Secure` fuera de local, `SameSite`
+explícito) y publica un token CSRF de doble envío en `dao_csrf`, derivado como
+`HMAC-SHA256(SECRET_KEY, "dao-csrf-v1:" + jwt)`. Los métodos con efectos exigen
+repetirlo en `X-CSRF-Token` **solo** cuando la sesión llegó por cookie: el
+header `Authorization: Bearer` no lo adjunta el navegador por su cuenta y la
+app móvil no debe romperse.
+
+Límites reconocidos, no disimulados:
+
+- `/wallet/logout` borra las cookies pero **no revoca el JWT**, que sigue siendo
+  válido hasta expirar. Una lista de revocación necesita almacenamiento
+  compartido (el mismo Redis de 3.8) y no existe todavía.
+- Mientras el frontend siga leyendo `token` del body, el JWT sigue pasando por
+  JavaScript. El body ya se puede omitir con `session_transport: "cookie"`; el
+  cierre efectivo de 1.13 depende de que el cliente lo use.
+- `main.py` ya no permite `allow_credentials=True` junto a `CORS_ORIGINS=*`:
+  Starlette reflejaría cualquier origen y le entregaría la cookie de sesión.

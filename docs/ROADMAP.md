@@ -97,7 +97,7 @@ Objetivo: cerrar C-1, C-2 y C-6. Al terminar, un SBT existe de verdad y solo lo 
 | 1.10 | **Proveedor real de identidad/liveness + grant** | Sustituir las demos por un proveedor adecuado, aplicar sus garantías y emitir un permiso de alta de un solo uso. La heurística visual demo no debe promoverse a acreditación. | Sin proveedor o evidencia válida, producción falla cerrado y no puede mintear |
 | 1.11 | **Índice único** en `members.wallet_address` (✅ hecho: `Database.ensure_indexes()`) y en el hash de identidad (pendiente, depende de D-2) | migración MongoDB | Imposible crear dos membresías para la misma wallet |
 | 1.12 | ✅ Reemplazar `token_id = count + 1` por el `tokenId` del evento o la lectura del contrato | `blockchain_service.py` | El camino on-chain nunca inventa un ID local |
-| 1.13 | **Migrar la sesión web fuera de `localStorage`** | Cookie `Secure`/`HttpOnly`/`SameSite`, protección CSRF, logout y revocación coordinados con CORS | Un XSS del frontend no puede extraer el JWT SIWE |
+| 1.13 | 🟡 **Migrar la sesión web fuera de `localStorage`** | Backend listo (02-08-2026): `/wallet/verify` fija `dao_session` HttpOnly + cookie CSRF de doble envío, `/wallet/session` y `/wallet/logout` existen y CORS acepta credenciales con orígenes exactos. Falta que el frontend deje de leer el `token` del body y que exista revocación real del JWT. | Un XSS del frontend no puede extraer el JWT SIWE |
 
 ---
 
@@ -139,16 +139,17 @@ Objetivo: cerrar C-5 y hacer que las fases siguientes no rompan lo anterior.
 
 Objetivo: cerrar C-3, A-4, A-5, A-9 y M-10.
 
-> **Estado 01-08-2026:** 3.2–3.5 y 3.7 implementados para propuestas. 3.1 usa MongoDB
-> provisionalmente y cuarentena demo/legacy en producción; el verificador on-chain
-> todavía falla cerrado con `NotImplementedError`. El módulo de elecciones de
+> **Estado 02-08-2026:** 3.1–3.5 y 3.7 implementados para propuestas. El verificador
+> on-chain ya existe y se elige con `MEMBERSHIP_SOURCE=onchain`; el despliegue sigue
+> en `mongo` hasta que el contrato tenga membresías reales (`totalSupply()` = 0), con
+> cuarentena demo/legacy en producción. El módulo de elecciones de
 > representantes sigue sin papeletas EIP-712 y votar se bloquea en producción.
 > Pendientes: firma de elecciones, atomicidad/reconciliación del tally, 3.6
 > (tesorería real) y 3.8 (Redis).
 
 | # | Tarea | Criterio de aceptación |
 |---|---|---|
-| 3.1 | **Verificación de membresía para votar**: consultar `hasMembership(address)` on-chain (con caché corta) antes de aceptar un voto o una propuesta | Una dirección sin SBT recibe 403 |
+| 3.1 | ✅ **Completada** (02-08-2026). `OnChainMembershipVerifier` consulta `hasMembership(address)` con caché en memoria (`MEMBERSHIP_CACHE_TTL_SECONDS`, 30 s) e invalidación al mintear. Un RPC caído responde 503, nunca 403. El peso por delegación usa el mismo verificador. | Una dirección sin SBT recibe 403 |
 | 3.2 | ✅ **Completada** (02-08-2026). Propuestas y elecciones firman EIP-712, persisten firma/nonce/chainId y exponen papeletas públicas | Cualquier tercero puede recomputar el resultado sin confiar en el servidor |
 | 3.3 | ✅ **Completada** (02-08-2026). Nonce único compartido por propuestas y elecciones sobre el mismo índice | Reenviar un voto firmado da 409 |
 | 3.4 | **Activar el antifraude** ya escrito: llamar `check_rapid_voting` y `check_delegation_chain` desde los endpoints | Los tests de patrones sospechosos pasan |

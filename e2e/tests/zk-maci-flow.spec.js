@@ -84,6 +84,9 @@ test('simula emisión ZK subsidiada y publica una papeleta MACI cifrada', async 
         page.getByRole('heading', { name: 'RESUMEN Y LIMITACIONES DEL PILOTO' })
     ).toBeVisible();
     await page.getByRole('button', { name: 'CONTINUAR A LA WALLET' }).click();
+    // Passive restoration must never open an unsolicited SIWE signature. A
+    // clean browser session requires an explicit citizen action.
+    await page.getByRole('button', { name: 'CONECTAR METAMASK', exact: true }).click();
     await expect(page.getByText('WALLET CONECTADA')).toBeVisible();
     await expect(page.getByText('Verificando membresía existente...')).toBeHidden();
     await page.getByRole('button', { name: 'CONTINUAR', exact: true }).click();
@@ -138,8 +141,20 @@ test('simula emisión ZK subsidiada y publica una papeleta MACI cifrada', async 
     expect(backend.siweVerifications).toHaveLength(1);
     expect(backend.siweVerifications[0]).toMatchObject({
         recoveredAddress: E2E_FIXTURE.userAddress,
-        body: { address: E2E_FIXTURE.userAddress },
+        body: {
+            address: E2E_FIXTURE.userAddress,
+            session_transport: 'cookie',
+        },
     });
+    expect(backend.sessionReads.some(({ cookie }) =>
+        cookie?.includes('dao_session=e2e-http-only-session')
+    )).toBe(true);
+    expect(await page.evaluate(() => ({
+        token: localStorage.getItem('auth_token'),
+        address: localStorage.getItem('auth_address'),
+    }))).toEqual({ token: null, address: null });
+    expect((await context.cookies()).find(({ name }) => name === 'dao_session'))
+        .toMatchObject({ httpOnly: true, sameSite: 'Lax' });
     const credentialRequest = backend.identityCredentialRequests[0];
     expect(credentialRequest).toMatchObject({
         wallet_address: E2E_FIXTURE.userAddress,
@@ -290,12 +305,17 @@ test('simula emisión ZK subsidiada y publica una papeleta MACI cifrada', async 
     await cdp.detach();
 
     expect(backend.registeredMaciKeys).toHaveLength(1);
-    expect(backend.registeredMaciKeys[0].authorization).toMatch(/^Bearer /);
+    expect(backend.registeredMaciKeys[0].authorization).toBeNull();
+    expect(backend.registeredMaciKeys[0].cookie)
+        .toContain('dao_session=e2e-http-only-session');
+    expect(backend.registeredMaciKeys[0].csrf).toMatch(/^[a-f0-9]{64}$/);
     expect(backend.registeredMaciKeys[0].body.wallet_address)
         .toBe(E2E_FIXTURE.userAddress);
     expect(backend.encryptedBallots).toHaveLength(1);
     const submittedBallot = backend.encryptedBallots[0];
     expect(submittedBallot.authorization).toBeNull();
+    expect(submittedBallot.cookie).toBeNull();
+    expect(submittedBallot.csrf).toBeNull();
     expect(submittedBallot.body).toMatchObject({
         protocol_version: 'maci-v2.5.0',
         proposal_id: E2E_FIXTURE.proposalId,
@@ -316,5 +336,20 @@ test('simula emisión ZK subsidiada y publica una papeleta MACI cifrada', async 
     expect(command.newVoteWeight).toBe(1n);
     expect(command.newPubKey.equals(voterPublicKey)).toBe(true);
     expect(command.verifySignature(signature, voterPublicKey)).toBe(true);
+
+    await page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
+    await expect(
+        page.getByRole('button', { name: 'Conectar billetera', exact: true })
+    ).toBeVisible();
+    expect(backend.logouts).toHaveLength(1);
+    expect(backend.logouts[0].cookie)
+        .toContain('dao_session=e2e-http-only-session');
+    expect(backend.logouts[0].csrf).toBe(backend.registeredMaciKeys[0].csrf);
+    expect((await context.cookies()).find(({ name }) => name === 'dao_session'))
+        .toBeUndefined();
+    expect(await page.evaluate(() => ({
+        token: localStorage.getItem('auth_token'),
+        address: localStorage.getItem('auth_address'),
+    }))).toEqual({ token: null, address: null });
     expect(browserErrors).toEqual([]);
 });

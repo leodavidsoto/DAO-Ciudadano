@@ -29,12 +29,12 @@ from typing import Optional
 
 from ..core.database import (
     delegations_collection,
-    members_collection,
     elections_collection,
     candidacies_collection,
     election_votes_collection,
     representatives_collection,
 )
+from .membership_verifier import get_membership_verifier
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,12 @@ class GovernanceService:
 
         Non-member (or revoked) delegators are excluded: delegating does not
         create voting rights that the delegator does not have.
+
+        La comprobación pasa por el MembershipVerifier configurado, igual que
+        el gate de votar. La consulta directa que había aquí (`status:
+        "active"` a secas) era más débil que ese gate: en producción sumaba
+        peso de filas demo/legacy que jamás habrían podido votar, y con
+        MEMBERSHIP_SOURCE=onchain habría sumado peso de direcciones sin SBT.
         """
         cursor = delegations_collection().find({"delegate": address.lower()})
         delegations = await cursor.to_list(length=1000)
@@ -90,12 +96,8 @@ class GovernanceService:
         if not delegators:
             return []
 
-        active_cursor = members_collection().find({
-            "wallet_address": {"$in": delegators},
-            "status": "active",
-        })
-        active_members = await active_cursor.to_list(length=1000)
-        active_set = {m["wallet_address"] for m in active_members}
+        verifier = get_membership_verifier()
+        active_set = await verifier.filter_members(delegators)
         return [d for d in delegators if d in active_set]
 
     @classmethod

@@ -1,23 +1,28 @@
 /**
- * useWallet Hook - Real MetaMask/Web3 integration
- * Connects to Ethereum wallets and manages Web3 state
+ * Shared MetaMask and SIWE session state.
  *
- * Sesión de wallet (SIWE, cierra el hallazgo C-1): conectar MetaMask solo
- * prueba que el usuario tiene esa extensión abierta, NO que controla la
- * dirección -- cualquiera puede escribir cualquier address en un form. Tras
- * obtener la cuenta, este hook pide un desafío (POST /wallet/challenge), lo
- * firma con personal_sign vía el signer real de MetaMask, y verifica la
- * firma (POST /wallet/verify) para obtener un JWT de sesión corto. Ese JWT
- * se guarda en localStorage bajo 'auth_token' -- la misma clave que el
- * interceptor de axios en lib/api.js ya adjunta como Bearer en cada
- * request, así que mint/votar/delegar quedan autenticados automáticamente
- * sin tocar esos otros call sites.
+ * The backend owns the short-lived JWT in an HttpOnly cookie. The frontend
+ * restores session metadata through GET /wallet/session and only keeps the
+ * non-authenticating CSRF value in memory.
  */
-import { useState, useCallback, useEffect } from 'react';
+import React, {
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useRef,
+    useState,
+} from 'react';
 import { BrowserProvider, formatEther } from 'ethers';
 import { walletAPI } from '../lib/api';
+import {
+    clearLegacySessionStorage,
+    invalidateSession,
+    isValidCsrfToken,
+    setCsrfToken,
+    subscribeSessionInvalidation,
+} from '../lib/session';
 
-// Supported networks
 const NETWORKS = {
     1: { name: 'Ethereum Mainnet', symbol: 'ETH' },
     11155111: { name: 'Sepolia Testnet', symbol: 'SepoliaETH' },
@@ -26,116 +31,199 @@ const NETWORKS = {
     80002: { name: 'Amoy Testnet', symbol: 'MATIC' },
 };
 
-// Margen para no reutilizar un token que expira mientras el usuario completa
-// la acción que acaba de iniciar.
-const TOKEN_EXPIRY_SKEW_SECONDS = 30;
+const WalletSessionContext = createContext(null);
 
-// El backend firma el JWT; el cliente NO lo valida (no puede, ni debe). Solo
-// lee `exp` para decidir si vale la pena reutilizarlo. Sin esto, un token
-// vencido en localStorage hacía que connect() reportara éxito y la UI mostrara
-// la wallet conectada, mientras cada llamada real devolvía 401 y el
-// interceptor de axios borraba el token en silencio: el usuario quedaba
-// "conectado" sin poder mintear, votar ni delegar.
-const isSessionTokenUsable = (token) => {
-    try {
-        const payload = token.split('.')[1];
-        if (!payload) return false;
-        const claims = JSON.parse(
-            atob(payload.replace(/-/g, '+').replace(/_/g, '/'))
-        );
-        if (typeof claims.exp !== 'number') return false;
-        return claims.exp - TOKEN_EXPIRY_SKEW_SECONDS > Date.now() / 1000;
-    } catch {
-        return false;
+const addressesMatch = (first, second) =>
+    typeof first === 'string' &&
+    typeof second === 'string' &&
+    first.toLowerCase() === second.toLowerCase();
+
+const isUnauthorized = (error) => error?.response?.status === 401;
+
+const walletErrorMessage = (error, fallback = 'Error al conectar wallet') => {
+    if (error?.code === 4001) {
+        return 'Conexión rechazada por el usuario';
     }
+    if (error?.code === -32002) {
+        return 'Ya hay una solicitud pendiente en MetaMask. Revisa la extensión.';
+    }
+    if (typeof error?.response?.data?.detail === 'string') {
+        return error.response.data.detail;
+    }
+    return error?.message || fallback;
 };
 
-const useWallet = () => {
+const acceptCookieSession = (data) => {
+    if (typeof data?.address !== 'string' || !data.address) {
+        throw new Error('El backend devolvió una sesión sin dirección válida.');
+    }
+    if (!isValidCsrfToken(data.csrf_token)) {
+        throw new Error('El backend devolvió una sesión sin protección CSRF válida.');
+    }
+    setCsrfToken(data.csrf_token);
+    return data;
+};
+
+const WalletSessionProvider = ({ children }) => {
     const [address, setAddress] = useState(null);
     const [balance, setBalance] = useState(null);
     const [chainId, setChainId] = useState(null);
     const [provider, setProvider] = useState(null);
-    // Keep the exact injected provider that established the SIWE session.
-    // BrowserProvider is useful for ethers reads, but ERC-4337 must call
-    // eth_signTypedData_v4 on this pinned EIP-1193 object instead of looking
-    // up a potentially different global provider at mint time.
+    // ERC-4337 must sign through the exact injected EIP-1193 provider that
+    // established the SIWE session, never through a later global lookup.
     const [eip1193Provider, setEip1193Provider] = useState(null);
     const [signer, setSigner] = useState(null);
     const [isConnecting, setIsConnecting] = useState(false);
+    const [isDisconnecting, setIsDisconnecting] = useState(false);
+    const [isRestoring, setIsRestoring] = useState(false);
     const [error, setError] = useState(null);
     const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
+    const operationId = useRef(0);
 
-    // Check if MetaMask is installed (with better detection)
+    const clearWalletState = useCallback((nextError = null) => {
+        setAddress(null);
+        setBalance(null);
+        setChainId(null);
+        setProvider(null);
+        setEip1193Provider(null);
+        setSigner(null);
+        setError(nextError);
+    }, []);
+
+    useEffect(() => subscribeSessionInvalidation(() => {
+        clearWalletState();
+    }), [clearWalletState]);
+
     useEffect(() => {
+        clearLegacySessionStorage();
+
         const checkMetaMask = () => {
-            if (typeof window !== 'undefined') {
-                // Check for ethereum provider
-                const hasEthereum = typeof window.ethereum !== 'undefined';
-                // Check if it's actually MetaMask (not another provider)
-                const isMetaMask = hasEthereum && window.ethereum.isMetaMask;
-                setIsMetaMaskInstalled(hasEthereum && isMetaMask);
-            }
+            const injected = typeof window !== 'undefined' ? window.ethereum : null;
+            setIsMetaMaskInstalled(
+                injected?.isMetaMask === true && typeof injected.request === 'function'
+            );
         };
 
-        // Check immediately
         checkMetaMask();
-
-        // Also check after a short delay (MetaMask can take time to inject)
         const timeout = setTimeout(checkMetaMask, 500);
-
-        // Listen for ethereum provider injection
         if (typeof window !== 'undefined') {
-            window.addEventListener('ethereum#initialized', checkMetaMask);
+            window.addEventListener?.('ethereum#initialized', checkMetaMask);
         }
 
         return () => {
             clearTimeout(timeout);
             if (typeof window !== 'undefined') {
-                window.removeEventListener('ethereum#initialized', checkMetaMask);
+                window.removeEventListener?.('ethereum#initialized', checkMetaMask);
             }
         };
     }, []);
 
-    // Get network info
-    const getNetworkInfo = (id) => NETWORKS[id] || { name: `Chain ${id}`, symbol: 'ETH' };
-
-    // Sesión SIWE: pide el desafío, lo firma con el signer real, verifica
-    // la firma y guarda el JWT devuelto. Lanza si algo falla -- el llamador
-    // decide cómo reportarlo (connect() lo trata como fallo de conexión).
-    //
-    // Si ya hay un token guardado para esta MISMA dirección, no se vuelve a
-    // pedir firma: sin este atajo, cada recarga de página (el efecto de
-    // "reconectar si MetaMask ya está autorizado", más abajo) dispararía un
-    // popup de firma de MetaMask sin que el usuario haya hecho nada.
-    const signInWithEthereum = useCallback(async (signerInstance, expectedAddress) => {
-        const cachedAddress = localStorage.getItem('auth_address');
-        const cachedToken = localStorage.getItem('auth_token');
-        if (
-            cachedToken &&
-            cachedAddress &&
-            cachedAddress.toLowerCase() === expectedAddress.toLowerCase() &&
-            isSessionTokenUsable(cachedToken)
-        ) {
-            return { token: cachedToken, reused: true };
+    const readCookieSession = useCallback(async () => {
+        try {
+            const { data } = await walletAPI.session();
+            return acceptCookieSession(data);
+        } catch (sessionError) {
+            if (isUnauthorized(sessionError)) return null;
+            throw sessionError;
         }
-        // Vencido o de otra wallet: se descarta antes de pedir uno nuevo, para
-        // que un fallo del challenge no deje un token muerto adjuntándose a
-        // cada request.
-        localStorage.removeItem('auth_token');
-        localStorage.removeItem('auth_address');
-
-        const { data: challenge } = await walletAPI.challenge(expectedAddress);
-        const signature = await signerInstance.signMessage(challenge.message);
-        const { data: session } = await walletAPI.verify(expectedAddress, challenge.nonce, signature);
-        localStorage.setItem('auth_token', session.token);
-        localStorage.setItem('auth_address', expectedAddress.toLowerCase());
-        return session;
     }, []);
 
-    // Connect wallet
+    const createWalletSnapshot = useCallback(async (injectedProvider, account) => {
+        const browserProvider = new BrowserProvider(injectedProvider);
+        const signerInstance = await browserProvider.getSigner(account);
+        const [network, balanceWei] = await Promise.all([
+            browserProvider.getNetwork(),
+            browserProvider.getBalance(account),
+        ]);
+
+        return {
+            address: account,
+            balance: formatEther(balanceWei),
+            chainId: Number(network.chainId),
+            provider: browserProvider,
+            eip1193Provider: injectedProvider,
+            signer: signerInstance,
+        };
+    }, []);
+
+    const applyWalletSnapshot = useCallback((snapshot) => {
+        setProvider(snapshot.provider);
+        setEip1193Provider(snapshot.eip1193Provider);
+        setSigner(snapshot.signer);
+        setAddress(snapshot.address);
+        setChainId(snapshot.chainId);
+        setBalance(snapshot.balance);
+        setIsMetaMaskInstalled(true);
+        setError(null);
+    }, []);
+
+    const signInWithEthereum = useCallback(async (signerInstance, expectedAddress) => {
+        let verifyStarted = false;
+        try {
+            const { data: challenge } = await walletAPI.challenge(expectedAddress);
+            if (typeof challenge?.message !== 'string' || !challenge.message ||
+                typeof challenge?.nonce !== 'string' || !challenge.nonce) {
+                throw new Error('El backend devolvió un desafío SIWE inválido.');
+            }
+
+            const signature = await signerInstance.signMessage(challenge.message);
+            verifyStarted = true;
+            const { data: issuedSession } = await walletAPI.verify(
+                expectedAddress,
+                challenge.nonce,
+                signature
+            );
+
+            // Cookie mode must never expose a readable JWT in the response.
+            if (typeof issuedSession?.token === 'string' && issuedSession.token) {
+                throw new Error('El backend devolvió un JWT legible en modo cookie.');
+            }
+            const verified = acceptCookieSession(issuedSession);
+            if (!addressesMatch(verified.address, expectedAddress)) {
+                throw new Error('La sesión SIWE no corresponde a la cuenta seleccionada.');
+            }
+
+            // Do not expose authenticated UI or the ERC-4337 signer until the
+            // browser proves that it stored and can resend the HttpOnly cookie.
+            const confirmed = await readCookieSession();
+            if (!confirmed || !addressesMatch(confirmed.address, expectedAddress)) {
+                throw new Error('El navegador no pudo conservar la cookie de sesión segura.');
+            }
+            return confirmed;
+        } catch (signInError) {
+            if (verifyStarted) {
+                try {
+                    await walletAPI.logout();
+                } catch {
+                    // The original SIWE error remains the actionable one.
+                }
+                invalidateSession('verification-failed');
+            }
+            throw signInError;
+        }
+    }, [readCookieSession]);
+
+    const ensureSessionForAccount = useCallback(async (signerInstance, account) => {
+        const existingSession = await readCookieSession();
+        if (existingSession && addressesMatch(existingSession.address, account)) {
+            return existingSession;
+        }
+
+        if (existingSession) {
+            // Never let an account selected in MetaMask act through a cookie
+            // bound to a different address.
+            await walletAPI.logout();
+            invalidateSession('account-mismatch');
+        }
+
+        return signInWithEthereum(signerInstance, account);
+    }, [readCookieSession, signInWithEthereum]);
+
     const connect = useCallback(async (providerOverride = null) => {
-        // Pin the provider for the whole authorization flow. `providerOverride`
-        // is used only when reconnecting after an event from that same object.
+        if (isConnecting || isDisconnecting) {
+            return { ok: false, error: 'Ya hay una operación de sesión en curso.' };
+        }
+
         const injectedProvider =
             providerOverride && typeof providerOverride.request === 'function'
                 ? providerOverride
@@ -145,92 +233,89 @@ const useWallet = () => {
             typeof injectedProvider.request === 'function';
 
         if (!hasMetaMask) {
-            const errorMsg = 'MetaMask no está instalado. Por favor instálalo desde metamask.io';
-            setError(errorMsg);
-            return { ok: false, error: errorMsg };
+            const message = 'MetaMask no está instalado. Instálalo desde metamask.io.';
+            setError(message);
+            return { ok: false, error: message };
         }
 
+        const currentOperation = ++operationId.current;
+        setIsRestoring(false);
         setIsConnecting(true);
         setError(null);
 
         try {
-            // Request accounts
             const accounts = await injectedProvider.request({
                 method: 'eth_requestAccounts',
             });
-
-            if (!accounts || accounts.length === 0) {
-                throw new Error('No accounts found. Please unlock MetaMask.');
+            if (!accounts?.length) {
+                throw new Error('No se encontró una cuenta. Desbloquea MetaMask.');
             }
 
-            // Create ethers provider
-            const browserProvider = new BrowserProvider(injectedProvider);
-            const signerInstance = await browserProvider.getSigner();
-            const network = await browserProvider.getNetwork();
-            const balanceWei = await browserProvider.getBalance(accounts[0]);
+            const snapshot = await createWalletSnapshot(injectedProvider, accounts[0]);
+            await ensureSessionForAccount(snapshot.signer, snapshot.address);
 
-            // Prueba de propiedad de la dirección (SIWE): sin esto, conectar
-            // MetaMask solo demuestra que la extensión está abierta, no que
-            // el usuario controla accounts[0]. Si el usuario rechaza firmar
-            // o el backend no puede emitir sesión, la conexión se considera
-            // fallida -- el address quedaría "conectado" pero sin poder
-            // mintear/votar (el backend rechazaría todo con 401).
-            await signInWithEthereum(signerInstance, accounts[0]);
-
-            setProvider(browserProvider);
-            setEip1193Provider(injectedProvider);
-            setSigner(signerInstance);
-            setAddress(accounts[0]);
-            setChainId(Number(network.chainId));
-            setBalance(formatEther(balanceWei));
-            setIsMetaMaskInstalled(true);
-
-            console.log('Wallet connected:', accounts[0]);
+            if (currentOperation !== operationId.current) {
+                throw new Error('La conexión fue cancelada por un cambio de sesión.');
+            }
+            applyWalletSnapshot(snapshot);
 
             return {
                 ok: true,
-                address: accounts[0],
-                chainId: Number(network.chainId),
+                address: snapshot.address,
+                chainId: snapshot.chainId,
                 eip1193Provider: injectedProvider,
             };
-        } catch (err) {
-            console.error('Wallet connection error:', err);
-            let errorMessage = 'Error al conectar wallet';
-
-            if (err.code === 4001) {
-                errorMessage = 'Conexión rechazada por el usuario';
-            } else if (err.code === -32002) {
-                errorMessage = 'Ya hay una solicitud pendiente en MetaMask. Por favor revisa la extensión.';
-            } else if (err.response?.data?.detail) {
-                // Error de sesión SIWE devuelto por el backend (challenge/verify)
-                errorMessage = err.response.data.detail;
-            } else if (err.message) {
-                errorMessage = err.message;
+        } catch (connectionError) {
+            const message = walletErrorMessage(connectionError);
+            if (currentOperation === operationId.current) {
+                clearWalletState(message);
             }
-
-            localStorage.removeItem('auth_token');
-            localStorage.removeItem('auth_address');
-            setError(errorMessage);
-            return { ok: false, error: errorMessage };
+            return { ok: false, error: message };
         } finally {
             setIsConnecting(false);
         }
-    }, [signInWithEthereum]);
+    }, [
+        applyWalletSnapshot,
+        clearWalletState,
+        createWalletSnapshot,
+        ensureSessionForAccount,
+        isConnecting,
+        isDisconnecting,
+    ]);
 
-    // Disconnect wallet
-    const disconnect = useCallback(() => {
-        setAddress(null);
-        setBalance(null);
-        setChainId(null);
-        setProvider(null);
-        setEip1193Provider(null);
-        setSigner(null);
+    const disconnect = useCallback(async () => {
+        if (isDisconnecting) {
+            return { ok: false, error: 'El cierre de sesión ya está en curso.' };
+        }
+
+        ++operationId.current;
+        setIsRestoring(false);
+        setIsDisconnecting(true);
         setError(null);
-        localStorage.removeItem('auth_token');
-        localStorage.removeItem('auth_address');
-    }, []);
+        let logoutError = null;
 
-    // Switch network
+        try {
+            await walletAPI.logout();
+        } catch (remoteError) {
+            logoutError = walletErrorMessage(
+                remoteError,
+                'No se pudo confirmar el cierre de sesión con el servidor.'
+            );
+        } finally {
+            // Local authenticated state must disappear even if the network is
+            // unavailable. A returned failure makes the remote uncertainty
+            // explicit instead of pretending that the cookie was cleared.
+            invalidateSession('logout');
+            clearLegacySessionStorage();
+            clearWalletState(logoutError);
+            setIsDisconnecting(false);
+        }
+
+        return logoutError
+            ? { ok: false, error: logoutError }
+            : { ok: true };
+    }, [clearWalletState, isDisconnecting]);
+
     const switchNetwork = useCallback(async (targetChainId) => {
         const activeProvider =
             eip1193Provider ||
@@ -240,7 +325,7 @@ const useWallet = () => {
             activeProvider?.isMetaMask !== true ||
             typeof activeProvider.request !== 'function'
         ) {
-            return { ok: false, error: 'MetaMask not installed' };
+            return { ok: false, error: 'MetaMask no está instalado.' };
         }
 
         try {
@@ -250,13 +335,72 @@ const useWallet = () => {
             });
             setChainId(targetChainId);
             return { ok: true };
-        } catch (err) {
-            console.error('Network switch error:', err);
-            return { ok: false, error: err.message };
+        } catch (switchError) {
+            return { ok: false, error: walletErrorMessage(switchError, 'No se pudo cambiar de red.') };
         }
     }, [eip1193Provider, isMetaMaskInstalled]);
 
-    // Listen for account changes
+    const restoreSession = useCallback(async (injectedProvider) => {
+        const currentOperation = ++operationId.current;
+        setIsRestoring(true);
+
+        try {
+            const accounts = await injectedProvider.request({ method: 'eth_accounts' });
+            if (!accounts?.length) {
+                clearWalletState();
+                return;
+            }
+
+            const existingSession = await readCookieSession();
+            if (!existingSession) {
+                clearWalletState();
+                return;
+            }
+            if (!addressesMatch(existingSession.address, accounts[0])) {
+                try {
+                    await walletAPI.logout();
+                    invalidateSession('account-mismatch');
+                    clearWalletState();
+                } catch (logoutFailure) {
+                    invalidateSession('account-mismatch');
+                    clearWalletState(walletErrorMessage(
+                        logoutFailure,
+                        'No se pudo limpiar una sesión asociada a otra cuenta.'
+                    ));
+                }
+                return;
+            }
+
+            const snapshot = await createWalletSnapshot(injectedProvider, accounts[0]);
+            if (currentOperation === operationId.current) {
+                applyWalletSnapshot(snapshot);
+            }
+        } catch (restoreError) {
+            if (currentOperation === operationId.current) {
+                clearWalletState(walletErrorMessage(
+                    restoreError,
+                    'No se pudo restaurar la sesión segura.'
+                ));
+            }
+        } finally {
+            if (currentOperation === operationId.current) {
+                setIsRestoring(false);
+            }
+        }
+    }, [
+        applyWalletSnapshot,
+        clearWalletState,
+        createWalletSnapshot,
+        readCookieSession,
+    ]);
+
+    useEffect(() => {
+        if (!isMetaMaskInstalled) return;
+        const injectedProvider = typeof window !== 'undefined' ? window.ethereum : null;
+        if (!injectedProvider || typeof injectedProvider.request !== 'function') return;
+        void restoreSession(injectedProvider);
+    }, [isMetaMaskInstalled, restoreSession]);
+
     useEffect(() => {
         if (!isMetaMaskInstalled) return;
         const activeProvider =
@@ -265,15 +409,15 @@ const useWallet = () => {
         if (!activeProvider || typeof activeProvider.on !== 'function') return;
 
         const handleAccountsChanged = async (accounts) => {
-            if (accounts.length === 0) {
-                disconnect();
-            } else if (!address || accounts[0].toLowerCase() !== address.toLowerCase()) {
-                // A SIWE token is bound to one wallet. Never keep showing the
-                // new account with the previous account's bearer token: clear
-                // all session state and ask the new account to sign its own
-                // one-time challenge.
-                disconnect();
-                await connect(activeProvider);
+            if (!accounts?.length) {
+                await disconnect();
+                return;
+            }
+            if (address && !addressesMatch(accounts[0], address)) {
+                const result = await disconnect();
+                if (result.ok) {
+                    setError('La cuenta de MetaMask cambió. Vuelve a conectar para firmar una sesión nueva.');
+                }
             }
         };
 
@@ -288,36 +432,9 @@ const useWallet = () => {
             activeProvider.removeListener?.('accountsChanged', handleAccountsChanged);
             activeProvider.removeListener?.('chainChanged', handleChainChanged);
         };
-    }, [address, connect, disconnect, eip1193Provider, isMetaMaskInstalled]);
+    }, [address, disconnect, eip1193Provider, isMetaMaskInstalled]);
 
-    // Check if already connected on mount
-    useEffect(() => {
-        if (!isMetaMaskInstalled) return;
-        // This effect is only for initial discovery. Once connect() pins the
-        // provider, adding that state as a dependency would immediately call
-        // connect() a second time and repeat eth_requestAccounts/RPC reads.
-        const activeProvider =
-            typeof window !== 'undefined' ? window.ethereum : null;
-        if (!activeProvider || typeof activeProvider.request !== 'function') return;
-
-        const checkConnection = async () => {
-            try {
-                const accounts = await activeProvider.request({
-                    method: 'eth_accounts',
-                });
-                if (accounts.length > 0) {
-                    await connect(activeProvider);
-                }
-            } catch (err) {
-                console.error('Check connection error:', err);
-            }
-        };
-
-        checkConnection();
-    }, [connect, isMetaMaskInstalled]);
-
-    return {
-        // State
+    const value = {
         address,
         balance,
         chainId,
@@ -325,19 +442,37 @@ const useWallet = () => {
         eip1193Provider,
         signer,
         isConnecting,
+        isDisconnecting,
+        isRestoring,
         error,
-        isConnected: !!address,
+        isConnected: Boolean(address),
         isMetaMaskInstalled,
-        networkInfo: chainId ? getNetworkInfo(chainId) : null,
-
-        // Actions
+        networkInfo: chainId ? NETWORKS[chainId] || {
+            name: `Chain ${chainId}`,
+            symbol: 'ETH',
+        } : null,
         connect,
         disconnect,
         switchNetwork,
-
-        // Utils
-        shortAddress: address ? `${address.slice(0, 6)}...${address.slice(-4)}` : null,
+        shortAddress: address
+            ? `${address.slice(0, 6)}...${address.slice(-4)}`
+            : null,
     };
+
+    return (
+        <WalletSessionContext.Provider value={value}>
+            {children}
+        </WalletSessionContext.Provider>
+    );
 };
 
+const useWallet = () => {
+    const context = useContext(WalletSessionContext);
+    if (!context) {
+        throw new Error('useWallet must be used within WalletSessionProvider.');
+    }
+    return context;
+};
+
+export { WalletSessionProvider };
 export default useWallet;

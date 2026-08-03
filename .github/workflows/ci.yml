@@ -135,16 +135,18 @@ jobs:
 
   mobile:
     name: Mobile · static gates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
         working-directory: mobile
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22
+          node-version-file: mobile/.node-version
           cache: npm
           cache-dependency-path: mobile/package-lock.json
       - name: Install dependencies
@@ -157,4 +159,118 @@ jobs:
         # Keep the existing warning budget visible and reject regressions.
         run: npm run lint -- --max-warnings=21
       - name: Test
-        run: npm test -- --runInBand
+        run: npm test -- --ci --runInBand
+
+  mobile-android:
+    name: Mobile · Android native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      CI: 'true'
+      DAO_API_BASE_URL: https://mobile-ci.invalid/api
+      DAO_VERSION_NAME: 1.0.0-ci
+      DAO_VERSION_CODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: mobile/.node-version
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
+        with:
+          distribution: temurin
+          java-version: 17.0.18+8
+          cache: gradle
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Install pinned Android toolchain
+        run: |
+          sdkmanager \
+            'platforms;android-36' \
+            'build-tools;36.0.0' \
+            'ndk;27.1.12297006' \
+            'cmake;3.22.1'
+      - name: Compile unsigned Release artifacts
+        run: npm run android:ci
+      - name: Record artifact checksums
+        run: |
+          cd android/app/build
+          shasum -a 256 \
+            outputs/apk/release/app-release-unsigned.apk \
+            outputs/bundle/release/app-release.aab \
+            > outputs/native-checksums.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mobile-android-unsigned-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk
+            mobile/android/app/build/outputs/bundle/release/app-release.aab
+            mobile/android/app/build/outputs/native-checksums.sha256
+            mobile/android/app/build/reports/lint-results-release.html
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  mobile-ios:
+    name: Mobile · iOS native
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      BUNDLE_FROZEN: 'true'
+      CI: 'true'
+      DAO_API_BASE_URL: https://mobile-ci.invalid/api
+      DAO_XCODE_BUILD: 16F6
+      DAO_XCODE_VERSION: '16.4'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: mobile/.node-version
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # pinned 2026-08-02
+        with:
+          ruby-version: 3.3.12
+          bundler: 2.4.22
+          bundler-cache: true
+          working-directory: mobile
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Compile unsigned Release for iOS device
+        env:
+          DAO_IOS_DERIVED_DATA_PATH: ${{ runner.temp }}/DAO-iOS-DerivedData
+        run: npm run ios:ci
+      - name: Package and checksum native app
+        env:
+          DAO_IOS_DERIVED_DATA_PATH: ${{ runner.temp }}/DAO-iOS-DerivedData
+        run: |
+          APP="$DAO_IOS_DERIVED_DATA_PATH/Build/Products/Release-iphoneos/DAOCiudadanaApp.app"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/DAOCiudadanaApp-device-unsigned.zip"
+          cd "$RUNNER_TEMP"
+          shasum -a 256 DAOCiudadanaApp-device-unsigned.zip \
+            > DAOCiudadanaApp-device-unsigned.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mobile-ios-unsigned-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/DAOCiudadanaApp-device-unsigned.zip
+            ${{ runner.temp }}/DAOCiudadanaApp-device-unsigned.sha256
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

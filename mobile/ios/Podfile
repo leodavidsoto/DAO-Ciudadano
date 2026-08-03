@@ -8,11 +8,13 @@ require Pod::Executable.execute_command('node', ['-p',
 platform :ios, min_ios_version_supported
 prepare_react_native_project!
 
-linkage = ENV['USE_FRAMEWORKS']
-if linkage != nil
-  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
-  use_frameworks! :linkage => linkage.to_sym
+if ENV.key?('USE_FRAMEWORKS')
+  abort 'USE_FRAMEWORKS is intentionally unsupported: it changes the locked native graph.'
 end
+
+# Keep Android and iOS on the same React Native architecture. Do not let a
+# developer shell silently produce a different Pod graph.
+ENV['RCT_NEW_ARCH_ENABLED'] = '1'
 
 target 'DAOCiudadanaApp' do
   config = use_native_modules!

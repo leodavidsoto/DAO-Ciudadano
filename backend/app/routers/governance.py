@@ -29,9 +29,15 @@ from ..core.security_middleware import (
 )
 from ..core.config import settings
 from ..services.governance_service import governance_service
-from ..services.membership_verifier import get_membership_verifier
 from ..services import ballot_service
-from .deps import ensure_active_member, current_address, ensure_acts_as_self
+from ..services.membership_verifier import MembershipVerificationUnavailable
+from .deps import (
+    MEMBERSHIP_UNAVAILABLE_DETAIL,
+    current_address,
+    ensure_active_member,
+    ensure_acts_as_self,
+    is_active_member,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -506,6 +512,13 @@ async def cast_vote(
         
     except HTTPException:
         raise
+    except MembershipVerificationUnavailable as exc:
+        # El cálculo del peso también consulta la fuente de membresía. Sin
+        # este caso explícito, el `except Exception` de abajo convertiría una
+        # caída del RPC en "Error al registrar el voto", que no dice nada.
+        raise HTTPException(
+            status_code=503, detail=MEMBERSHIP_UNAVAILABLE_DETAIL
+        ) from exc
     except Exception as e:
         logger.error(f"Error casting vote: {e}")
         return VoteResponse(ok=False, error="Error al registrar el voto")
@@ -598,8 +611,7 @@ async def delegate_vote(
         # A raw {status: "active"} query was weaker than the production gate,
         # so a quarantined legacy/demo row could receive delegations it could
         # never actually cast.
-        verifier = get_membership_verifier()
-        if not await verifier.is_member(request.delegate_address):
+        if not await is_active_member(request.delegate_address):
             return DelegationResponse(
                 ok=False,
                 error=(

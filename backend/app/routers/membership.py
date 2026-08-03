@@ -22,7 +22,11 @@ from ..core.database import get_collection
 from ..models import MintSBTRequest, MintSBTResponse
 from ..services import chain_service
 from ..services.blockchain_service import MintingUnavailable, blockchain_service
-from ..services.membership_verifier import membership_is_onchain, membership_is_valid
+from ..services.membership_verifier import (
+    invalidate_cached_membership,
+    membership_is_onchain,
+    membership_is_valid,
+)
 from .deps import current_address, ensure_acts_as_self
 
 
@@ -54,6 +58,11 @@ async def mint_sbt(request: MintSBTRequest, authenticated: str = Depends(current
 
     if not ok:
         return MintSBTResponse(ok=False, error=error)
+
+    # La caché de hasMembership() pudo guardar un "no es miembro" hace
+    # segundos; sin invalidarla, quien acaba de mintear vería 403 al votar
+    # durante el resto del TTL.
+    invalidate_cached_membership(request.wallet_address)
 
     return MintSBTResponse(ok=True, token_id=token_id, tx_hash=tx_hash)
 
@@ -257,6 +266,7 @@ async def mint_with_zk_proof(
         tx_hash=tx_hash,
         nullifier_hash=request.nullifier_hash.lower(),
     )
+    invalidate_cached_membership(request.wallet_address)
 
     return MintSBTResponse(ok=True, token_id=token_id, tx_hash=tx_hash)
 

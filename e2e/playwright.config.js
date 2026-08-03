@@ -6,7 +6,12 @@ import { E2E_FIXTURE } from './tests/support/e2e-fixture.js';
 const e2eDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryDirectory = resolve(e2eDirectory, '..');
 const frontendPort = Number(process.env.E2E_FRONTEND_PORT || 3005);
+const backendPort = Number(process.env.E2E_BACKEND_PORT || frontendPort + 1);
 const frontendUrl = `http://127.0.0.1:${frontendPort}`;
+// A distinct origin makes credential behavior observable: the authenticated
+// client must opt into cookies, while the anonymous MACI transport must omit
+// them. Playwright intercepts this origin, so no backend server is started.
+const backendUrl = `http://127.0.0.1:${backendPort}`;
 
 export default defineConfig({
     testDir: './tests',
@@ -45,7 +50,7 @@ export default defineConfig({
             BROWSER: 'none',
             HOST: '127.0.0.1',
             PORT: String(frontendPort),
-            REACT_APP_BACKEND_URL: frontendUrl,
+            REACT_APP_BACKEND_URL: backendUrl,
             REACT_APP_ZK_IDENTITY_ISSUER_ADDRESS: E2E_FIXTURE.issuerAddress,
             REACT_APP_MEMBERSHIP_CONTRACT_ADDRESS: E2E_FIXTURE.membershipContract,
             REACT_APP_MACI_COORDINATOR_ADDRESS: E2E_FIXTURE.maciCoordinator,

@@ -141,7 +141,26 @@ def deployment_blockers() -> list[str]:
     blockers: list[str] = []
 
     if settings.MEMBERSHIP_SOURCE == "onchain":
-        blockers.append("MEMBERSHIP_SOURCE=onchain aún no está implementado")
+        # Implementado (ROADMAP 3.1), pero inútil sin cadena que consultar:
+        # así configurado, cada verificación respondería 503 en vez de dejar
+        # votar a nadie.
+        from ..services import chain_service
+
+        if not chain_service.can_read_chain():
+            blockers.append(
+                "MEMBERSHIP_SOURCE=onchain requiere SEPOLIA_RPC_URL y "
+                "SBT_CONTRACT_ADDRESS válidas para consultar hasMembership()"
+            )
+
+    # SameSite=None sin Secure lo descarta el navegador: la sesión web dejaría
+    # de funcionar sin ningún error visible en pantalla.
+    if (
+        settings.session_cookie_samesite == "none"
+        and not settings.session_cookie_secure
+    ):
+        blockers.append(
+            "SESSION_COOKIE_SAMESITE=none exige SESSION_COOKIE_SECURE=true"
+        )
 
     if not settings.is_production:
         return blockers
@@ -174,6 +193,11 @@ def deployment_blockers() -> list[str]:
         )
     if not settings.SIGNED_BALLOTS_REQUIRED:
         blockers.append("SIGNED_BALLOTS_REQUIRED debe ser true en producción")
+    if not settings.session_cookie_secure:
+        blockers.append(
+            "SESSION_COOKIE_SECURE debe ser true en producción: sin él la "
+            "cookie de sesión viaja en claro"
+        )
     # Las papeletas de elecciones ya implementan EIP-712 con nonce único
     # (ROADMAP 3.2/3.3). Lo que queda bloqueando es el tally transaccional:
     # papeleta y recuento siguen siendo dos escrituras separadas.
@@ -240,10 +264,20 @@ def feature_status() -> dict:
     despliegue. Esto sí, y sin adornos: cada entrada refleja configuración
     real, no intención.
     """
-    from ..services import paymaster_service
+    from ..services import chain_service, paymaster_service
 
     erc4337 = paymaster_service.status()
     return {
+        "membership_verification": {
+            "source": settings.MEMBERSHIP_SOURCE,
+            # Solo comprueba configuración: no se golpea el RPC en cada
+            # health check. La sonda real vive en `minting.onchain.runtime`.
+            "available": (
+                settings.MEMBERSHIP_SOURCE == "mongo"
+                or chain_service.can_read_chain()
+            ),
+            "cache_ttl_seconds": settings.MEMBERSHIP_CACHE_TTL_SECONDS,
+        },
         "identity_issuance": {
             "available": bool(
                 settings.IDENTITY_ISSUER_PRIVATE_KEY.strip()

@@ -10,7 +10,10 @@ El cliente sí carga los artefactos de desarrollo publicados por `frontend/`,
 genera y verifica la prueba Groth16 localmente, deriva una Safe, firma la
 UserOperation con una llave de prueba y cifra el comando MACI en el navegador.
 La sesión se obtiene recorriendo challenge + firma EIP-191 + verify del fixture;
-no se preinyecta un JWT.
+el JWT nunca se preinyecta ni queda expuesto a JavaScript. El fixture usa un
+origen API separado para comprobar la cookie `HttpOnly`, el token CSRF en
+memoria y el logout remoto. Ese límite también demuestra que el mensaje MACI
+cifrado sale sin cookie, CSRF ni Bearer.
 Las aserciones comprueban que el grant/witness de identidad no cruza el límite
 de minteo y que la urna anónima no recibe bearer, wallet ni preferencia plana.
 También recuperan el owner desde la única firma EIP-712 `SafeOp` solicitada a la

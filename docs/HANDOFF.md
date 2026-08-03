@@ -180,7 +180,7 @@ Cosas que te van a costar tiempo si no las sabes de antemano:
 
 5. **El CI instala `requirements-dev.txt`**, no `requirements.txt`. Si mueves `pytest` de sitio, actualiza `.github/workflows/ci.yml`.
 
-6. **`OnChainMembershipVerifier` lanza `NotImplementedError` a propósito.** No lo "arregles" devolviendo `True`: eso reintroduce exactamente el tipo de capacidad fingida que este proyecto está eliminando.
+6. **`OnChainMembershipVerifier` ya consulta la cadena (ROADMAP 3.1), pero el despliegue sigue en `MEMBERSHIP_SOURCE=mongo`.** Cambiarlo a `onchain` solo tiene sentido cuando el contrato tenga membresías reales: hoy `totalSupply()` sigue en 0 y todo el mundo recibiría 403. Cuando la cadena no responde, la respuesta es **503, nunca 403** — `chain_service.has_membership` lanza `ChainReadError` en vez de devolver `False`. No lo "simplifiques" a un `except: return False`: convertiría una caída del RPC en la afirmación "esta persona no es miembro".
 
 7. **La delegación no es transitiva y es una decisión, no un olvido.** Está razonada en `governance_service.py`. Si la cambias, cambia también el razonamiento.
 

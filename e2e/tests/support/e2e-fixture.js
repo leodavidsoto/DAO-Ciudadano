@@ -71,14 +71,8 @@ const selectorResult = (contractInterface, functionName, values) => ({
     result: contractInterface.encodeFunctionResult(functionName, values),
 });
 
-const makeUnsignedJwt = (address) => {
-    const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
-    return [
-        encode({ alg: 'none', typ: 'JWT', fixture: 'e2e-only' }),
-        encode({ sub: address.toLowerCase(), exp: Math.floor(Date.now() / 1000) + 3600 }),
-        'e2e-fixture-no-signature',
-    ].join('.');
-};
+const E2E_SESSION_COOKIE = 'dao_session=e2e-http-only-session';
+const E2E_CSRF_TOKEN = 'c'.repeat(64);
 
 const buildSiweChallenge = (address) => {
     const nonce = 'E2EFLOW20260801';
@@ -134,10 +128,23 @@ const deserializeUserOperation = (operation) => Object.fromEntries(
     ])
 );
 
-const jsonResponse = (route, body, status = 200) => route.fulfill({
+const corsHeaders = (route) => {
+    const origin = route.request().headers().origin;
+    return origin ? {
+        'access-control-allow-origin': origin,
+        'access-control-allow-credentials': 'true',
+        vary: 'Origin',
+    } : {};
+};
+
+const jsonResponse = (route, body, status = 200, headers = {}) => route.fulfill({
     status,
     contentType: 'application/json',
-    headers: { 'cache-control': 'no-store' },
+    headers: {
+        'cache-control': 'no-store',
+        ...corsHeaders(route),
+        ...headers,
+    },
     body: JSON.stringify(body),
 });
 
@@ -328,6 +335,8 @@ export const installBackendFixture = async (page) => {
         encryptedBallots: [],
         siweChallenges: [],
         siweVerifications: [],
+        sessionReads: [],
+        logouts: [],
     };
 
     await page.route('**/api/**', async (route) => {
@@ -335,6 +344,25 @@ export const installBackendFixture = async (page) => {
         const url = new URL(request.url());
         const path = url.pathname;
         const method = request.method();
+        const headers = await request.allHeaders();
+        const hasSessionCookie = (headers.cookie || '')
+            .split(';')
+            .map((value) => value.trim())
+            .includes(E2E_SESSION_COOKIE);
+        const hasCsrfHeader = headers['x-csrf-token'] === E2E_CSRF_TOKEN;
+
+        if (method === 'OPTIONS') {
+            return route.fulfill({
+                status: 204,
+                headers: {
+                    ...corsHeaders(route),
+                    'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+                    'access-control-allow-headers':
+                        headers['access-control-request-headers'] || 'content-type, x-csrf-token',
+                    'access-control-max-age': '600',
+                },
+            });
+        }
 
         if (method === 'GET' && path === '/api/dashboard/stats') {
             return jsonResponse(route, { total_members: 1, recent_joins: 1 });
@@ -360,9 +388,38 @@ export const installBackendFixture = async (page) => {
             ) {
                 return jsonResponse(route, { detail: 'Fixture SIWE signature rejected' }, 401);
             }
+            if (body.session_transport !== 'cookie') {
+                return jsonResponse(route, { detail: 'Fixture requires cookie transport' }, 422);
+            }
             return jsonResponse(route, {
-                token: makeUnsignedJwt(recoveredAddress),
+                token: null,
                 address: recoveredAddress.toLowerCase(),
+                expires_in: 3600,
+                csrf_token: E2E_CSRF_TOKEN,
+            }, 200, {
+                'set-cookie': `${E2E_SESSION_COOKIE}; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600`,
+            });
+        }
+        if (method === 'GET' && path === '/api/wallet/session') {
+            state.sessionReads.push({ cookie: headers.cookie || null });
+            if (!hasSessionCookie || state.siweVerifications.length === 0) {
+                return jsonResponse(route, { detail: 'Fixture session missing' }, 401);
+            }
+            return jsonResponse(route, {
+                address: E2E_FIXTURE.userAddress.toLowerCase(),
+                csrf_token: E2E_CSRF_TOKEN,
+            });
+        }
+        if (method === 'POST' && path === '/api/wallet/logout') {
+            state.logouts.push({
+                cookie: headers.cookie || null,
+                csrf: headers['x-csrf-token'] || null,
+            });
+            return jsonResponse(route, {
+                ok: true,
+                message: 'Sesión E2E cerrada.',
+            }, 200, {
+                'set-cookie': 'dao_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0',
             });
         }
         if (method === 'POST' && path === '/api/auth/liveness') {
@@ -374,9 +431,18 @@ export const installBackendFixture = async (page) => {
             });
         }
         if (method === 'GET' && path.startsWith('/api/membership/member/')) {
+            if (!hasSessionCookie) {
+                return jsonResponse(route, { detail: 'Fixture session missing' }, 401);
+            }
             return jsonResponse(route, { found: false, member: null });
         }
         if (method === 'POST' && path === '/api/auth/identity-credential') {
+            if (!hasSessionCookie) {
+                return jsonResponse(route, { detail: 'Fixture session missing' }, 401);
+            }
+            if (!hasCsrfHeader) {
+                return jsonResponse(route, { detail: 'Fixture CSRF rejected' }, 403);
+            }
             const body = request.postDataJSON();
             state.identityCredentialRequests.push(body);
             if (body.identity_grant !== E2E_FIXTURE.identityGrant) {
@@ -435,6 +501,12 @@ export const installBackendFixture = async (page) => {
             });
         }
         if (method === 'POST' && path === '/api/erc4337/prepare-mint') {
+            if (!hasSessionCookie) {
+                return jsonResponse(route, { detail: 'Fixture session missing' }, 401);
+            }
+            if (!hasCsrfHeader) {
+                return jsonResponse(route, { detail: 'Fixture CSRF rejected' }, 403);
+            }
             const body = request.postDataJSON();
             state.preparedMintRequests.push(body);
             return jsonResponse(route, {
@@ -455,6 +527,12 @@ export const installBackendFixture = async (page) => {
             });
         }
         if (method === 'POST' && path === '/api/erc4337/submit-mint') {
+            if (!hasSessionCookie) {
+                return jsonResponse(route, { detail: 'Fixture session missing' }, 401);
+            }
+            if (!hasCsrfHeader) {
+                return jsonResponse(route, { detail: 'Fixture CSRF rejected' }, 403);
+            }
             const body = request.postDataJSON();
             state.submittedMintRequests.push(body);
             const operation = deserializeUserOperation(body.user_operation);
@@ -497,8 +575,16 @@ export const installBackendFixture = async (page) => {
             });
         }
         if (method === 'POST' && path === '/api/maci/keys') {
+            if (!hasSessionCookie) {
+                return jsonResponse(route, { detail: 'Fixture session missing' }, 401);
+            }
+            if (!hasCsrfHeader) {
+                return jsonResponse(route, { detail: 'Fixture CSRF rejected' }, 403);
+            }
             state.registeredMaciKeys.push({
-                authorization: request.headers().authorization || null,
+                authorization: headers.authorization || null,
+                cookie: headers.cookie || null,
+                csrf: headers['x-csrf-token'] || null,
                 body: request.postDataJSON(),
             });
             return jsonResponse(route, { ok: true, state_index: '4' });
@@ -528,7 +614,9 @@ export const installBackendFixture = async (page) => {
             path === `/api/maci/polls/${E2E_FIXTURE.pollId}/messages`
         ) {
             state.encryptedBallots.push({
-                authorization: request.headers().authorization || null,
+                authorization: headers.authorization || null,
+                cookie: headers.cookie || null,
+                csrf: headers['x-csrf-token'] || null,
                 body: request.postDataJSON(),
             });
             return jsonResponse(route, {

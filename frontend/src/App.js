@@ -13,6 +13,7 @@
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { OnboardingProvider } from "./context";
+import { WalletSessionProvider } from "./hooks";
 import { LandingPage, OnboardingPage } from "./pages";
 import {
   DashboardLayout,
@@ -28,32 +29,34 @@ import "./styles/premium.css";
 const App = () => {
   return (
     <BrowserRouter>
-      <div className="App">
-        <Routes>
-          <Route path="/" element={<LandingPage />} />
+      <WalletSessionProvider>
+        <div className="App">
+          <Routes>
+            <Route path="/" element={<LandingPage />} />
 
-          {/* Onboarding keeps its own provider: the dashboard does not need
-              the onboarding state machine and should not re-mount it. */}
-          <Route
-            path="/unete"
-            element={
-              <OnboardingProvider>
-                <OnboardingPage appearance="civic" />
-              </OnboardingProvider>
-            }
-          />
+            {/* Onboarding keeps its own provider: the dashboard does not need
+                the onboarding state machine and should not re-mount it. */}
+            <Route
+              path="/unete"
+              element={
+                <OnboardingProvider>
+                  <OnboardingPage appearance="civic" />
+                </OnboardingProvider>
+              }
+            />
 
-          <Route path="/dashboard" element={<DashboardLayout />}>
-            <Route index element={<OverviewSection />} />
-            <Route path="propuestas" element={<ProposalsSection />} />
-            <Route path="elecciones" element={<ElectionsSection />} />
-            <Route path="delegacion" element={<DelegationSection />} />
-            <Route path="tesoreria" element={<TreasurySection />} />
-          </Route>
+            <Route path="/dashboard" element={<DashboardLayout />}>
+              <Route index element={<OverviewSection />} />
+              <Route path="propuestas" element={<ProposalsSection />} />
+              <Route path="elecciones" element={<ElectionsSection />} />
+              <Route path="delegacion" element={<DelegationSection />} />
+              <Route path="tesoreria" element={<TreasurySection />} />
+            </Route>
 
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </div>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </div>
+      </WalletSessionProvider>
     </BrowserRouter>
   );
 };

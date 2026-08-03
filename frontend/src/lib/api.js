@@ -3,40 +3,87 @@
  * Centralized API communication layer
  */
 import axios from 'axios';
+import {
+    getCsrfToken,
+    invalidateSession,
+    setCsrfToken,
+} from './session';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
 const API_BASE = `${BACKEND_URL}/api`;
 const ONCHAIN_OPERATION_TIMEOUT_MS = 120000;
+export const CSRF_HEADER_NAME = 'X-CSRF-Token';
+const SAFE_HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-// Create axios instance with defaults
-const api = axios.create({
+// All non-anonymous web requests use the HttpOnly SIWE cookie. Automatic
+// Axios XSRF cookie reading is disabled because production runs the frontend
+// and API on different origins; /wallet/session returns the CSRF value that we
+// keep in memory and attach explicitly below.
+export const api = axios.create({
     baseURL: API_BASE,
     headers: {
         'Content-Type': 'application/json',
     },
     timeout: 30000,
+    withCredentials: true,
+    withXSRFToken: false,
 });
 
-// MACI messages use a separate bearer-free transport boundary. In particular,
-// this instance never receives the SIWE token interceptor below. Avoiding that
-// direct identifier is necessary but not sufficient for network unlinkability;
-// the backend must add an anonymous eligibility proof and privacy-preserving
-// relay before enabling `private_voting`.
-const anonymousMaciApi = axios.create({
+// Encrypted MACI messages are the deliberate exception to credentialed
+// transport. Attaching the session cookie here would link a supposedly
+// anonymous ballot to the citizen's SIWE session.
+export const anonymousMaciApi = axios.create({
     baseURL: API_BASE,
     headers: {
         'Content-Type': 'application/json',
     },
     timeout: 30000,
+    withCredentials: false,
+    withXSRFToken: false,
 });
 
-// Request interceptor
+const removeAuthorizationHeader = (headers) => {
+    if (!headers) return;
+    if (typeof headers.delete === 'function') {
+        headers.delete('Authorization');
+        return;
+    }
+    delete headers.Authorization;
+    delete headers.authorization;
+};
+
+const setRequestHeader = (headers, name, value) => {
+    if (typeof headers?.set === 'function') {
+        headers.set(name, value);
+    } else if (headers) {
+        headers[name] = value;
+    }
+};
+
+const captureCsrfToken = (response) => {
+    const bodyHasToken = Object.prototype.hasOwnProperty.call(
+        response?.data || {},
+        'csrf_token'
+    );
+    const responseHeader = typeof response?.headers?.get === 'function'
+        ? response.headers.get(CSRF_HEADER_NAME)
+        : response?.headers?.['x-csrf-token'];
+    const candidate = bodyHasToken ? response.data.csrf_token : responseHeader;
+    if (candidate !== undefined && candidate !== null) {
+        setCsrfToken(candidate);
+    }
+};
+
 api.interceptors.request.use(
     (config) => {
-        // Add auth token if available
-        const token = localStorage.getItem('auth_token');
-        if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
+        // A stale caller-provided bearer must never override the current
+        // cookie session. The mobile app uses its own bearer-aware client.
+        removeAuthorizationHeader(config.headers);
+
+        const method = (config.method || 'GET').toUpperCase();
+        const csrfToken = getCsrfToken();
+        if (!SAFE_HTTP_METHODS.has(method) && csrfToken) {
+            setRequestHeader(config.headers, CSRF_HEADER_NAME, csrfToken);
         }
         return config;
     },
@@ -45,15 +92,15 @@ api.interceptors.request.use(
 
 // Response interceptor
 api.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        captureCsrfToken(response);
+        return response;
+    },
     (error) => {
-        console.error('API Error:', error.response?.data || error.message);
         if (error.response?.status === 401) {
-            // El token de sesión (SIWE) expiró o es inválido -- lo limpiamos
-            // para que el próximo connect() vuelva a pedir firma en vez de
-            // reintentar para siempre con un token muerto.
-            localStorage.removeItem('auth_token');
-            localStorage.removeItem('auth_address');
+            invalidateSession('unauthorized');
+        } else {
+            console.error('API Error:', error.response?.data || error.message);
         }
         return Promise.reject(error);
     }
@@ -118,10 +165,16 @@ export const authAPI = {
 
 // === Wallet API ===
 export const walletAPI = {
-    // Sesión de wallet real (SIWE, ver services/siwe_service.py en el backend).
     challenge: (address) => api.post('/wallet/challenge', { address }),
     verify: (address, nonce, signature) =>
-        api.post('/wallet/verify', { address, nonce, signature }),
+        api.post('/wallet/verify', {
+            address,
+            nonce,
+            signature,
+            session_transport: 'cookie',
+        }),
+    session: () => api.get('/wallet/session'),
+    logout: () => api.post('/wallet/logout'),
 };
 
 // === Membership API ===

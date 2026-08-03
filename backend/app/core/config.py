@@ -52,6 +52,20 @@ class Settings(BaseSettings):
 
     # Segundos de validez de una sesión de wallet (JWT emitido tras SIWE).
     SESSION_TOKEN_EXPIRE_SECONDS: int = int(os.environ.get('SESSION_TOKEN_EXPIRE_SECONDS', '3600'))
+
+    # === Transporte de la sesión web en cookies (tarea 1.13) ===
+    # El JWT viaja además en una cookie HttpOnly para que el frontend no
+    # tenga que guardarlo en localStorage (legible por cualquier XSS).
+    # Vacío = derivado del entorno; ver session_cookie_samesite/secure.
+    SESSION_COOKIE_NAME: str = os.environ.get('SESSION_COOKIE_NAME', 'dao_session')
+    SESSION_COOKIE_SAMESITE: str = os.environ.get('SESSION_COOKIE_SAMESITE', '')
+    SESSION_COOKIE_SECURE: str = os.environ.get('SESSION_COOKIE_SECURE', '')
+    # Solo si el frontend y el backend comparten dominio registrable. Vacío =
+    # cookie de host (la opción más estrecha y la correcta para Netlify+Render).
+    SESSION_COOKIE_DOMAIN: str = os.environ.get('SESSION_COOKIE_DOMAIN', '')
+    # Cookie legible por JS a propósito: es la mitad del doble envío CSRF, y su
+    # valor no sirve para autenticar por sí solo.
+    CSRF_COOKIE_NAME: str = os.environ.get('CSRF_COOKIE_NAME', 'dao_csrf')
     SIWE_CHALLENGE_EXPIRE_SECONDS: int = int(os.environ.get('SIWE_CHALLENGE_EXPIRE_SECONDS', '300'))
     SIWE_DOMAIN: str = os.environ.get('SIWE_DOMAIN', 'localhost')
     SIWE_URI: str = os.environ.get('SIWE_URI', 'http://localhost:3000')
@@ -113,11 +127,20 @@ class Settings(BaseSettings):
     
     # Membership verification source for governance endpoints.
     # "mongo": members collection is the source of truth (current state).
-    # "onchain": hasMembership() on the SBT contract (ROADMAP Fase 1.5,
-    # not implemented yet — selecting it fails loudly instead of simulating).
+    # "onchain": hasMembership() on the SBT contract (ROADMAP 3.1). Requires
+    # SEPOLIA_RPC_URL y SBT_CONTRACT_ADDRESS; sin ellas falla cerrado.
     MEMBERSHIP_SOURCE: Literal["mongo", "onchain"] = cast(
         Literal["mongo", "onchain"],
         os.environ.get('MEMBERSHIP_SOURCE', 'mongo'),
+    )
+    # Caché de hasMembership(). Corta a propósito: acota las llamadas RPC en el
+    # camino caliente de votar sin que una revocación on-chain tarde en verse.
+    # 0 desactiva la caché (cada verificación consulta la cadena).
+    MEMBERSHIP_CACHE_TTL_SECONDS: int = int(
+        os.environ.get('MEMBERSHIP_CACHE_TTL_SECONDS', '30')
+    )
+    MEMBERSHIP_CACHE_MAX_ENTRIES: int = int(
+        os.environ.get('MEMBERSHIP_CACHE_MAX_ENTRIES', '5000')
     )
     
     # Rate Limiting
@@ -136,6 +159,33 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.APP_ENV == "production"
     
+    @property
+    def session_cookie_samesite(self) -> str:
+        """`lax` | `strict` | `none`, con un valor por defecto por entorno.
+
+        En producción el frontend (Netlify) y la API (Render) están en sitios
+        distintos, así que la cookie de sesión solo viaja con `SameSite=None`.
+        En local ambos son `localhost` y `lax` es suficiente — y más estricto.
+        """
+        value = self.SESSION_COOKIE_SAMESITE.strip().lower()
+        if value in {"lax", "strict", "none"}:
+            return value
+        return "none" if self.is_production else "lax"
+
+    @property
+    def session_cookie_secure(self) -> bool:
+        """Los navegadores descartan `SameSite=None` sin `Secure`.
+
+        Por eso el valor derivado nunca produce esa combinación; solo una
+        configuración explícita puede hacerlo, y readiness la marca.
+        """
+        value = self.SESSION_COOKIE_SECURE.strip().lower()
+        if value in {"true", "1", "yes"}:
+            return True
+        if value in {"false", "0", "no"}:
+            return False
+        return self.is_production or self.session_cookie_samesite == "none"
+
     @property
     def cors_origins_list(self) -> List[str]:
         if not self.CORS_ORIGINS:

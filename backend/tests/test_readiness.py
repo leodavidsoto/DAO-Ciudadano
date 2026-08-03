@@ -205,11 +205,15 @@ async def test_production_readiness_rejects_embedded_wildcard_and_non_https_cors
     assert any("orígenes HTTPS exactos" in blocker for blocker in malformed_blockers)
 
 
-async def test_unimplemented_onchain_membership_source_is_never_ready(
+async def test_onchain_membership_source_without_rpc_is_never_ready(
     client,
     monkeypatch,
 ):
+    """El verificador on-chain existe (ROADMAP 3.1), pero sin RPC ni contrato
+    solo sabría responder 503: eso no es un despliegue listo."""
     monkeypatch.setattr(settings, "MEMBERSHIP_SOURCE", "onchain")
+    monkeypatch.setattr(settings, "SEPOLIA_RPC_URL", "")
+    monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "")
 
     response = await client.get("/health/ready")
 
@@ -218,6 +222,16 @@ async def test_unimplemented_onchain_membership_source_is_never_ready(
         "MEMBERSHIP_SOURCE=onchain" in blocker
         for blocker in response.json()["configuration"]["blockers"]
     )
+
+
+async def test_onchain_membership_source_with_rpc_is_not_blocked(monkeypatch):
+    monkeypatch.setattr(settings, "MEMBERSHIP_SOURCE", "onchain")
+    monkeypatch.setattr(settings, "SEPOLIA_RPC_URL", "https://sepolia.example/rpc")
+    monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "0x" + "11" * 20)
+
+    blockers = readiness.deployment_blockers()
+
+    assert not any("MEMBERSHIP_SOURCE=onchain" in blocker for blocker in blockers)
 
 
 # === Servicios añadidos después de la primera pasada ===

@@ -2,7 +2,16 @@
  * Wallet Connection Step - Real MetaMask Integration
  */
 import React, { useState, useEffect } from 'react';
-import { Wallet, Globe, AlertCircle, ExternalLink, RefreshCw, Loader2, ArrowRight } from 'lucide-react';
+import {
+    Wallet,
+    Globe,
+    AlertCircle,
+    ExternalLink,
+    RefreshCw,
+    Loader2,
+    ArrowRight,
+    LogOut,
+} from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { CyberPanel, CyberLoader, SuccessDisplay } from './CyberUI';
@@ -33,7 +42,9 @@ const WalletStep = () => {
         error,
         isMetaMaskInstalled,
         isConnected,
-        switchNetwork
+        switchNetwork,
+        disconnect,
+        isDisconnecting,
     } = useWallet();
 
     const [isChecking, setIsChecking] = useState(true);
@@ -266,6 +277,19 @@ const WalletStep = () => {
                                 Balance: {parseFloat(balance).toFixed(4)} ETH
                             </p>
                         )}
+
+                        <Button
+                            type="button"
+                            onClick={() => void disconnect()}
+                            disabled={isDisconnecting}
+                            aria-busy={isDisconnecting}
+                            variant="outline"
+                            size="sm"
+                            className="mt-4 border-gray-600 text-gray-400 hover:text-white"
+                        >
+                            <LogOut className="w-4 h-4 mr-2" />
+                            {isDisconnecting ? 'CERRANDO SESIÓN…' : 'CERRAR SESIÓN'}
+                        </Button>
 
                         {isWrongNetwork && (
                             <div className="mt-4 p-3 rounded-lg border border-yellow-500/40 bg-yellow-500/10 text-left">

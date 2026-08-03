@@ -68,6 +68,17 @@ async def _headers_for(client, address):
     return _SESSION_HEADERS[key]
 
 
+def _no_session(client):
+    """Devuelve headers vacíos y descarta la sesión por cookie del cliente.
+
+    Desde que `/wallet/verify` fija una cookie HttpOnly (tarea 1.13), el
+    cliente httpx la conserva en su cookie jar: "sin encabezado Authorization"
+    ya no significa "sin sesión". Estos tests quieren lo segundo.
+    """
+    client.cookies.clear()
+    return {}
+
+
 async def _mint_member(client, address):
     headers = await _sign_in(client, _ACCOUNTS_BY_ADDRESS[address])
     response = await client.post("/api/membership/mint", json={
@@ -84,7 +95,7 @@ async def _create_election(client, title="Elección de prueba",
                            seats=1, nominations_days=7, voting_days=7, term_months=12,
                            creator_address=ADDR_A, authenticated_address=None,
                            include_auth=True):
-    headers = {}
+    headers = _no_session(client)
     if include_auth:
         headers = await _headers_for(
             client, authenticated_address or creator_address
@@ -102,7 +113,7 @@ async def _create_election(client, title="Elección de prueba",
 
 async def _nominate(client, election_id, address, statement=None,
                     authenticated_address=None, include_auth=True):
-    headers = {}
+    headers = _no_session(client)
     if include_auth:
         headers = await _headers_for(client, authenticated_address or address)
     return await client.post(f"/api/governance/elections/{election_id}/candidacies", json={
@@ -113,7 +124,7 @@ async def _nominate(client, election_id, address, statement=None,
 
 async def _vote(client, election_id, voter, candidate,
                 authenticated_address=None, include_auth=True):
-    headers = {}
+    headers = _no_session(client)
     if include_auth:
         headers = await _headers_for(client, authenticated_address or voter)
     return await client.post(f"/api/governance/elections/{election_id}/vote", json={

@@ -42,6 +42,13 @@ _MINT_ABI = [
         "type": "function",
     },
     {
+        "inputs": [{"name": "member", "type": "address"}],
+        "name": "hasMembership",
+        "outputs": [{"name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
         "anonymous": False,
         "inputs": [
             {"indexed": True, "name": "member", "type": "address"},
@@ -118,6 +125,14 @@ _MINT_ABI = [
 
 class ChainMintError(RuntimeError):
     """El envío de la transacción de minteo falló (RPC, gas, revert, etc.)."""
+
+
+class ChainReadError(RuntimeError):
+    """Una lectura `view` no pudo completarse (RPC caído, ABI, red).
+
+    Distinta de "la respuesta fue False": el llamador no debe confundir "no
+    se pudo consultar" con "no tiene membresía".
+    """
 
 
 def configuration_errors() -> dict[str, str]:
@@ -532,6 +547,37 @@ def mint_with_proof(
     except Exception as e:
         logger.error("Error minteando con prueba ZK (%s)", type(e).__name__)
         raise ChainMintError("Fallo interno al enviar o confirmar la transacción") from e
+
+
+def has_membership(wallet_address: str) -> bool:
+    """`hasMembership(address)` del SBT (ROADMAP 3.1). Bloqueante: llámala en un hilo.
+
+    Lanza `ChainReadError` si la cadena no se pudo consultar. Devolver False
+    ante un RPC caído convertiría una incidencia de infraestructura en la
+    afirmación "esta persona no es miembro", que es justo la clase de mentira
+    que este proyecto está quitando del código.
+    """
+    from web3 import Web3
+
+    if not can_read_chain():
+        raise ChainReadError(
+            "La verificación de membresía on-chain requiere SEPOLIA_RPC_URL y "
+            "SBT_CONTRACT_ADDRESS válidas."
+        )
+    try:
+        checksummed = Web3.to_checksum_address(wallet_address)
+    except (TypeError, ValueError) as exc:
+        raise ChainReadError("Dirección Ethereum inválida.") from exc
+    try:
+        contract = _read_only_contract()
+        return bool(contract.functions.hasMembership(checksummed).call())
+    except Exception as exc:
+        # Sin exc_info y sin el texto del error: la URL del RPC puede llevar
+        # una API key y acaba en los logs del proveedor.
+        logger.error("No se pudo leer hasMembership() (%s)", type(exc).__name__)
+        raise ChainReadError(
+            "No se pudo consultar la membresía on-chain."
+        ) from exc
 
 
 def membership_token_of(wallet_address: str) -> Optional[int]:
