@@ -220,6 +220,9 @@ class Settings(BaseSettings):
         if self.CORS_ORIGINS == "*":
             return ["*"]
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+    # === Observabilidad (Fase 5.4) ===
+    SENTRY_DSN: str = os.environ.get('SENTRY_DSN', '')
+    ENABLE_METRICS: bool = os.environ.get('ENABLE_METRICS', 'false').lower() == 'true'
     
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -45,3 +45,7 @@ web3==7.16.0                # minteo real on-chain (app/services/chain_service.p
 # contadores viven en memoria de proceso y el limite deja de ser global.
 # ~250 KB, sin dependencias compiladas: cabe en el plan free de Render.
 redis==6.4.0
+
+# === Fase 5.4: Observabilidad (Producción) ===
+sentry-sdk[fastapi]==2.21.0
+prometheus-fastapi-instrumentator==8.1.0

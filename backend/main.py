@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 import asyncio
 import logging
 import os
+import sentry_sdk
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # Load environment variables
 ROOT_DIR = Path(__file__).parent
@@ -77,6 +79,16 @@ app = FastAPI(
     docs_url="/docs" if DOCS_ENABLED else None,
     redoc_url="/redoc" if DOCS_ENABLED else None,
 )
+
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        environment=settings.APP_ENV,
+        traces_sample_rate=1.0,
+    )
+
+if settings.ENABLE_METRICS:
+    Instrumentator().instrument(app).expose(app)
 
 
 # === Security Middleware Stack ===
