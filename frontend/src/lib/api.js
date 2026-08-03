@@ -386,10 +386,13 @@ export const electionsAPI = {
         }),
 
     // Voting
-    vote: (electionId, voterAddress, candidateAddress) =>
+    getBallotSchema: () => api.get('/governance/elections/ballot-schema'),
+    vote: (electionId, voterAddress, candidateAddress, nonce, signature) =>
         api.post(`/governance/elections/${electionId}/vote`, {
             voter_address: voterAddress,
             candidate_address: candidateAddress,
+            nonce,
+            signature,
         }),
     results: (electionId) => api.get(`/governance/elections/${electionId}/results`),
 

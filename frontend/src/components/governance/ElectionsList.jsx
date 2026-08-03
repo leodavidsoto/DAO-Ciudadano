@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Vote, Users, Clock, Trophy, UserPlus, Plus, ArrowLeft, AlertCircle, Check } from 'lucide-react';
 import { electionsAPI } from '@/lib/api';
+import useWallet from '@/hooks/useWallet';
 
 const STATUS_META = {
     nominations: { label: 'Candidaturas abiertas', cls: 'civic-tag-blue' },
@@ -140,6 +141,7 @@ const CreateElectionForm = ({ walletAddress, onCreated, onCancel }) => {
 // === Detalle ===
 
 const ElectionDetail = ({ election, walletAddress, onBack, onChanged }) => {
+    const { signer } = useWallet();
     const [candidacies, setCandidacies] = useState([]);
     const [results, setResults] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -175,6 +177,46 @@ const ElectionDetail = ({ election, walletAddress, onBack, onChanged }) => {
             if (onChanged) onChanged();
         } catch (err) {
             setError(errText(err, 'La operación falló'));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const actVote = async (electionId, candidateAddress) => {
+        setBusy(true); setError(''); setNotice('');
+        try {
+            const schemaRes = await electionsAPI.getBallotSchema();
+            const schema = schemaRes.data;
+            let signature = null;
+            let nonce = null;
+
+            if (schema.signed_ballots_required) {
+                if (!signer) throw new Error("Billetera no conectada para firmar");
+                nonce = Date.now().toString() + Math.random().toString(36).substring(2, 7);
+                const message = {
+                    electionId: electionId,
+                    voter: walletAddress,
+                    candidate: candidateAddress,
+                    nonce: nonce,
+                };
+                // Ethers v6 signTypedData signature: domain, types, message
+                // However, we need to strip EIP712Domain from types as Ethers adds it automatically
+                const types = { ...schema.types };
+                delete types.EIP712Domain;
+                
+                signature = await signer.signTypedData(schema.domain, types, message);
+            }
+
+            await electionsAPI.vote(electionId, walletAddress, candidateAddress, nonce, signature);
+            setNotice('Voto registrado');
+            await load();
+            if (onChanged) onChanged();
+        } catch (err) {
+            if (err?.code === 4001 || err?.message?.includes('user rejected')) {
+                setError('Firma rechazada por el usuario.');
+            } else {
+                setError(errText(err, 'La operación de voto falló'));
+            }
         } finally {
             setBusy(false);
         }
@@ -288,10 +330,7 @@ const ElectionDetail = ({ election, walletAddress, onBack, onChanged }) => {
                                     {election.status === 'voting' && (
                                         <button
                                             disabled={busy || !walletAddress}
-                                            onClick={() => act(
-                                                () => electionsAPI.vote(election.id, walletAddress, c.candidate_address),
-                                                'Voto registrado'
-                                            )}
+                                            onClick={() => actVote(election.id, c.candidate_address)}
                                             className="civic-btn civic-btn-primary civic-btn-sm shrink-0"
                                         >
                                             <Vote className="w-4 h-4" />
