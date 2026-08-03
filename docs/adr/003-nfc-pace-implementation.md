@@ -1,7 +1,12 @@
 # ADR 003: Estrategia de implementación NFC y PACE para la Cédula de Identidad
 
 ## Estado
-Propuesto
+**Aceptado e implementado en Android (03-08-2026); iOS pendiente de dependencia.**
+
+- Android: `PassportReaderModule.kt` ejecuta PACE con CAN vía JMRTD y lee DG1/DG2/EF.SOD.
+- iOS: `PassportReader.swift` abre la sesión CoreNFC y detecta el chip, pero **no** hace PACE:
+  la librería que este ADR eligió (`NFCPassportReader`) nunca se añadió al proyecto. Falla con
+  `E_PACE_UNSUPPORTED_PLATFORM` en vez de simular una lectura.
 
 ## Contexto
 La Fase 4.2 del Roadmap exige la lectura NFC real de la cédula de identidad chilena para extraer la información ciudadana, implementando el protocolo PACE (Password Authenticated Connection Establishment) sobre ISO-DEP, en lugar del obsoleto protocolo BAC. Posteriormente, se debe verificar la firma del SOD (Document Security Object) contra la CSCA (Country Signing Certificate Authority) de Chile.

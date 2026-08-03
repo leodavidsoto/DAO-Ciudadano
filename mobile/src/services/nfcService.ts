@@ -42,10 +42,29 @@ export interface ChileanIDData {
     rawData?: any;
 }
 
+/** Detalle de la autenticación pasiva devuelto por el módulo nativo (ADR-004). */
+export interface PassiveAuthResult {
+    passed: boolean;
+    dataGroupHashesMatch: boolean;
+    sodSignatureValid: boolean;
+    certificateChainTrusted: boolean;
+    /** 0 = la app no lleva ningún certificado CSCA: la cadena no se puede comprobar. */
+    trustAnchorsInstalled: number;
+    digestAlgorithm?: string;
+    signatureAlgorithm?: string;
+    documentSigner?: string;
+    documentSignerIssuer?: string;
+    failures: string[];
+}
+
 export interface NFCReadResult {
     success: boolean;
     data?: ChileanIDData;
     error?: string;
+    /** Código del módulo nativo: E_INVALID_CAN, E_PACE_FAILED, E_TIMEOUT... */
+    errorCode?: string;
+    /** Detalle por paso de la verificación; permite explicar un `false`. */
+    verification?: PassiveAuthResult;
     serialNumber?: string;
     /**
      * true SOLO si se estableció el canal seguro BAC y los datos de
@@ -160,57 +179,54 @@ class NFCService {
     }
 
     /**
-     * Read Chilean ID card using ISO-DEP with PACE protocol
-     * This is the scaffolding for the native module implementation described in ADR-003.
+     * Lectura PACE de la cédula vía el módulo nativo (ADR-003).
+     *
+     * La sesión NFC la abre el NATIVO, no este archivo. Android admite un solo
+     * modo lector activo: si `react-native-nfc-manager` reclama antes la
+     * tecnología IsoDep, se queda con el tag y `enableReaderMode` del módulo
+     * pelea contra él por la misma tarjeta. Por eso aquí no se llama a
+     * `requestTechnology`.
      */
     async readChileanIDPACE(can: string): Promise<NFCReadResult> {
-        try {
-            if (!this.isInitialized) {
-                await this.initialize();
-            }
-
-            await NfcManager.requestTechnology(NfcTech.IsoDep);
-
-            const tag = await NfcManager.getTag();
-            const serialNumber = tag?.id || 'unknown';
-
-            // Fase 4.2: Invocamos al módulo nativo (Android/iOS) para el handshake PACE
-            // y la validación criptográfica de la firma del SOD con la CSCA.
-            if (PassportReader) {
-                try {
-                    const result = await PassportReader.startPACESession(can);
-                    // Cuando los nativos estén implementados (JMRTD/Swift), esto retornará la data
-                    return {
-                        success: true,
-                        identityVerified: true, // asumiendo que el SDK valida todo el SOD
-                        data: result,
-                        serialNumber
-                    };
-                } catch (e: any) {
-                    return {
-                        success: false,
-                        identityVerified: false,
-                        error: e.message || 'PACE handshake failed',
-                        serialNumber
-                    };
-                }
-            } else {
-                return {
-                    success: false,
-                    identityVerified: false,
-                    error: 'PassportReader native module not found',
-                    serialNumber
-                };
-            }
-        } catch (error: any) {
-            console.error('PACE error:', error);
+        if (!PassportReader) {
             return {
                 success: false,
                 identityVerified: false,
-                error: error.message || 'Error estableciendo PACE',
+                error: 'El módulo nativo PassportReader no está disponible en este build.',
             };
-        } finally {
-            await this.cleanup();
+        }
+
+        try {
+            const result = await PassportReader.startPACESession(can);
+
+            // `identityVerified` es el veredicto del nativo (hashes de los DG +
+            // firma del SOD + cadena hasta la CSCA), NO una constante.
+            //
+            // Antes esto era `identityVerified: true` fijo con el comentario
+            // "asumiendo que el SDK valida todo el SOD". Con eso, una cédula
+            // cuya cadena de confianza NO valida —o un build sin certificado
+            // CSCA instalado, que es el estado actual— se reportaba como
+            // identidad verificada. Toda la criptografía del módulo nativo era
+            // decorativa mientras esa línea existiera.
+            const identityVerified = result?.identityVerified === true;
+
+            return {
+                success: true,
+                identityVerified,
+                data: result?.data,
+                verification: result?.verification,
+                serialNumber: result?.data?.serialNumber,
+            };
+        } catch (e: any) {
+            // El nativo distingue los motivos (E_INVALID_CAN, E_PACE_FAILED,
+            // E_TIMEOUT, E_NFC_DISABLED, E_PACE_UNSUPPORTED_PLATFORM...).
+            // Propagar el código permite que la UI diga qué hacer.
+            return {
+                success: false,
+                identityVerified: false,
+                errorCode: e?.code,
+                error: e?.message || 'No se pudo leer la cédula.',
+            };
         }
     }
 

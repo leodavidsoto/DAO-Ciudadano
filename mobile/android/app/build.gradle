@@ -234,6 +234,37 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
+    // eMRTD / PACE Cryptography (Fase 4.2)
+    //
+    // Dos problemas reales, ambos verificados compilando y ejecutando:
+    //
+    // 1. JMRTD arrastra `bcprov-jdk15on:1.64`, que tiene las MISMAS clases que
+    //    `bcprov-jdk15to18` con otro nombre de módulo. Con los dos en el
+    //    classpath, `checkDebugDuplicateClasses` aborta el APK. Hay que
+    //    excluir uno.
+    //
+    // 2. JMRTD 0.7.18 llama a `ASN1TaggedObject.getObject()`, que BouncyCastle
+    //    ELIMINÓ en 1.75. Con 1.77 el APK compila pero el parseo del EF.SOD
+    //    revienta en tiempo de ejecución con NoSuchMethodError — es decir, la
+    //    autenticación pasiva fallaría contra una cédula real y no lo habría
+    //    sabido nadie hasta tener el documento en la mano.
+    //
+    // 1.74 es la última versión que conserva esa API (comprobado con javap
+    // sobre 1.68/1.70/1.71/1.72/1.73/1.74/1.75/1.76/1.77). Se fija ahí: diez
+    // años menos de CVEs que la 1.64 de JMRTD, e incluye el arreglo de
+    // CVE-2023-33201. Subir de 1.74 exige actualizar JMRTD primero.
+    implementation("org.jmrtd:jmrtd:0.7.18") {
+        exclude group: "org.bouncycastle", module: "bcprov-jdk15on"
+    }
+    implementation("net.sf.scuba:scuba-sc-android:0.0.23")
+    implementation("org.bouncycastle:bcprov-jdk15to18:1.74")
+
+    // Unit tests de la autenticación pasiva: bcpkix construye los
+    // certificados sintéticos (CSCA y Document Signer) con los que se prueba
+    // la cadena de confianza sin necesidad de una cédula real.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.bouncycastle:bcpkix-jdk15to18:1.74")
+
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
     } else {

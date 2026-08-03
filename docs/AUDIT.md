@@ -915,3 +915,82 @@ Se calcula contra el balance real dividido por el gasto mensual observado, con
 un suelo de un mes (sin él, tres gastos del mismo día darían un runway de casi
 cero). Si hay gastos en otra moneda se devuelve `null` con
 `runway_unavailable_reason`, en vez de inventar la conversión.
+
+---
+
+## Séptima pasada (03-08-2026) — lectura eMRTD de la cédula (4.2)
+
+Implementación del módulo nativo Android (`PassportReaderModule.kt` +
+`PassiveAuthenticator.kt`) y del ciclo de sesión NFC en iOS. Al construir sobre
+el andamiaje existente aparecieron cinco problemas; los tres primeros impedían
+que la funcionalidad existiera siquiera.
+
+### P-63 (crítica, corregida): el puente JS fijaba `identityVerified: true`
+
+`mobile/src/services/nfcService.ts:185` — el resultado nativo se descartaba:
+
+```js
+const result = await PassportReader.startPACESession(can);
+return { success: true, identityVerified: true, /* ... */ };  // constante
+```
+
+Con esa línea, **toda la criptografía del módulo nativo era decorativa**:
+cualquier respuesta que no lanzara excepción se reportaba como identidad
+verificada, incluida una cédula cuya cadena de confianza NO valida y —hoy
+siempre— un build sin certificado CSCA instalado. Es el mismo patrón que el
+propio archivo documenta haber eliminado antes en `readChileanID`. Ahora
+propaga el veredicto del nativo y el detalle por paso.
+
+### P-64 (alta, corregida): JMRTD 0.7.18 es incompatible con BouncyCastle ≥ 1.75
+
+`mobile/android/app/build.gradle` declaraba `bcprov-jdk15to18:1.77` mientras
+JMRTD arrastra `bcprov-jdk15on:1.64`. Dos consecuencias, ambas verificadas
+ejecutando:
+
+1. Con los dos artefactos, `checkDebugDuplicateClasses` **aborta el APK**: son
+   las mismas clases con distinto nombre de módulo.
+2. Excluyendo el viejo y quedándose con 1.77, el APK compila **pero el EF.SOD
+   revienta en runtime** con
+   `NoSuchMethodError: ASN1TaggedObject.getObject()`. BouncyCastle eliminó ese
+   método en 1.75 y JMRTD lo llama al parsear el SOD.
+
+El segundo caso es el peligroso: sin un test que ejecute la criptografía, el
+fallo solo habría aparecido con una cédula real en la mano. Comprobado con
+`javap` sobre 1.68/1.70/1.71/1.72/1.73/**1.74**/1.75/1.76/1.77: **1.74 es la
+última versión con esa API**. Se fija ahí — diez años menos de CVEs que la 1.64
+de JMRTD e incluye el arreglo de CVE-2023-33201. Subir de 1.74 exige actualizar
+JMRTD primero.
+
+### P-65 (media, corregida): las dependencias eMRTD no estaban en la verificación
+
+El proyecto usa dependency verification de Gradle
+(`mobile/android/gradle/verification-metadata.xml`, 1068 componentes fijados),
+pero los 8 artefactos nuevos de JMRTD/scuba/BouncyCastle no tenían checksum, así
+que **cualquier tarea que resolviera el classpath fallaba**. Añadidos con
+`--write-verification-metadata sha256`; el `jmrtd-0.7.18.jar` se contrastó
+además contra el `.sha1` publicado en Maven Central (coinciden). Es fijado
+TOFU sobre HTTPS: detecta manipulación futura, no certifica el artefacto
+original.
+
+### Sin certificado CSCA no hay identidad verificada
+
+`android/app/src/main/assets/csca/` está **vacío a propósito** y su README
+explica por qué. Mientras no contenga el certificado del Registro Civil, la
+autenticación pasiva falla en el paso 3 e `identityVerified` es `false`, aunque
+los hashes y la firma del SOD sean correctos. Es el comportamiento correcto: un
+documento falsificado trae su propia cadena y verifica consigo mismo — hay un
+test que lo demuestra. El endpoint `/api/csca-masterlist` que ADR-004 propone
+como mitigación de rotación **tampoco existe todavía** en el backend.
+
+### Qué está verificado y qué no
+
+| Comprobación | Estado |
+|---|---|
+| Autenticación pasiva (hashes, firma, cadena, falsificación) | ✅ 6 tests JVM con documentos sintéticos |
+| Compilación del módulo y APK debug | ✅ `assembleDebug` |
+| Swift contra el SDK de iOS 18.5 | ✅ `swiftc -typecheck` |
+| Suite JS y TypeScript | ✅ 15 tests, `tsc --noEmit` limpio |
+| **PACE, secure messaging y parseo de un DG1 real** | ❌ **requiere cédula física** |
+| **iOS: PACE** | ❌ no implementado; falta la librería eMRTD |
+
+Nada de esto acredita todavía una identidad civil: 4.2 sigue 🟡.

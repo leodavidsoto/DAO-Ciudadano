@@ -1,7 +1,12 @@
 # ADR 004: Verificación Criptográfica del SOD (CSCA y Document Signer)
 
 ## Estado
-Propuesto
+**Aceptado e implementado en Android (03-08-2026), sin ancla de confianza todavía.**
+
+La lógica de los tres pasos vive en `PassiveAuthenticator.kt` y está cubierta por
+`PassiveAuthenticatorTest` (6 casos con documentos sintéticos, incluido un documento
+falsificado que trae su propia CSCA). **Falta el certificado CSCA de Chile**: mientras
+`android/app/src/main/assets/csca/` no lo contenga, `identityVerified` es siempre `false`.
 
 ## Contexto
 Durante la **Fase 4.2**, además de establecer el canal seguro vía PACE, es vital verificar la autenticidad e integridad de los datos extraídos de la cédula de identidad chilena. Los datos (Data Groups como el DG1 - MRZ y DG2 - Foto) están firmados (hacheados) en un archivo maestro llamado EF.SOD (Document Security Object).
