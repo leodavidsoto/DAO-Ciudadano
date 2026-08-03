@@ -243,19 +243,25 @@ async def get_proposals(
             "status": "active",
             "ends_at": {"$lt": now}
         })
-        async for proposal in expired_cursor:
-            if proposal.get("total_votes", 0) >= proposal.get("quorum_required", 10):
-                new_status = (
-                    "passed"
-                    if proposal.get("votes_for", 0) > proposal.get("votes_against", 0)
-                    else "rejected"
+        expired_docs = await expired_cursor.to_list(length=1000)
+        
+        if expired_docs:
+            expired_ids = [p["id"] for p in expired_docs]
+            tallies = await governance_service.compute_proposals_tallies(expired_ids, votes_collection)
+            for proposal in expired_docs:
+                t = tallies.get(proposal["id"], {})
+                total_votes = t.get("total_votes", 0)
+                votes_for = t.get("votes_for", 0)
+                votes_against = t.get("votes_against", 0)
+                
+                if total_votes >= proposal.get("quorum_required", 10):
+                    new_status = "passed" if votes_for > votes_against else "rejected"
+                else:
+                    new_status = "expired"
+                await proposals_collection().update_one(
+                    {"id": proposal["id"], "status": "active"},
+                    {"$set": {"status": new_status}}
                 )
-            else:
-                new_status = "expired"
-            await proposals_collection().update_one(
-                {"id": proposal["id"], "status": "active"},
-                {"$set": {"status": new_status}}
-            )
 
         # Build query
         query = {}
@@ -263,9 +269,20 @@ async def get_proposals(
             query["status"] = status
         
         # Fetch proposals
-        cursor = proposals_collection().find(query).sort("created_at", -1).limit(limit)
-        proposals = await cursor.to_list(length=limit)
+        proposals = await proposals_collection().find(query).sort(
+            "created_at", -1
+        ).limit(limit).to_list(length=limit)
         
+        if proposals:
+            proposal_ids = [p["id"] for p in proposals]
+            tallies = await governance_service.compute_proposals_tallies(proposal_ids, votes_collection)
+            for p in proposals:
+                t = tallies.get(p["id"], {})
+                p["votes_for"] = t.get("votes_for", 0)
+                p["votes_against"] = t.get("votes_against", 0)
+                p["votes_abstain"] = t.get("votes_abstain", 0)
+                p["total_votes"] = t.get("total_votes", 0)
+                
         return [ProposalResponse(**p) for p in proposals]
         
     except Exception as e:
@@ -292,10 +309,22 @@ async def get_ballot_schema():
 @router.get("/proposals/{proposal_id}", response_model=ProposalResponse)
 async def get_proposal(proposal_id: str):
     """Get a specific proposal by ID"""
-    proposal = await proposals_collection().find_one({"id": proposal_id})
-    if not proposal:
-        raise HTTPException(status_code=404, detail="Proposal not found")
-    return ProposalResponse(**proposal)
+    try:
+        proposal = await proposals_collection().find_one({"id": proposal_id})
+        if not proposal:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+            
+        tallies = await governance_service.compute_proposals_tallies([proposal["id"]], votes_collection)
+        t = tallies.get(proposal["id"], {})
+        proposal["votes_for"] = t.get("votes_for", 0)
+        proposal["votes_against"] = t.get("votes_against", 0)
+        proposal["votes_abstain"] = t.get("votes_abstain", 0)
+        proposal["total_votes"] = t.get("total_votes", 0)
+        
+        return ProposalResponse(**proposal)
+    except Exception as e:
+        logger.error(f"Error getting proposal: {e}")
+        raise HTTPException(status_code=500, detail="Error al obtener la propuesta")
 
 
 @router.get(
@@ -440,10 +469,12 @@ async def cast_vote(
         voting_ended = not ends_at or ends_at <= now
         if proposal["status"] != "active" or voting_ended:
             if proposal["status"] == "active" and voting_ended:
-                if proposal.get("total_votes", 0) >= proposal.get("quorum_required", 10):
+                tallies = await governance_service.compute_proposals_tallies([proposal["id"]], votes_collection)
+                t = tallies.get(proposal["id"], {})
+                if t.get("total_votes", 0) >= proposal.get("quorum_required", 10):
                     closed_status = (
                         "passed"
-                        if proposal.get("votes_for", 0) > proposal.get("votes_against", 0)
+                        if t.get("votes_for", 0) > t.get("votes_against", 0)
                         else "rejected"
                     )
                 else:
@@ -508,16 +539,6 @@ async def cast_vote(
             await votes_collection().insert_one(vote_record)
         except DuplicateKeyError:
             return VoteResponse(ok=False, error="Already voted on this proposal")
-        
-        # Update vote counts by the applied weight, not by 1
-        update_field = f"votes_{request.vote}" if request.vote in ["for", "against", "abstain"] else "votes_abstain"
-        await proposals_collection().update_one(
-            {"id": request.proposal_id},
-            {
-                "$inc": {update_field: weight, "total_votes": weight}
-            }
-        )
-        
         logger.info(
             f"Vote cast: {request.voter_address} -> {request.vote} "
             f"on {request.proposal_id} (weight {weight})"
@@ -553,8 +574,8 @@ async def get_governance_stats():
         passed = await proposals_collection().count_documents({"status": "passed"})
         
         # Sum total votes
-        pipeline = [{"$group": {"_id": None, "total": {"$sum": "$total_votes"}}}]
-        result = await proposals_collection().aggregate(pipeline).to_list(1)
+        pipeline = [{"$group": {"_id": None, "total": {"$sum": "$weight"}}}]
+        result = await votes_collection().aggregate(pipeline).to_list(1)
         total_votes = result[0]["total"] if result else 0
         
         # Participation rate = unique voters / active members.

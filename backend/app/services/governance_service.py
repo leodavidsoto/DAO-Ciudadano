@@ -202,6 +202,50 @@ class GovernanceService:
         """Compatibilidad: `True` si la delegación debe rechazarse."""
         return (await cls.delegation_block_reason(delegator, delegate)) is not None
 
+    @classmethod
+    async def compute_proposals_tallies(cls, proposal_ids: list[str], votes_collection) -> dict[str, dict[str, int]]:
+        """Dynamically compute vote tallies for a list of proposals.
+        
+        This prevents divergence between individual ballots and the total tally
+        if a crash occurs between inserting the vote and updating the proposal (ROADMAP 3.10).
+        """
+        if not proposal_ids:
+            return {}
+            
+        pipeline = [
+            {"$match": {"proposal_id": {"$in": proposal_ids}}},
+            {"$group": {
+                "_id": {
+                    "proposal_id": "$proposal_id",
+                    "vote": "$vote"
+                },
+                "total_weight": {"$sum": "$weight"}
+            }}
+        ]
+        
+        results = await votes_collection().aggregate(pipeline).to_list(length=len(proposal_ids) * 3)
+        
+        tallies = {
+            pid: {"votes_for": 0, "votes_against": 0, "votes_abstain": 0, "total_votes": 0}
+            for pid in proposal_ids
+        }
+        
+        for r in results:
+            pid = r["_id"]["proposal_id"]
+            vote_type = r["_id"]["vote"]
+            weight = r["total_weight"]
+            
+            if vote_type == "for":
+                tallies[pid]["votes_for"] += weight
+            elif vote_type == "against":
+                tallies[pid]["votes_against"] += weight
+            elif vote_type == "abstain":
+                tallies[pid]["votes_abstain"] += weight
+                
+            tallies[pid]["total_votes"] += weight
+            
+        return tallies
+
     # === Elections ===
 
     # Tie-break criterion (documented decision): candidates with equal vote
