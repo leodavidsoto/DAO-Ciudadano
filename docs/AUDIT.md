@@ -678,3 +678,59 @@ entonces `setCoordinatorPubKey`.
 
 Nota operativa: el par que el script imprimió durante la verificación de esta
 tarea quedó en el registro de la sesión y **no debe usarse**.
+
+
+---
+
+## TallyVerifier de MACI desplegado en Sepolia (03-08-2026)
+
+`tallyIsVerifiable()` pasó a **`true`**. Ya se puede publicar un recuento, pero
+solo contra una prueba válida del circuito de esta ceremonia.
+
+| Elemento | Valor |
+|---|---|
+| `TallyVerifier` | `0x3817516c4fa354c9F24f6deCE0eA636048c54D87` (1.560 bytes) |
+| `MACICoordinator` | `0x1CC218883dBeFf6aB8b4933723DF23B8F69336a6` |
+| tx de enlace | `0x5851dc7d8295e2f89956b441b56d27c6625137afd511b71b43af42f59eb8d7fa` |
+| Circuito | `maci_tally.circom`, 34.900 restricciones, 3 señales públicas |
+| Powers of Tau | Hermez potencia 17, digest oficial verificado |
+| `zkey` sha256 | `cc1dc57b63e45eb4345e73319c0bf8101f50b2f42aa104758a57a80cd0575162` |
+
+Verificado leyendo la cadena de forma independiente, no fiándose del recibo de
+la transacción.
+
+### Esta ceremonia NO es apta para una elección vinculante
+
+Una sola contribución, hecha localmente, sin beacon final. El propio manifiesto
+lo registra: `participant_independence=not-attested-by-script`,
+`beacon=not-applied`, `promotion_status=not-promoted`. **Quien ejecutó esta
+ceremonia conoce el toxic waste y podría fabricar recuentos falsos.** Sirve para
+integración. Antes de un uso vinculante hace falta pasar el `zkey` por
+participantes independientes (`--input-zkey`) y cerrar con un beacon público
+documentado.
+
+### Correcciones a `trusted_setup.sh`
+
+Tres, encontradas al usarlo sobre un circuito distinto de aquel para el que se
+escribió:
+
+1. **Circuito y potencia de ptau parametrizables** (`--circuit`,
+   `--ptau-power`), con los digests oficiales de snarkjs fijados por potencia.
+   Duplicar el script habría dejado dos copias divergiendo en los controles.
+2. **Compilar antes de descargar el ptau.** El orden anterior verificaba
+   criptográficamente cientos de MB *antes* de compilar, así que un circuito
+   que no cabía en la potencia elegida se descubría una hora después. Ahora se
+   comprueba `2^power >= 2 x restricciones` justo tras compilar: falla en
+   **2,8 segundos** indicando la potencia correcta. Es exactamente lo que costó
+   descubrir que `maci_tally` necesitaba potencia 17 y no 15.
+3. **Cachear la verificación del transcript por digest.** Es determinista sobre
+   un archivo ya fijado por hash; el marcador se indexa por ese digest y solo
+   se usa tras revalidar el hash en la misma ejecución, así que no rebaja la
+   garantía.
+
+### Nota de método
+
+La primera ejecución se dio por buena por error: se canalizó la salida a `tail`
+y el `exit code 0` observado era el de `tail`, no el del script — que **había
+fallado**. Las ejecuciones posteriores capturan el estado real sin tubería de
+por medio.

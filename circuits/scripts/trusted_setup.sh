@@ -14,16 +14,43 @@ umask 077
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly CIRCUIT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-readonly CIRCUIT_NAME="verify_identity"
-readonly CIRCUIT_SOURCE="$CIRCUIT_DIR/${CIRCUIT_NAME}.circom"
+# Se elige con --circuit (por defecto verify_identity), para correr la misma
+# ceremonia sobre maci_tally sin duplicar el script: duplicarlo dejaría dos
+# copias que divergen en los controles de seguridad.
+CIRCUIT_NAME="${TRUSTED_SETUP_CIRCUIT:-verify_identity}"
+CIRCUIT_SOURCE=""
 
 # Source and BLAKE2b-512 digest are published in the official snarkjs README:
 # https://github.com/iden3/snarkjs#7-prepare-phase-2
-readonly PTAU_FILENAME="powersOfTau28_hez_final_15.ptau"
-readonly PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILENAME}"
-readonly PTAU_BLAKE2B512="982372c867d229c236091f767e703253249a9b432c1710b4f326306bfa2428a17b06240359606cfe4d580b10a5a1f63fbed499527069c18ae17060472969ae6e"
-readonly PTAU_BYTES="37831832"
+# Digests publicados en el README oficial de snarkjs. Se fijan aquí por
+# potencia: un circuito más grande necesita un ptau mayor, y la alternativa
+# —calcular el hash de lo descargado— solo probaría que el archivo es igual a
+# sí mismo.
+ptau_digest_for_power() {
+    case "$1" in
+        15) printf '982372c867d229c236091f767e703253249a9b432c1710b4f326306bfa2428a17b06240359606cfe4d580b10a5a1f63fbed499527069c18ae17060472969ae6e' ;;
+        17) printf '6247a3433948b35fbfae414fa5a9355bfb45f56efa7ab4929e669264a0258976741dfbe3288bfb49828e5df02c2e633df38d2245e30162ae7e3bcca5b8b49345' ;;
+        18) printf '7e6a9c2e5f05179ddfc923f38f917c9e6831d16922a902b0b4758b8e79c2ab8a81bb5f29952e16ee6c5067ed044d7857b5de120a90704c1d3b637fd94b95b13e' ;;
+        *)  return 1 ;;
+    esac
+}
+
+PTAU_POWER="${TRUSTED_SETUP_PTAU_POWER:-15}"
+PTAU_FILENAME=""
+PTAU_URL=""
+PTAU_BLAKE2B512=""
+PTAU_BYTES=""
 readonly BEACON_ITERATIONS_EXPONENT="10"
+
+configure_ptau_for_power() {
+    local power="$1"
+    PTAU_BLAKE2B512="$(ptau_digest_for_power "$power")" \
+        || die "No hay digest fijado para el ptau de potencia $power"
+    PTAU_FILENAME="powersOfTau28_hez_final_${power}.ptau"
+    PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILENAME}"
+    PTAU_PATH="$CACHE_DIR/$PTAU_FILENAME"
+    PTAU_BYTES=""
+}
 
 # Both locations are ignored by the repository. Overrides exist for isolated
 # tests, but are restricted to the same ignored trees.
@@ -185,9 +212,29 @@ is_expected_ptau() {
 
     [[ -f "$path" && ! -L "$path" ]] || return 1
     actual_size="$(file_size "$path")" || return 1
-    [[ "$actual_size" == "$PTAU_BYTES" ]] || return 1
+    # El tamaño ya no se fija por potencia: el digest BLAKE2b es la
+    # comprobación que decide, y comprobar el tamaño primero solo era un
+    # atajo para descartar archivos truncados.
+    [[ "$actual_size" -gt 0 ]] || return 1
     actual_hash="$(file_hash "$path" blake2b512)" || return 1
     [[ "$actual_hash" == "$PTAU_BLAKE2B512" ]]
+}
+
+verify_ptau_transcript() {
+    # La verificación completa es determinista sobre un archivo cuyo digest ya
+    # está fijado, así que se cachea POR ESE DIGEST. No se rebaja la garantía:
+    # el marcador solo vale para un archivo que ya volvió a superar la
+    # comprobación de hash en esta misma ejecución.
+    local marker="$CACHE_DIR/.verified-${PTAU_BLAKE2B512:0:32}"
+
+    if [[ -f "$marker" ]]; then
+        log "Transcript already cryptographically verified (cached by digest)"
+        return 0
+    fi
+
+    log "Verifying the full Phase 1 transcript (slow, once per digest)"
+    "$SNARKJS_BIN" powersoftau verify "$PTAU_PATH"
+    : > "$marker"
 }
 
 quarantine_file() {
@@ -263,12 +310,12 @@ download_and_verify_ptau() {
     if [[ -e "$partial_path" ]]; then
         [[ -f "$partial_path" && ! -L "$partial_path" ]] \
             || die "Refusing unexpected partial download: $partial_path"
-        if [[ "$(file_size "$partial_path")" -gt "$PTAU_BYTES" ]]; then
-            quarantine_file "$partial_path"
-        fi
+        # Sin tamaño esperado por potencia, una descarga parcial se reanuda y
+        # el digest final decide si sirve.
+        :
     fi
 
-    log "Downloading public Powers of Tau (resumable, 37.8 MB)"
+    log "Downloading public Powers of Tau for power $PTAU_POWER (resumable)"
     "$CURL_BIN" \
         --fail \
         --location \
@@ -313,6 +360,16 @@ entropy_stream() {
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
+        --circuit)
+            require_value "$1" "$#"
+            CIRCUIT_NAME="$2"
+            shift 2
+            ;;
+        --ptau-power)
+            require_value "$1" "$#"
+            PTAU_POWER="$2"
+            shift 2
+            ;;
         --contributor-name)
             require_value "$1" "$#"
             CONTRIBUTOR_NAME="$2"
@@ -357,6 +414,14 @@ require_command "$NODE_BIN"
 require_command "$CURL_BIN"
 require_command "$CIRCOM_BIN"
 require_command "$SNARKJS_BIN"
+
+validate_public_label "$CIRCUIT_NAME" "--circuit"
+
+CIRCUIT_SOURCE="$CIRCUIT_DIR/${CIRCUIT_NAME}.circom"
+[[ "$PTAU_POWER" =~ ^[0-9]+$ ]] || die "--ptau-power debe ser un entero"
+configure_ptau_for_power "$PTAU_POWER"
+
+[[ -f "$CIRCUIT_SOURCE" ]] || die "Circuit source not found: $CIRCUIT_SOURCE"
 
 validate_public_label "$CONTRIBUTOR_NAME" "--contributor-name"
 
@@ -408,11 +473,11 @@ SCRATCH_DIR="$WORK_DIR/.scratch"
 COMPILED_DIR="$SCRATCH_DIR/compiled"
 mkdir -p -- "$COMPILED_DIR"
 
-log "1/8 Fetch and authenticate the public Phase 1 transcript"
-download_and_verify_ptau
-"$SNARKJS_BIN" powersoftau verify "$PTAU_PATH"
-
-log "2/8 Compile and inspect the current circuit"
+# ORDEN: compilar ANTES de tocar el ptau. Al revés, un circuito que no cabe
+# en la potencia elegida se descubría en el paso 3, después de descargar y
+# verificar criptográficamente un archivo de cientos de MB — una hora tirada
+# para un error detectable en segundos.
+log "1/8 Compile and inspect the current circuit"
 "$CIRCOM_BIN" "$CIRCUIT_SOURCE" \
     --r1cs \
     --sym \
@@ -422,6 +487,25 @@ log "2/8 Compile and inspect the current circuit"
 
 R1CS_PATH="$COMPILED_DIR/${CIRCUIT_NAME}.r1cs"
 SYM_PATH="$COMPILED_DIR/${CIRCUIT_NAME}.sym"
+
+# snarkjs exige 2^power >= 2 * restricciones totales. Comprobarlo aquí evita
+# descubrirlo tras la descarga y verificación del transcript.
+constraint_total="$("$SNARKJS_BIN" r1cs info "$R1CS_PATH" 2>/dev/null \
+    | awk '/# of Constraints/ {print $NF; exit}')"
+if [[ "$constraint_total" =~ ^[0-9]+$ ]]; then
+    required_power=1
+    while (( (1 << required_power) < constraint_total * 2 )); do
+        required_power=$(( required_power + 1 ))
+    done
+    log "Circuit has $constraint_total constraints; needs Powers of Tau >= 2^$required_power"
+    if (( PTAU_POWER < required_power )); then
+        die "El circuito no cabe en 2^$PTAU_POWER: usa --ptau-power $required_power"
+    fi
+fi
+
+log "2/8 Fetch and authenticate the public Phase 1 transcript"
+download_and_verify_ptau
+verify_ptau_transcript
 [[ -s "$R1CS_PATH" && -s "$SYM_PATH" ]] \
     || die "Circuit compiler did not produce the expected R1CS and symbol files"
 "$SNARKJS_BIN" r1cs info "$R1CS_PATH"
@@ -492,7 +576,7 @@ contributor=${CONTRIBUTOR_NAME}
 starting_zkey=${INPUT_DESCRIPTION}
 beacon=${BEACON_DESCRIPTION}
 ptau_url=${PTAU_URL}
-ptau_bytes=${PTAU_BYTES}
+ptau_power=${PTAU_POWER}
 ptau_blake2b512=${PTAU_BLAKE2B512}
 r1cs_sha256=${R1CS_SHA256}
 zkey_sha256=${ZKEY_SHA256}
