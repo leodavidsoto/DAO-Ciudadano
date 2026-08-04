@@ -59,33 +59,26 @@ async def mock_delay(seconds: float = 0.1):
     await asyncio.sleep(seconds)
 
 
-@router.post("/clave-unica", response_model=ClaveUnicaResponse)
-async def authenticate_clave_unica(request: ClaveUnicaRequest):
+@router.post("/clave-unica", deprecated=True)
+async def clave_unica_simulation_removed():
+    """El simulador de ClaveÚnica se eliminó (ROADMAP 4.1).
+
+    Devolvía `demo:clave-unica:<uuid>` y un `assurance_level` inventado para
+    cualquier RUT con formato válido: no autenticaba a nadie. Ahora existe el
+    flujo OIDC real, así que mantener el simulador dejaría dos puertas donde
+    una finge ser identidad civil (AGENTS.md, regla 2).
+
+    Queda esta señal en vez de un 404 mudo porque hay clientes desplegados
+    llamando aquí: así reciben qué usar en su lugar y no un error opaco.
     """
-    Authenticate user with ClaveÚnica (Chilean government SSO)
-    
-    In production, this would redirect to the official ClaveÚnica portal.
-    Currently uses mock authentication for development.
-    """
-    try:
-        await mock_delay(0.12)
-        
-        if not request.rut or len(request.rut) < 8:
-            return ClaveUnicaResponse(ok=False, error="RUT inválido")
-        
-        # Ephemeral demo identifier: deliberately neither stable nor derived
-        # from the RUT, and impossible to mistake for a government identifier.
-        subject_id = f"demo:clave-unica:{uuid.uuid4()}"
-        
-        return ClaveUnicaResponse(
-            ok=True,
-            subject_id=subject_id,
-            assurance_level=DEMO_ASSURANCE_LEVEL,
-        )
-        
-    except Exception as e:
-        logger.error(f"Error in ClaveÚnica auth: {e}")
-        return ClaveUnicaResponse(ok=False, error="No se pudo completar la autenticación.")
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "El simulador de ClaveÚnica se eliminó. Usa el flujo real: "
+            "POST /api/auth/clave-unica/authorize y luego "
+            "POST /api/auth/clave-unica/callback."
+        ),
+    )
 
 
 @router.post("/nfc", response_model=NFCResponse)

@@ -62,6 +62,16 @@ def rules() -> List[RetentionRule]:
             ),
         ),
         RetentionRule(
+            collection="oidc_login_sessions",
+            field="created_at",
+            ttl_seconds=max(60, settings.CLAVE_UNICA_LOGIN_TTL_SECONDS),
+            reason=(
+                "Un intento de login OIDC guarda el verificador PKCE y el "
+                "nonce. Pasada su ventana no sirven para nada y son material "
+                "sensible: se borran solos."
+            ),
+        ),
+        RetentionRule(
             collection="identity_grants",
             field="created_at",
             ttl_seconds=grant_days * SECONDS_PER_DAY if grant_days else None,

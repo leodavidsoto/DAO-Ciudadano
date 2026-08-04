@@ -1342,3 +1342,100 @@ específico sin credenciales para ejecutarlo sería exactamente la capacidad
 fingida que este repositorio no admite.
 
 420 tests (414 antes).
+
+---
+
+## Decimotercera pasada (03-08-2026) — MACI: cliente compatible, protocolo aún cerrado
+
+Al ejecutar el cifrado web contra el WASM real de `processMessages` apareció
+una diferencia que los tests anteriores ocultaban: el cliente usaba el
+`PCommand.encrypt` de MACI 2.5 de referencia, pero el circuito de este
+repositorio aprobó otro wire format. La revisión cruzada descubrió además tres
+fallos críticos independientes. Por eso `/maci/status` y
+`accepting_messages` deben seguir en `false`.
+
+| ID | Hallazgo | Ubicación | Severidad | Estado |
+|---|---|---|---|---|
+| P-72 | El navegador cifraba el `PCommand` empaquetado de referencia; `processMessages` espera diez campos explícitos, firma Poseidon de seis campos y stream aditivo Poseidon. Los tests sólo descifraban con la misma librería JS y no ejecutaban el circuito | `frontend/src/lib/maci.js:339`; `circuits/processMessages.circom:30` | **Crítica (disponibilidad/integridad electoral)** | 🟢 Corregida en frontend: `frontend/src/lib/maci.js:349-405` implementa la frontera aprobada. Se generó un testigo válido con `circuits/build/process/processMessages_js/processMessages.wasm`; el test unitario conserva descifrado y verificación cruzada de firma |
+| P-73 | `pollId` no forma parte del comando firmado ni de `messageHash`; `stateIndex` se firma pero nunca se ata a `pathIndices`. Además, el nonce no está en `StateLeaf`: `currentNonce` es una entrada privada que el coordinador puede escoger en cada prueba | `circuits/processMessages.circom:45-49`; `circuits/processMessages.circom:80-98`; `circuits/processMessages.circom:135-148`; `circuits/processMessages.circom:183-201`; `circuits/processMessages.circom:266-275` | **Crítica (replay y sustitución de estado)** | 🔴 Abierta. El frontend exige `poll_bound_messages=true` y `stateful_nonces=true` antes de habilitar el envío (`frontend/src/components/governance/VotingBallot.jsx:58-69`) |
+| P-74 | El circuito de tally acepta la misma hoja y ruta en las cinco posiciones del batch y suma las cinco. Se reprodujo con el WASM: una sola hoja válida produjo `[5,0,0]` | `circuits/maci_tally.circom:129-170`; `circuits/maci_tally.circom:199-207` | **Crítica (multiplicación de votos)** | 🔴 Abierta. Falta demostrar índices distintos/cobertura; el frontend exige `unique_tally_leaves=true` |
+| P-75 | El pipeline no enlaza las raíces de `processMessages` con el tally y contrato/circuito discrepan en sus tres señales públicas: el circuito declara raíces/compromisos; `publishTally` entrega message chain, censo y compromiso. Mongo tampoco publica on-chain y su SHA-256 de strings difiere del `keccak256(abi.encode(...))` del contrato | `circuits/processMessages.circom:285`; `circuits/maci_tally.circom:233-237`; `contracts/contracts/MACICoordinator.sol:284-292`; `contracts/contracts/MACICoordinator.sol:325-331`; `backend/app/services/maci_service.py:465-490` | **Crítica (tally no verificable/pipeline inoperante)** | 🔴 Abierta. Los tests Solidity usan un verifier mock. El frontend exige `process_tally_linked=true` y mantiene fail-closed |
+| P-76 | Elecciones web enviaba `voter_address`, `candidate_address`, nonce y firma EIP-712 al endpoint en claro; la firma autentica, pero no oculta la preferencia | `frontend/src/components/governance/ElectionsList.jsx` (flujo retirado); `backend/app/routers/elections.py:423`; `frontend/src/lib/api.js:428-430` | **Alta (privacidad electoral)** | 🟡 Cerrada en frontend: se eliminó el método de transporte y el CTA queda bloqueado con estado explícito (`frontend/src/components/governance/ElectionsList.jsx:271-335`). Backend/contrato MACI para elecciones sigue pendiente |
+| P-77 | El backend devuelve `{ok,index,message_chain,duplicate}`, pero la UI exigía `message_id`, `message_hash` o `tx_hash`; una recepción 200 real se presentaba como error y podía reintentarse indefinidamente | `backend/app/services/maci_service.py:455-490`; `frontend/src/lib/api.js:363-381` | **Alta (idempotencia/disponibilidad)** | 🟢 Corregida: el cliente valida índice y acumulador canónicos y muestra la referencia completa |
+
+La UI tampoco presenta ya los conteos parciales de propuestas activas como si
+fueran compatibles con una urna cifrada. Las fases visuales se mueven sólo por
+eventos reales —llave, registro público, poll, anclaje, cifrado y publicación—,
+sin porcentajes ni progreso simulado.
+
+Los requisitos de contrato/circuito y el endpoint MACI pendiente para
+elecciones quedaron detallados en `REQUEST_TO_CLAUDE.md`, sin modificar
+`backend/`, `contracts/` ni `circuits/`.
+
+---
+
+## Decimotercera pasada (04-08-2026) — ClaveÚnica OIDC real (4.1)
+
+`backend/app/services/clave_unica.py` y `backend/app/routers/clave_unica.py`.
+
+### El simulador se eliminó, no se dejó al lado
+
+`POST /api/auth/clave-unica` aceptaba **cualquier RUT con formato válido** y
+devolvía `demo:clave-unica:<uuid>` con un `assurance_level` inventado. No
+autenticaba a nadie. Mantenerlo junto al flujo real dejaría dos puertas donde
+una finge identidad civil (AGENTS.md, regla 2). Ahora responde **410** con la
+ruta correcta, en vez de un 404 mudo, porque hay clientes desplegados
+llamándolo — el frontend usa `authAPI.claveUnica` en
+`OnboardingContext.jsx:301`.
+
+### Lo que NO se tocó, y por qué
+
+El router `/auth` conserva su dependencia que responde 503 en producción.
+Implementar ClaveÚnica no vuelve reales el NFC demo ni el liveness: el primero
+no lee PACE (eso es 4.2, en el módulo nativo) y el segundo es una heurística
+sobre una sola imagen. Por eso ClaveÚnica vive en un router APARTE, que sí
+funciona en producción cuando está configurado. Hay un test que fija que los
+demos siguen bloqueados.
+
+### Decisiones de seguridad
+
+* **El algoritmo de firma se fija por configuración** (`CLAVE_UNICA_ID_TOKEN_ALG`)
+  y jamás se lee de la cabecera del token. Es la defensa contra la confusión
+  de algoritmos: con un JWKS RS256 publicado, un atacante firma con HMAC
+  usando la clave pública —que es pública— y el token pasaría. Hay un test que
+  forja ese token **a mano**, porque PyJWT se niega a producirlo.
+* **`state`, `nonce` y verificador PKCE viven en el servidor**, atados entre
+  sí, con TTL y de un solo uso. El `state` se consume con un
+  `find_one_and_update` atómico: dos callbacks con el mismo código no producen
+  dos grants.
+* **RS256 sin JWKS es error de configuración.** Sin clave pública no se puede
+  verificar, y "no verificar" no es una opción.
+* **El dígito verificador del RUN se recalcula.** Un RUN cuyo DV no cuadra no
+  es un RUN, lo firme quien lo firme.
+* **Si el RUN no aparece, se falla.** No se deriva un identificador del `sub`
+  ni se inventa nada: sin RUN no hay identidad civil que acreditar.
+* **UserInfo debe hablar del mismo sujeto** que el `id_token`. Mezclar dos
+  acreditaría a la persona equivocada.
+
+### Qué queda del ciudadano en la base
+
+El RUN **no se persiste en ninguna parte**. Solo su índice ciego HMAC
+(`subject_key`), con el mismo pepper y la misma separación de dominio que el
+resto, así que rota con `pii_maintenance.py reindex-lookups`. El `id_token`
+tampoco se guarda. Hay un test que serializa el documento del grant y
+comprueba que el RUN no aparece.
+
+El intento de login (verificador PKCE y nonce) caduca solo: se añadió a la
+política de retención con TTL igual a `CLAVE_UNICA_LOGIN_TTL_SECONDS`.
+
+### Lo que NO está verificado
+
+**Nada se ha probado contra ClaveÚnica.** No hay credenciales ni acceso al
+sandbox de la División de Gobierno Digital, y por eso tampoco hay endpoints
+por defecto en `.env.example`: escribir una URL "de memoria" del proveedor del
+Estado sería inventar su configuración. Los 27 tests usan un IdP falso con
+claves generadas en el momento; cubren el protocolo y los ataques, no la
+interoperabilidad real. El trámite administrativo sigue siendo el camino
+crítico de 4.1.
+
+446 tests (420 antes).

@@ -179,6 +179,35 @@ class Settings(BaseSettings):
     # ClaveÚnica/NFC/liveness NUNCA deben emitir grants.
     IDENTITY_PROVIDER: str = os.environ.get('IDENTITY_PROVIDER', '')
 
+    # === ClaveÚnica / OIDC (ROADMAP 4.1) ===
+    # NINGÚN valor por defecto, tampoco los endpoints: los entrega la División
+    # de Gobierno Digital al habilitar el cliente, y escribir aquí una URL "de
+    # memoria" sería exactamente inventar configuración de un tercero. Sin
+    # estos valores el flujo responde 503 en cualquier entorno.
+    CLAVE_UNICA_CLIENT_ID: str = os.environ.get('CLAVE_UNICA_CLIENT_ID', '')
+    CLAVE_UNICA_CLIENT_SECRET: str = os.environ.get('CLAVE_UNICA_CLIENT_SECRET', '')
+    # Debe coincidir EXACTAMENTE con la registrada ante el proveedor.
+    CLAVE_UNICA_REDIRECT_URI: str = os.environ.get('CLAVE_UNICA_REDIRECT_URI', '')
+    CLAVE_UNICA_ISSUER: str = os.environ.get('CLAVE_UNICA_ISSUER', '')
+    CLAVE_UNICA_AUTHORIZATION_ENDPOINT: str = os.environ.get(
+        'CLAVE_UNICA_AUTHORIZATION_ENDPOINT', ''
+    )
+    CLAVE_UNICA_TOKEN_ENDPOINT: str = os.environ.get('CLAVE_UNICA_TOKEN_ENDPOINT', '')
+    CLAVE_UNICA_USERINFO_ENDPOINT: str = os.environ.get(
+        'CLAVE_UNICA_USERINFO_ENDPOINT', ''
+    )
+    # RS256 exige JWKS; HS256 usa el client_secret. El algoritmo se FIJA aquí y
+    # nunca se toma de la cabecera del token: dejar que el token elija su
+    # propio algoritmo es la confusión de algoritmos, y con ella una firma
+    # HMAC hecha con la clave pública se aceptaría como válida.
+    CLAVE_UNICA_ID_TOKEN_ALG: str = os.environ.get('CLAVE_UNICA_ID_TOKEN_ALG', 'RS256')
+    CLAVE_UNICA_JWKS_URI: str = os.environ.get('CLAVE_UNICA_JWKS_URI', '')
+    CLAVE_UNICA_SCOPES: str = os.environ.get('CLAVE_UNICA_SCOPES', 'openid run name')
+    # Ventana de vida de un intento de login (state/nonce/verifier PKCE).
+    CLAVE_UNICA_LOGIN_TTL_SECONDS: int = int(
+        os.environ.get('CLAVE_UNICA_LOGIN_TTL_SECONDS', '600')
+    )
+
     # External Services
     EMERGENT_LLM_KEY: Optional[str] = None
     

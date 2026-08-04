@@ -79,20 +79,21 @@ async def test_login_unknown_user_fails(client):
     assert response.json()["ok"] is False
 
 
-async def test_clave_unica_returns_demo_subject(client, monkeypatch):
+async def test_the_clave_unica_simulation_is_gone(client, monkeypatch):
+    """Aceptaba cualquier RUT con formato válido y devolvía un sujeto demo.
+
+    Ahora existe el flujo OIDC real (ROADMAP 4.1), así que el simulador se
+    eliminó: dos puertas donde una finge identidad civil es peor que ninguna.
+    Queda un 410 con la ruta correcta porque hay clientes desplegados
+    llamando aquí.
+    """
     monkeypatch.setattr(settings, "APP_ENV", "demo")
+
     response = await client.post("/api/auth/clave-unica", json={"rut": "11111111-1"})
-    data = response.json()
-    assert data["ok"] is True
-    assert data["subject_id"].startswith("demo:clave-unica:")
-    assert "11111111-1" not in data["subject_id"]
-    assert data["assurance_level"] == "DEMO_UNVERIFIED"
+
+    assert response.status_code == 410
+    assert "authorize" in response.json()["detail"]
     assert await _identity_event_count() == 0
-
-
-async def test_clave_unica_rejects_short_rut(client):
-    response = await client.post("/api/auth/clave-unica", json={"rut": "123"})
-    assert response.json()["ok"] is False
 
 
 async def test_nfc_generates_demo_serial_without_body(client):
@@ -139,7 +140,6 @@ async def test_production_blocks_every_unverified_identity_flow(client, monkeypa
     monkeypatch.setattr(settings, "APP_ENV", "production")
 
     responses = [
-        await client.post("/api/auth/clave-unica", json={"rut": VALID_RUT}),
         await client.post("/api/auth/nfc", json={"chip_serial": "CLIENT-TAG-01"}),
         await client.post(
             "/api/auth/liveness",

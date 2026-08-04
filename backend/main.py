@@ -37,6 +37,7 @@ from app.routers.elections import router as elections_router
 from app.routers.identity import router as identity_router
 from app.routers.maci import router as maci_router
 from app.routers.erc4337 import router as erc4337_router
+from app.routers.clave_unica import router as clave_unica_router
 
 
 # Configure logging
@@ -212,6 +213,10 @@ async def api_root():
 
 # Include routers with /api prefix
 app.include_router(auth_router, prefix="/api")
+# ClaveÚnica va en un router aparte: el de /auth responde 503 en producción
+# para TODOS sus endpoints porque son simulaciones, y este flujo sí
+# autentica identidad civil cuando está configurado (ROADMAP 4.1).
+app.include_router(clave_unica_router, prefix="/api")
 # Emisión real de credenciales ZK: router aparte, sin el bloqueo de los demos.
 app.include_router(identity_router, prefix="/api")
 app.include_router(wallet_router, prefix="/api")

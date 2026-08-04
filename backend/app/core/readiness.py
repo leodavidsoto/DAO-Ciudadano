@@ -288,7 +288,12 @@ def feature_status() -> dict:
     despliegue. Esto sí, y sin adornos: cada entrada refleja configuración
     real, no intención.
     """
-    from ..services import chain_service, paymaster_service, treasury_service
+    from ..services import (
+        chain_service,
+        clave_unica,
+        paymaster_service,
+        treasury_service,
+    )
     from . import crypto, retention
 
     erc4337 = paymaster_service.status()
@@ -323,6 +328,13 @@ def feature_status() -> dict:
                 or chain_service.can_read_chain()
             ),
             "cache_ttl_seconds": settings.MEMBERSHIP_CACHE_TTL_SECONDS,
+        },
+        "clave_unica": {
+            # Configuración, no sonda: /health/ready no debe golpear al
+            # proveedor del Estado en cada llamada.
+            "available": clave_unica.is_configured(),
+            "missing": sorted(clave_unica.configuration_errors()),
+            "id_token_algorithm": settings.CLAVE_UNICA_ID_TOKEN_ALG.strip().upper(),
         },
         "identity_issuance": {
             "available": bool(
