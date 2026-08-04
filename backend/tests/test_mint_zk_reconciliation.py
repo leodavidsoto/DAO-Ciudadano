@@ -11,7 +11,6 @@ Dos defectos que Codex señaló y que estos tests fijan:
    credencial on-chain.
 """
 
-import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
 

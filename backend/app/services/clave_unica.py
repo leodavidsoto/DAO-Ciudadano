@@ -37,7 +37,7 @@ import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import NoReturn, Optional
 from urllib.parse import urlencode
 
 from ..core.config import settings
@@ -520,7 +520,7 @@ async def remember_issued_grant(state: str, grant: str, name: str) -> None:
     )
 
 
-async def _replay_issued_grant(session: dict) -> None:
+async def _replay_issued_grant(session: dict) -> NoReturn:
     """Repite el grant del intento si sigue vigente. Lanza si corresponde."""
     from ..core.crypto import decrypt
     from . import identity_grant

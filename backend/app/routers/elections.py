@@ -15,7 +15,7 @@ member by copying their public address.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
+from typing import Any, List, Optional
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -421,7 +421,7 @@ async def create_candidacy(
             ),
         )
 
-    candidacy = {
+    candidacy: dict[str, Any] = {
         "id": str(uuid.uuid4())[:8],
         "election_id": election_id,
         "candidate_address": request.candidate_address,
@@ -504,7 +504,10 @@ async def vote_in_election(
         )
         raise HTTPException(
             status_code=429,
-            detail="Actividad de voto sospechosa: demasiados votos en poco tiempo. Intenta más tarde.",
+            detail=(
+                "Actividad de voto sospechosa: demasiados votos en poco tiempo. "
+                "Intenta más tarde."
+            ),
         )
 
     # A delegated vote travels with the delegate; revoke to vote directly

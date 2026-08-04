@@ -3,6 +3,8 @@ Dashboard Router
 Handles statistics and analytics endpoints
 """
 
+from typing import Any
+
 from fastapi import APIRouter, Query
 from datetime import datetime, timezone, timedelta
 import logging
@@ -23,7 +25,7 @@ def active_members_query() -> dict:
     records that could actually pass the production membership gate; otherwise
     quarantined demo/legacy data would be presented as valid citizens.
     """
-    query = {"status": "active"}
+    query: dict[str, Any] = {"status": "active"}
     if settings.is_production:
         query.update(
             {

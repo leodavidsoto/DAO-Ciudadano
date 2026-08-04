@@ -4,7 +4,7 @@ Data validation and serialization schemas
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, List, Literal
+from typing import Literal, Optional
 from datetime import datetime, timezone
 import uuid
 

@@ -365,7 +365,7 @@ todavía sin commit ni despliegue.
 | P-42 | El `MintingUnavailable` lanzado dentro del `try` de `mint_sbt` (tokenId on-chain no verificable) lo capturaba el `except Exception` de más abajo y se aplanaba a un genérico "No se pudo crear la membresía", perdiendo el motivo específico que el router traduce a 503 | `backend/app/services/blockchain_service.py:143` | Baja | ✅ Corregido: `except MintingUnavailable: raise` antes del genérico |
 | P-43 | `GET /` anunciaba `"docs": "/docs"` con `DEBUG=true`, pero `docs_url` además exige no estar en producción: un despliegue con `DEBUG=true` publicitaba una ruta que devuelve 404 | `backend/main.py` | Baja (documentación vs código) | ✅ Corregido: ambas decisiones derivan de una única constante `DOCS_ENABLED` |
 | P-44 | `AsyncIOMotorClient` se construía sin `serverSelectionTimeoutMS`, dejando el default de 30 s: con `MONGO_URL` mal configurada el arranque se bloquea 30 s creando índices (trampa 9 de `HANDOFF.md`) antes de que el servicio responda | `backend/app/core/database.py` | Baja (operación) | ✅ Corregido: 5 s, suficiente para un arranque en frío de Atlas y visible de inmediato en los logs |
-| P-45 | `requirements-dev.txt` instala `black`, `flake8` y `mypy`, pero **ningún job de CI los ejecuta**. Con los defaults hay 176 avisos de flake8, 26 archivos que `black` reformatearía y 15 errores de `mypy`. Tampoco hay job de tests de frontend | `.github/workflows/ci.yml`; `backend/requirements-dev.txt` | Media (proceso) | 🔴 **Abierto**: activarlos hoy dejaría CI en rojo. Requiere decidir configuración (`setup.cfg`/`pyproject`) y una pasada de formateo separada, que no se mezcla con esta revisión funcional |
+| P-45 | `requirements-dev.txt` instala `black`, `flake8` y `mypy`, pero **ningún job de CI los ejecuta**. Con los defaults hay 176 avisos de flake8, 26 archivos que `black` reformatearía y 15 errores de `mypy`. Tampoco hay job de tests de frontend | `.github/workflows/ci.yml`; `backend/requirements-dev.txt` | Media (proceso) | ✅ **Cerrado para backend** (04-08-2026): configuración en `pyproject.toml` (black, mypy) y `setup.cfg` (flake8), formateo aplicado en un commit aparte, 59 avisos y 41 errores de tipos corregidos, y job `backend-quality` en CI. El job de tests de **frontend** sigue siendo de Codex |
 | P-46 | `fraud_detector.check_rapid_voting` registra el intento **antes** de validar que la propuesta exista o que el votante no haya votado ya. Diez intentos fallidos (propuesta inexistente, ya votada) consumen la cuota y bloquean al miembro con 429 sin que haya emitido un solo voto | `backend/app/routers/governance.py`; `elections.py` | Baja | ✅ **Cerrado** (04-08-2026): `check_rapid_voting(voter)` solo LEE (nuevo `RateLimitStore.count()`, con su Lua en Redis) y `record_vote(voter)` apunta después de persistir la papeleta. `proposal_id` sale de la firma: nunca formó parte de la clave. Cubierto por `test_checking_does_not_consume_quota` |
 | P-47 | En `DEBUG`, `crypto.py` genera la llave Fernet de desarrollo **una vez por proceso**. Con `--reload` o varios workers, lo que un proceso cifra otro no puede descifrarlo: el nombre vuelve `None` sin explicación | `backend/app/core/crypto.py` | Baja (solo desarrollo) | ✅ **Cerrado** (04-08-2026): se deriva de una constante fija y visible en el repositorio (`sha256` del sembrado, en base64 urlsafe). No es un secreto y solo se usa sin llaves configuradas Y con `DEBUG`; `key_status()` no la cuenta, así que readiness sigue bloqueando producción |
 
@@ -1744,3 +1744,91 @@ contra los artefactos reales; publicarlas en `true` sin eso sería afirmar una
 privacidad que no existe.
 
 471 tests (463 antes).
+
+
+---
+
+## Decimosexta pasada (04-08-2026) — deuda técnica del backend (P-45, P-46, P-47)
+
+### P-45 — black, flake8 y mypy en CI
+
+Estaban instalados y nadie los ejecutaba. Al medirlo con los valores por
+defecto: **1420 avisos de flake8, 76 archivos que black reformatearía y 41
+errores de mypy** (el hallazgo original decía 176/26/15; el backend creció
+desde entonces).
+
+Configuración en dos archivos porque las herramientas son así: black y mypy en
+`pyproject.toml`, flake8 en `setup.cfg` —todavía no lee `pyproject`—. El
+`line-length` es 88 en ambos: si divergen, cada herramienta pide lo contrario
+que la otra. flake8 ignora E203 y W503/W504, que son los conflictos conocidos
+con black, y su `max-line-length` es 100: black formatea el CÓDIGO a 88, pero
+no parte cadenas ni comentarios, y exigirles 88 obligaría a un `noqa` por cada
+mensaje de error largo.
+
+`per-file-ignores` cubre lo que es una decisión y no un descuido: `E402` en
+`main.py`, `scripts/` y `conftest.py`, que cargan el entorno **antes** de
+importar la aplicación —al revés el proceso arrancaría sin variables—, y
+`F401` en los `__init__`, cuyo trabajo es reexportar.
+
+El formateo va en un commit separado, como pedía el propio hallazgo: 76
+archivos de cambio mecánico no deben mezclarse con cambios de comportamiento.
+
+De los 59 avisos que quedaron tras formatear, 16 eran defectos reales
+—imports muertos, una variable asignada y nunca usada— y se corrigieron; el
+resto eran cadenas largas, partidas a mano. Al partir `STATEMENT` en
+`siwe_service.py` se comprobó que el valor resultante es **idéntico**: cambiar
+un carácter de ese texto invalidaría todas las firmas SIWE existentes.
+
+De los 41 errores de mypy, ninguno era un defecto de ejecución: casi todos
+venían de diccionarios heterogéneos (documentos de Mongo, respuestas JSON-RPC)
+cuyo tipo mypy infiere como `dict[str, object]`. Se anotaron como
+`dict[str, Any]`, que es lo que de verdad son. Dos sí mejoraron el código:
+`session_cookie_samesite` ahora devuelve el `Literal["lax","strict","none"]`
+que espera Starlette —un typo en esa variable era un error silencioso—, y
+`RateLimitStore.backend` pasó a propiedad, porque el almacén con respaldo lo
+calcula en vez de declararlo.
+
+mypy queda deliberadamente pragmático (sin `strict`, sin
+`disallow_untyped_defs`). El objetivo de esta tarea era que CI detecte errores
+reales, no convertir la suite en una migración de anotaciones de semanas.
+Endurecerlo es un paso posterior y consciente.
+
+El job `backend-quality` va **separado** del de pytest: un fallo de formato no
+debe esconder un test roto ni al revés, y el nombre del check dice qué
+arreglar. Se ejecutaron los tres comandos exactos del job antes de commitear.
+
+### P-46 — el antifraude contaba intentos, no votos
+
+`check_rapid_voting` comprobaba y registraba en la misma llamada, así que diez
+peticiones inválidas —propuesta inexistente, ya votada, plazo vencido—
+agotaban la cuota y devolvían 429 a alguien que no había emitido ni un voto.
+
+Ahora son dos operaciones. `check_rapid_voting(voter)` solo LEE, apoyándose en
+un `RateLimitStore.count()` nuevo (con su Lua en Redis: limpia la ventana y
+hace `ZCARD` sin `ZADD`), y `record_vote(voter)` apunta **después** de que la
+papeleta se haya persistido. Lo que limita el antifraude son votos; de los
+intentos fallidos ya se ocupa el limitador por IP con su penalización
+progresiva.
+
+`proposal_id` desaparece de la firma: nunca formó parte de la clave —incluirlo
+permitiría gastar la cuota entera contra cada propuesta rotando el
+identificador— y tenerlo como parámetro sugería lo contrario.
+
+### P-47 — la llave de desarrollo cambiaba por proceso
+
+Se generaba con `Fernet.generate_key()` al importar el módulo. Con `--reload`
+o varios workers, lo que cifraba un proceso no lo descifraba otro: el nombre
+del ciudadano volvía como `None` sin ningún error que lo explicara.
+
+Ahora se deriva de una constante fija y visible en el repositorio. **No es un
+secreto**: solo se usa cuando no hay ninguna llave configurada Y `DEBUG` está
+activo, y `key_status()` no la cuenta, así que readiness sigue bloqueando
+producción por falta de llave.
+
+### P-18 no se toca desde aquí
+
+El secreto expuesto en el historial de Git es una acción externa —rotación en
+el proveedor y auditoría de uso— que ningún cambio de código resuelve. Sigue
+el procedimiento de `docs/SECURITY_RUNBOOK.md`.
+
+472 tests. black, flake8 y mypy en verde.

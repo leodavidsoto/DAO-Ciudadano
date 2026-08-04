@@ -42,7 +42,7 @@ EOA, que sí está probado, continúa siendo el camino activo.
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any
 
 from ..core.config import settings
 
@@ -155,7 +155,7 @@ def runtime_status() -> dict:
     if _runtime_cache and now - _runtime_cache[0] < _RUNTIME_CACHE_SECONDS:
         return dict(_runtime_cache[1])
 
-    result = {
+    result: dict[str, Any] = {
         "checked": True,
         "reachable": False,
         "chain_id": None,
@@ -221,7 +221,7 @@ def status(probe: bool = False) -> dict:
 _USER_AGENT = "dao-ciudadana-backend/1.0"
 
 
-def _rpc(method: str, params: list) -> dict:
+def _rpc(method: str, params: list) -> Any:
     """Llamada JSON-RPC al bundler. Síncrona: el llamador usa to_thread."""
     import requests  # noqa: F401  (dependencia de producción ya presente vía web3)
 
@@ -402,5 +402,7 @@ def estimate_user_operation_gas(user_op: dict) -> dict:
 
 def get_user_operation_receipt(user_op_hash: str):
     """Recibo de la UserOperation, o None si el bundler aún no la incluyó."""
-    cfg = config()
+    # `config()` valida que el bundler esté configurado antes de llamarlo; su
+    # valor no hace falta aquí, pero su comprobación sí.
+    config()
     return _rpc("eth_getUserOperationReceipt", [user_op_hash])

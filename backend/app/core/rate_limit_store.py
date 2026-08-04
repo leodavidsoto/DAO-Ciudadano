@@ -76,8 +76,15 @@ return redis.call('ZCARD', KEYS[1])
 class RateLimitStore(ABC):
     """Un almacén decide si una petición cabe en la ventana de su bucket."""
 
-    #: Nombre para el diagnóstico de /health/ready.
-    backend = "abstract"
+    @property
+    def backend(self) -> str:
+        """Nombre del respaldo activo, para /health/ready.
+
+        Es una propiedad y no un atributo de clase porque el almacén con
+        respaldo lo CALCULA: si Redis se cayó tiene que decir "memory (redis
+        no disponible)" en vez de seguir anunciando redis.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     async def allow(self, key: str, limit: int, window_seconds: int) -> bool:
@@ -99,6 +106,7 @@ class RateLimitStore(ABC):
         con cada fallo y baja con cada acierto, y debe sobrevivir entre
         peticiones igual que el resto del antifraude.
         """
+        raise NotImplementedError
 
     async def reset(self) -> None:
         """Limpia el estado. Solo lo usan los tests."""
@@ -107,7 +115,9 @@ class RateLimitStore(ABC):
 class InMemoryRateLimitStore(RateLimitStore):
     """Contadores en el proceso. Correcto para un solo worker."""
 
-    backend = "memory"
+    @property
+    def backend(self) -> str:
+        return "memory"
 
     # Una IP se olvida tras este número de ventanas en silencio. Debe superar
     # la penalización progresiva: si no, callar una ventana bastaría para
@@ -178,7 +188,9 @@ class InMemoryRateLimitStore(RateLimitStore):
 class RedisRateLimitStore(RateLimitStore):
     """Ventana deslizante compartida entre workers."""
 
-    backend = "redis"
+    @property
+    def backend(self) -> str:
+        return "redis"
 
     def __init__(self, client, namespace: str = "rl"):
         self._client = client

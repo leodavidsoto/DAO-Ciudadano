@@ -7,8 +7,8 @@ anti-fraud checks (A-4) are enforced on every mutating endpoint.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
-from pydantic import BaseModel, Field, field_validator
+from typing import Any, List, Optional
+from pydantic import BaseModel, field_validator
 from datetime import datetime, timezone, timedelta
 from pymongo.errors import DuplicateKeyError
 import uuid
@@ -215,7 +215,7 @@ async def create_proposal(
         proposal_id = str(uuid.uuid4())[:8]
         now = datetime.now(timezone.utc)
 
-        proposal = {
+        proposal: dict[str, Any] = {
             "id": proposal_id,
             "title": request.title,
             "description": request.description,
@@ -461,7 +461,10 @@ async def cast_vote(
     if settings.SIGNED_BALLOTS_REQUIRED and not request.signature:
         raise HTTPException(
             status_code=422,
-            detail="Esta votación requiere una papeleta firmada (EIP-712). Ver GET /governance/ballot-schema.",
+            detail=(
+                "Esta votación requiere una papeleta firmada (EIP-712). "
+                "Ver GET /governance/ballot-schema."
+            ),
         )
 
     # Antifraude: se COMPRUEBA aquí y se REGISTRA solo si el voto llega a
@@ -472,7 +475,10 @@ async def cast_vote(
         logger.warning(f"Rapid voting blocked: {request.voter_address} ({reason})")
         raise HTTPException(
             status_code=429,
-            detail="Actividad de voto sospechosa: demasiados votos en poco tiempo. Intenta más tarde.",
+            detail=(
+                "Actividad de voto sospechosa: demasiados votos en poco tiempo. "
+                "Intenta más tarde."
+            ),
         )
 
     # Delegated vote cannot also be cast directly (it would double-count)
@@ -696,7 +702,10 @@ async def delegate_vote(
     request: DelegationRequest = Depends(verified_delegator),
     authenticated: str = Depends(current_address),
 ):
-    """Delegate voting power to another address (active members only, sesión de wallet requerida)"""
+    """Delega el poder de voto en otra dirección.
+
+    Solo miembros activos y con sesión de wallet.
+    """
     ensure_acts_as_self(request.delegator_address, authenticated, "delegar el voto")
     try:
         if request.delegator_address == request.delegate_address:

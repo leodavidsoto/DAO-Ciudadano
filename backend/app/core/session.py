@@ -26,6 +26,8 @@ import hashlib
 import hmac
 from typing import Optional, Tuple
 
+from typing import Any
+
 from fastapi import HTTPException, Request, Response
 
 from .config import settings
@@ -56,7 +58,7 @@ def attach_session(response: Response, session_token: str) -> str:
     `max_age` coincide con la expiración del JWT: una cookie que sobreviva a
     su token solo consigue que el usuario parezca conectado y reciba 401.
     """
-    common = {
+    common: dict[str, Any] = {
         "max_age": settings.SESSION_TOKEN_EXPIRE_SECONDS,
         "path": "/",
         "secure": settings.session_cookie_secure,

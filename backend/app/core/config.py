@@ -265,7 +265,7 @@ class Settings(BaseSettings):
         return self.APP_ENV == "production"
 
     @property
-    def session_cookie_samesite(self) -> str:
+    def session_cookie_samesite(self) -> Literal["lax", "strict", "none"]:
         """`lax` | `strict` | `none`, con un valor por defecto por entorno.
 
         En producción el frontend (Netlify) y la API (Render) están en sitios
@@ -273,8 +273,12 @@ class Settings(BaseSettings):
         En local ambos son `localhost` y `lax` es suficiente — y más estricto.
         """
         value = self.SESSION_COOKIE_SAMESITE.strip().lower()
-        if value in {"lax", "strict", "none"}:
-            return value
+        if value == "lax":
+            return "lax"
+        if value == "strict":
+            return "strict"
+        if value == "none":
+            return "none"
         return "none" if self.is_production else "lax"
 
     @property

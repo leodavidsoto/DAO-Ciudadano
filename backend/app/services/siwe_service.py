@@ -25,7 +25,10 @@ from fastapi import HTTPException
 from ..core.config import settings
 from ..core.database import siwe_nonces_collection
 
-STATEMENT = "Firma este mensaje para iniciar sesión en DAO Ciudadana. Esto no autoriza ninguna transacción ni gasta gas."
+STATEMENT = (
+    "Firma este mensaje para iniciar sesión en DAO Ciudadana. "
+    "Esto no autoriza ninguna transacción ni gasta gas."
+)
 
 
 def _checksum(address: str) -> str:

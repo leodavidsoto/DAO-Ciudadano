@@ -133,7 +133,8 @@ class BlockchainService:
                         },
                     )
                     logger.info(
-                        f"Membership minted on-chain: Token #{token_id} for {address} (tx {tx_hash})"
+                        f"Membership minted on-chain: Token #{token_id} "
+                        f"for {address} (tx {tx_hash})"
                     )
                     return (True, token_id, tx_hash, None)
 

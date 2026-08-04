@@ -126,6 +126,7 @@ async def issue_credential(
 
     # 2. Grant civil de un solo uso. Si ya se canjeó, puede ser un reintento
     #    legítimo: se recupera el sujeto y la ruta ya emitida.
+    subject_key: Optional[str]
     try:
         subject_key = await identity_grant.consume(
             grant, browser_binding=browser_binding

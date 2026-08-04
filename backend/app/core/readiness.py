@@ -51,13 +51,19 @@ REQUIREMENTS: List[Requirement] = [
     Requirement(
         key="IDENTITY_ISSUER_PRIVATE_KEY",
         feature="emisión de credenciales de identidad ZK",
-        why="firma la credencial EIP-191 que el cliente verifica; sin ella no se puede emitir ninguna",
+        why=(
+            "firma la credencial EIP-191 que el cliente verifica; sin ella no "
+            "se puede emitir ninguna"
+        ),
         production_only=True,
     ),
     Requirement(
         key="SECRET_KEY",
         feature="sesiones de wallet (SIWE)",
-        why="firma los JWT de sesión; con el valor de desarrollo cualquiera podría falsificar una sesión",
+        why=(
+            "firma los JWT de sesión; con el valor de desarrollo cualquiera "
+            "podría falsificar una sesión"
+        ),
     ),
 ]
 
@@ -249,8 +255,6 @@ def _service_blockers() -> list[str]:
     credenciales, el patrocinio de gas o el límite compartido no funcionaban
     — justo el tipo de "listo" que no significa nada.
     """
-    from . import config as _config  # evita import circular en tiempo de módulo
-
     blockers: list[str] = []
 
     # Proveedor civil: sin él la emisión de credenciales falla cerrada, así que

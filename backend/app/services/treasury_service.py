@@ -37,7 +37,7 @@ las ejecutan con `asyncio.to_thread`.
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 import logging
 import threading
@@ -595,7 +595,7 @@ def build_snapshot() -> dict:
     # Un activo cuenta para el total solo si tiene precio. Los que no lo
     # tienen no valen cero: valen "no lo sabemos", y esa diferencia decide si
     # el total consolidado se puede publicar.
-    assets = [
+    assets: list[dict[str, Any]] = [
         {
             "symbol": "ETH",
             "address": None,

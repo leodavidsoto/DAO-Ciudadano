@@ -14,8 +14,6 @@ import io
 from PIL import Image
 
 from ..models import (
-    ClaveUnicaRequest,
-    ClaveUnicaResponse,
     NFCRequest,
     NFCResponse,
     LivenessResponse,

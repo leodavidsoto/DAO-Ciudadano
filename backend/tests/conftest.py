@@ -52,7 +52,6 @@ for _external in (
 os.environ["ETH_PRICE_PROVIDER"] = "none"
 
 import httpx
-import asyncio
 import pytest
 from mongomock_motor import AsyncMongoMockClient
 

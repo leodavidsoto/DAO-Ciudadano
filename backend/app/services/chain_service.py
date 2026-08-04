@@ -16,7 +16,7 @@ fabrica un `tx_hash`.
 import logging
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 from urllib.parse import urlparse
 
 from ..core.config import settings
@@ -245,7 +245,7 @@ def runtime_status() -> dict:
             return dict(cached_value)
 
     errors = configuration_errors()
-    result = {
+    result: dict[str, Any] = {
         "checked": True,
         "ready": False,
         "chain_id": None,
@@ -313,7 +313,8 @@ def mint_sbt_onchain(
 
     if not is_configured():
         raise ChainMintError(
-            "Minteo on-chain no está configurado (SEPOLIA_RPC_URL/SBT_CONTRACT_ADDRESS/MINTER_PRIVATE_KEY)."
+            "Minteo on-chain no está configurado "
+            "(SEPOLIA_RPC_URL/SBT_CONTRACT_ADDRESS/MINTER_PRIVATE_KEY)."
         )
 
     operational = runtime_status()
@@ -445,7 +446,8 @@ def approve_identity_root(identity_root: int) -> Optional[str]:
     """
     if not is_configured():
         raise ChainMintError(
-            "La aprobación de raíces requiere SEPOLIA_RPC_URL, SBT_CONTRACT_ADDRESS y MINTER_PRIVATE_KEY."
+            "La aprobación de raíces requiere SEPOLIA_RPC_URL, "
+            "SBT_CONTRACT_ADDRESS y MINTER_PRIVATE_KEY."
         )
 
     already = identity_root_is_approved(identity_root)

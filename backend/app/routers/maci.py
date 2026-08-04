@@ -19,7 +19,7 @@ from typing import List
 from pydantic import BaseModel, ConfigDict
 
 from ..core.config import settings
-from ..services import chain_service, maci_service
+from ..services import maci_service
 from .deps import current_address, ensure_acts_as_self, ensure_active_member
 
 logger = logging.getLogger(__name__)

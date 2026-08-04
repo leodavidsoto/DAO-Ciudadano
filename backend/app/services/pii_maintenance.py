@@ -15,7 +15,7 @@ devuelven lo que harían. El script hereda ese comportamiento por defecto.
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from ..core import retention
 from ..core.crypto import decrypt, encrypt, is_current, rotate
@@ -112,7 +112,7 @@ async def rotate_encrypted_fields(
 
     async for doc in get_collection(collection).find({}):
         report.scanned += 1
-        updates = {}
+        updates: Dict[str, Any] = {}
         for name in fields:
             value = doc.get(name)
             if value is None:
@@ -157,7 +157,7 @@ async def reindex_lookup_keys(
 
     async for doc in get_collection(collection).find({}):
         report.scanned += 1
-        updates = {}
+        updates: Dict[str, Any] = {}
         for key_field, source_field, domain in lookups:
             source = doc.get(source_field)
             if source is None:
@@ -191,6 +191,10 @@ async def purge_candidates() -> Dict[str, int]:
     counts: Dict[str, int] = {}
     now = datetime.now(timezone.utc)
     for rule in retention.manual_rules():
+        # `manual_rules()` ya filtra las que tienen ttl, pero el tipo sigue
+        # siendo opcional: se afirma aquí en vez de confiar en el filtro.
+        if rule.ttl_seconds is None:
+            continue
         cutoff = now - timedelta(seconds=rule.ttl_seconds)
         counts[rule.collection] = await get_collection(rule.collection).count_documents(
             {rule.field: {"$lt": cutoff}}
@@ -207,6 +211,10 @@ async def purge(apply: bool = False) -> Dict[str, int]:
     deleted: Dict[str, int] = {}
     now = datetime.now(timezone.utc)
     for rule in retention.manual_rules():
+        # `manual_rules()` ya filtra las que tienen ttl, pero el tipo sigue
+        # siendo opcional: se afirma aquí en vez de confiar en el filtro.
+        if rule.ttl_seconds is None:
+            continue
         cutoff = now - timedelta(seconds=rule.ttl_seconds)
         query = {rule.field: {"$lt": cutoff}}
         count = await get_collection(rule.collection).count_documents(query)

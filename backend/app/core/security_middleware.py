@@ -6,11 +6,8 @@ Rate limiting, CSRF protection, and security headers
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from collections import defaultdict
-from datetime import datetime, timedelta
 from ipaddress import ip_address, ip_network
 import asyncio
-import time
 import hashlib
 import secrets
 import logging
