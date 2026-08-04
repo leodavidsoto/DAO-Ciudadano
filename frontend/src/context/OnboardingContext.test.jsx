@@ -85,6 +85,7 @@ const Probe = () => {
 
 beforeEach(async () => {
     jest.clearAllMocks();
+    window.sessionStorage.clear();
     context = null;
     container = document.createElement('div');
     root = createRoot(container);
@@ -143,7 +144,8 @@ test('mint sends only contract arguments after a positive local verification', a
             nullifierHash: PROOF_RESULT.nullifierHash,
             identityRoot: PROOF_RESULT.identityRoot,
         },
-        EIP1193_PROVIDER
+        EIP1193_PROVIDER,
+        expect.any(Function)
     );
     expect(JSON.stringify(membershipAPI.mintWithProof.mock.calls[0][0]))
         .not.toContain(IDENTITY.signature);
@@ -154,6 +156,215 @@ test('mint sends only contract arguments after a positive local verification', a
         EIP1193_PROVIDER
     );
     expect(context.step).toBe('success');
+    expect(context.accountAbstraction).toEqual(expect.objectContaining({
+        status: 'confirmed',
+        tokenId: 1,
+        transactionHash: '0xtx',
+    }));
+});
+
+test('exposes transport-driven sponsorship and authorization phases', async () => {
+    let releaseMint;
+    let progressObserved;
+    const observed = new Promise((resolve) => {
+        progressObserved = resolve;
+    });
+    membershipAPI.mintWithProof.mockImplementation((proofPayload, provider, onProgress) => {
+        onProgress({ status: 'checking_config' });
+        onProgress({
+            status: 'requesting_sponsorship',
+            chainId: 11155111,
+            chainName: 'Sepolia',
+            safeAddress: '0x2222222222222222222222222222222222222222',
+        });
+        onProgress({
+            status: 'awaiting_authorization',
+            safeAddress: '0x2222222222222222222222222222222222222222',
+        });
+        progressObserved();
+        return new Promise((resolve) => {
+            releaseMint = resolve;
+        });
+    });
+
+    let mintPromise;
+    await act(async () => {
+        mintPromise = context.mintSBT();
+        await observed;
+    });
+
+    expect(context.loading).toBe(true);
+    expect(context.accountAbstraction).toEqual(expect.objectContaining({
+        status: 'awaiting_authorization',
+        chainName: 'Sepolia',
+        safeAddress: '0x2222222222222222222222222222222222222222',
+    }));
+    await act(async () => {
+        await context.mintSBT();
+    });
+    expect(membershipAPI.mintWithProof).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+        releaseMint({
+            data: {
+                ok: true,
+                token_id: 3,
+                tx_hash: `0x${'cd'.repeat(32)}`,
+                user_operation_hash: `0x${'ab'.repeat(32)}`,
+            },
+        });
+        await mintPromise;
+    });
+
+    expect(context.accountAbstraction).toEqual(expect.objectContaining({
+        status: 'confirmed',
+        tokenId: 3,
+        userOperationHash: `0x${'ab'.repeat(32)}`,
+    }));
+});
+
+test('keeps an accepted UserOperation pending instead of enabling a resubmit', async () => {
+    const userOperationHash = `0x${'ab'.repeat(32)}`;
+    membershipAPI.mintWithProof.mockImplementation(async (
+        proofPayload,
+        provider,
+        onProgress
+    ) => {
+        onProgress({
+            status: 'bundler_pending',
+            userOperationHash,
+            safeAddress: '0x2222222222222222222222222222222222222222',
+        });
+        const error = new Error('La operación sigue pendiente.');
+        error.code = 'USER_OPERATION_PENDING';
+        throw error;
+    });
+
+    await act(async () => {
+        await context.mintSBT();
+    });
+
+    expect(context.loading).toBe(false);
+    expect(context.error).toBe('');
+    expect(context.step).toBe('method');
+    expect(context.accountAbstraction).toEqual(expect.objectContaining({
+        status: 'bundler_pending',
+        userOperationHash,
+        timedOut: true,
+    }));
+    expect(window.sessionStorage.length).toBe(1);
+    const storedRecovery = window.sessionStorage.getItem(
+        window.sessionStorage.key(0)
+    );
+    expect(storedRecovery).toContain(userOperationHash);
+    expect(storedRecovery).not.toContain(IDENTITY.signature);
+
+    await act(async () => root.unmount());
+    context = null;
+    root = createRoot(container);
+    await act(async () => {
+        root.render(
+            <OnboardingProvider>
+                <Probe />
+            </OnboardingProvider>
+        );
+    });
+    await act(async () => {
+        context.setWallet({
+            address: WALLET,
+            chainId: 11155111,
+            eip1193Provider: EIP1193_PROVIDER,
+        });
+    });
+
+    expect(context.accountAbstraction).toEqual(expect.objectContaining({
+        status: 'bundler_pending',
+        userOperationHash,
+        timedOut: true,
+    }));
+});
+
+test('blocks reauthorization when the Bundler response is ambiguous', async () => {
+    const expectedUserOperationHash = `0x${'cd'.repeat(32)}`;
+    membershipAPI.mintWithProof.mockImplementation(async (
+        proofPayload,
+        provider,
+        onProgress
+    ) => {
+        onProgress({
+            status: 'submitting_user_operation',
+            expectedUserOperationHash,
+        });
+        throw new Error('Network response lost');
+    });
+
+    await act(async () => {
+        await context.mintSBT();
+    });
+
+    expect(context.loading).toBe(false);
+    expect(context.error).toBe('');
+    expect(context.accountAbstraction).toEqual(expect.objectContaining({
+        status: 'submission_unknown',
+        verificationDelayed: true,
+        expectedUserOperationHash,
+    }));
+});
+
+test('surfaces an integrity failure without reopening authorization', async () => {
+    const expectedUserOperationHash = `0x${'cd'.repeat(32)}`;
+    membershipAPI.mintWithProof.mockImplementation(async (
+        proofPayload,
+        provider,
+        onProgress
+    ) => {
+        onProgress({
+            status: 'submitting_user_operation',
+            expectedUserOperationHash,
+        });
+        const error = new Error('El Bundler devolvió un hash distinto.');
+        error.code = 'USER_OPERATION_INTEGRITY_ERROR';
+        throw error;
+    });
+
+    await act(async () => {
+        await context.mintSBT();
+    });
+
+    expect(context.loading).toBe(false);
+    expect(context.error).toMatch(/hash distinto/i);
+    expect(context.accountAbstraction).toEqual(expect.objectContaining({
+        status: 'integrity_error',
+        expectedUserOperationHash,
+        errorCode: 'USER_OPERATION_INTEGRITY_ERROR',
+    }));
+});
+
+test('treats an explicit submit 4xx as rejected instead of ambiguously sent', async () => {
+    membershipAPI.mintWithProof.mockImplementation(async (
+        proofPayload,
+        provider,
+        onProgress
+    ) => {
+        onProgress({
+            status: 'submitting_user_operation',
+            expectedUserOperationHash: `0x${'cd'.repeat(32)}`,
+        });
+        const error = new Error('Request rejected');
+        error.response = {
+            status: 422,
+            data: { detail: 'El patrocinio rechazó la operación.' },
+        };
+        throw error;
+    });
+
+    await act(async () => {
+        await context.mintSBT();
+    });
+
+    expect(context.accountAbstraction.status).toBe('error');
+    expect(context.error).toMatch(/patrocinio rechazó/i);
+    expect(window.sessionStorage.length).toBe(0);
 });
 
 test.each([false, null])(

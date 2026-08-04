@@ -3,6 +3,7 @@ import { getUserOperationHash } from 'viem/account-abstraction';
 import { toSafeSmartAccount } from 'permissionless/accounts';
 import { toOwner } from 'permissionless/utils';
 import {
+    ACCOUNT_ABSTRACTION_STATUS,
     AccountAbstractionError,
     CANONICAL_ENTRY_POINT_V07,
     CANONICAL_SAFE_4337_MODULE_V141_V07,
@@ -216,6 +217,7 @@ test('validates sponsorship, signs final fields locally and submits once', async
             token_id: 7,
         },
     }));
+    const onProgress = jest.fn();
     const result = await mintMembershipWithSafe({
         proof,
         provider,
@@ -223,6 +225,7 @@ test('validates sponsorship, signs final fields locally and submits once', async
         prepareMint,
         submitMint,
         getOperation: jest.fn(),
+        onProgress,
     });
 
     expect(safe.encodeCalls).toHaveBeenCalledWith([
@@ -249,6 +252,85 @@ test('validates sponsorship, signs final fields locally and submits once', async
     expect(submitMint).toHaveBeenCalledTimes(1);
     expect(submitMint.mock.calls[0][0].user_operation.signature).toBe(SIGNED_SAFE_OP);
     expect(result.data).toEqual(expect.objectContaining({ ok: true, token_id: 7 }));
+    expect(onProgress.mock.calls.map(([event]) => event.status)).toEqual([
+        ACCOUNT_ABSTRACTION_STATUS.CHECKING_CONFIG,
+        ACCOUNT_ABSTRACTION_STATUS.DERIVING_SAFE,
+        ACCOUNT_ABSTRACTION_STATUS.REQUESTING_SPONSORSHIP,
+        ACCOUNT_ABSTRACTION_STATUS.AWAITING_AUTHORIZATION,
+        ACCOUNT_ABSTRACTION_STATUS.SUBMITTING_USER_OPERATION,
+        ACCOUNT_ABSTRACTION_STATUS.BUNDLER_PENDING,
+        ACCOUNT_ABSTRACTION_STATUS.CONFIRMED,
+    ]);
+    expect(onProgress.mock.calls.at(-2)[0]).toEqual(expect.objectContaining({
+        userOperationHash: expectedUserOperationHash().toLowerCase(),
+        safeAddress: SAFE,
+    }));
+    expect(onProgress.mock.calls.find(
+        ([event]) => event.status === ACCOUNT_ABSTRACTION_STATUS.SUBMITTING_USER_OPERATION
+    )[0]).toEqual(expect.objectContaining({
+        expectedUserOperationHash: expectedUserOperationHash().toLowerCase(),
+    }));
+    expect(provider.request.mock.calls.map(([request]) => request.method))
+        .not.toContain('eth_sendTransaction');
+});
+
+test('reports a real pending Bundler operation and confirms it through polling', async () => {
+    const safe = createSafeFixture();
+    toSafeSmartAccount.mockResolvedValue(safe);
+    const hash = expectedUserOperationHash().toLowerCase();
+    const submitMint = jest.fn(async () => ({
+        data: { ok: true, user_operation_hash: hash },
+    }));
+    const getOperation = jest
+        .fn()
+        .mockResolvedValueOnce({
+            data: { ok: true, status: 'pending', user_operation_hash: hash },
+        })
+        .mockResolvedValueOnce({
+            data: {
+                ok: true,
+                status: 'confirmed',
+                user_operation_hash: hash,
+                tx_hash: `0x${'ef'.repeat(32)}`,
+                token_id: 8,
+            },
+        });
+    const onProgress = jest.fn();
+
+    const result = await mintMembershipWithSafe({
+        proof,
+        provider,
+        getConfig: jest.fn(async () => configResponse),
+        prepareMint: jest.fn(async () => ({
+            data: {
+                ok: true,
+                operation_id: 'operation-polling',
+                user_operation: sponsoredOperation,
+            },
+        })),
+        submitMint,
+        getOperation,
+        onProgress,
+        pollIntervalMs: 0,
+        timeoutMs: 1000,
+    });
+
+    expect(result.data).toEqual(expect.objectContaining({
+        ok: true,
+        token_id: 8,
+        user_operation_hash: hash,
+    }));
+    expect(submitMint).toHaveBeenCalledTimes(1);
+    expect(getOperation).toHaveBeenCalledTimes(2);
+    expect(onProgress.mock.calls.map(([event]) => event.status)).toEqual([
+        ACCOUNT_ABSTRACTION_STATUS.CHECKING_CONFIG,
+        ACCOUNT_ABSTRACTION_STATUS.DERIVING_SAFE,
+        ACCOUNT_ABSTRACTION_STATUS.REQUESTING_SPONSORSHIP,
+        ACCOUNT_ABSTRACTION_STATUS.AWAITING_AUTHORIZATION,
+        ACCOUNT_ABSTRACTION_STATUS.SUBMITTING_USER_OPERATION,
+        ACCOUNT_ABSTRACTION_STATUS.BUNDLER_PENDING,
+        ACCOUNT_ABSTRACTION_STATUS.CONFIRMED,
+    ]);
 });
 
 test('refuses a well-formed hash for a different UserOperation', async () => {
@@ -272,7 +354,40 @@ test('refuses a well-formed hash for a different UserOperation', async () => {
             },
         })),
         getOperation: jest.fn(),
-    })).rejects.toThrow(/UserOperation distinta/i);
+    })).rejects.toMatchObject({
+        code: 'USER_OPERATION_INTEGRITY_ERROR',
+        message: expect.stringMatching(/UserOperation distinta/i),
+    });
+});
+
+test('marks an explicit Bundler rejection as safe to surface before polling', async () => {
+    const safe = createSafeFixture();
+    toSafeSmartAccount.mockResolvedValue(safe);
+    const onProgress = jest.fn();
+    const getOperation = jest.fn();
+
+    await expect(mintMembershipWithSafe({
+        proof,
+        provider,
+        getConfig: jest.fn(async () => configResponse),
+        prepareMint: jest.fn(async () => ({
+            data: {
+                ok: true,
+                operation_id: 'operation-rejected',
+                user_operation: sponsoredOperation,
+            },
+        })),
+        submitMint: jest.fn(async () => ({
+            data: { ok: false, error: 'Policy rejected the operation' },
+        })),
+        getOperation,
+        onProgress,
+    })).rejects.toMatchObject({ code: 'USER_OPERATION_REJECTED' });
+
+    expect(getOperation).not.toHaveBeenCalled();
+    expect(onProgress.mock.calls.at(-1)[0].status).toBe(
+        ACCOUNT_ABSTRACTION_STATUS.SUBMITTING_USER_OPERATION
+    );
 });
 
 test('refuses a UserOperation hash that is not bytes32', async () => {
@@ -296,7 +411,10 @@ test('refuses a UserOperation hash that is not bytes32', async () => {
             },
         })),
         getOperation: jest.fn(),
-    })).rejects.toThrow(/hash de UserOperation.*hexadecimal/i);
+    })).rejects.toMatchObject({
+        code: 'USER_OPERATION_INTEGRITY_ERROR',
+        message: expect.stringMatching(/hash de UserOperation.*hexadecimal/i),
+    });
 });
 
 test.each([
@@ -382,6 +500,7 @@ test('does not submit when the citizen rejects the final Safe signature', async 
     safe.signUserOperation.mockRejectedValue({ code: 4001 });
     toSafeSmartAccount.mockResolvedValue(safe);
     const submitMint = jest.fn();
+    const onProgress = jest.fn();
     await expect(mintMembershipWithSafe({
         proof,
         provider,
@@ -395,8 +514,15 @@ test('does not submit when the citizen rejects the final Safe signature', async 
         })),
         submitMint,
         getOperation: jest.fn(),
+        onProgress,
     })).rejects.toMatchObject({ code: 'USER_REJECTED_SIGNATURE' });
     expect(submitMint).not.toHaveBeenCalled();
+    expect(onProgress.mock.calls.map(([event]) => event.status)).toEqual([
+        ACCOUNT_ABSTRACTION_STATUS.CHECKING_CONFIG,
+        ACCOUNT_ABSTRACTION_STATUS.DERIVING_SAFE,
+        ACCOUNT_ABSTRACTION_STATUS.REQUESTING_SPONSORSHIP,
+        ACCOUNT_ABSTRACTION_STATUS.AWAITING_AUTHORIZATION,
+    ]);
 });
 
 test.each([

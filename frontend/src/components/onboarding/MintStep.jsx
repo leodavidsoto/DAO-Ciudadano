@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { CyberPanel, CyberLoader, SuccessDisplay, DemoBadge } from './CyberUI';
+import AccountAbstractionProgress from './AccountAbstractionProgress';
 import { HolographicCard } from '@/components/effects';
 import { useOnboarding } from '@/context';
 
@@ -78,10 +79,26 @@ const DEFAULT_LOADING_STATE = Object.freeze({
 
 const MintStep = () => {
     const navigate = useNavigate();
-    const { loading, mint, wallet, identity, mintSBT, setStep, zk } = useOnboarding();
+    const {
+        loading,
+        mint,
+        wallet,
+        identity,
+        mintSBT,
+        setStep,
+        zk,
+        accountAbstraction,
+    } = useOnboarding();
     const [showConfetti, setShowConfetti] = useState(false);
     const hasVerifiedIdentity = Boolean(identity);
     const loadingState = ZK_LOADING_STATES[zk?.status] || DEFAULT_LOADING_STATE;
+    const accountAbstractionStatus = accountAbstraction?.status || 'idle';
+    const hasAccountAbstractionProgress = !['idle', 'error'].includes(
+        accountAbstractionStatus
+    );
+    const showAccountAbstractionProgress = hasAccountAbstractionProgress && (
+        !mint.token_id || loading || accountAbstractionStatus === 'bundler_pending'
+    );
 
     // Show confetti when mint succeeds
     useEffect(() => {
@@ -102,7 +119,7 @@ const MintStep = () => {
 
             <div className="flex flex-col items-center gap-6">
                 {/* Pre-mint state */}
-                {!loading && !mint.token_id && (
+                {!loading && !mint.token_id && !hasAccountAbstractionProgress && (
                     <div className="text-center">
                         <div className="w-40 h-40 mx-auto mb-6 border-2 border-yellow-500/50 rounded-2xl flex items-center justify-center bg-gradient-to-br from-yellow-500/10 to-orange-500/10 hover-glow transition-all duration-300">
                             <Zap className="w-16 h-16 text-yellow-400 animate-pulse" />
@@ -110,12 +127,19 @@ const MintStep = () => {
                         {hasVerifiedIdentity ? (
                             <>
                                 <p className="text-gray-400 text-sm mb-6 font-mono">
-                                    MetaMask te mostrará la operación Safe ERC-4337 completa. El backend
-                                    patrocina el gas, pero no puede firmar ni autorizar por ti.
+                                    MetaMask te pedirá una autorización personal desde tu cuenta inteligente.
+                                    No es una transacción tradicional. Si el patrocinio estatal está disponible,
+                                    el costo de red se cubrirá y no necesitarás ETH.
                                 </p>
-                                <Button onClick={mintSBT} className="cyber-button-premium group">
-                                    <Sparkles className="w-4 h-4 mr-2 group-hover:animate-spin" />
-                                    AUTORIZAR EMISIÓN (SUBSIDIADA POR EL ESTADO)
+                                <Button
+                                    onClick={mintSBT}
+                                    className="civic-btn civic-btn-primary civic-aa-authorize group"
+                                    aria-label="AUTORIZAR EMISIÓN (SUBSIDIADA POR EL ESTADO)"
+                                >
+                                    <Sparkles className="w-4 h-4 mr-2" />
+                                    <span aria-hidden="true">
+                                        Autorizar Emisión (Subsidiada por el Estado)
+                                    </span>
                                 </Button>
                             </>
                         ) : (
@@ -145,12 +169,16 @@ const MintStep = () => {
                 )}
 
                 {/* Minting progress */}
-                {loading && (
+                {loading && !hasAccountAbstractionProgress && (
                     <CyberLoader
                         className="civic-loading"
                         text={loadingState.text}
                         detail={loadingState.detail}
                     />
+                )}
+
+                {showAccountAbstractionProgress && (
+                    <AccountAbstractionProgress state={accountAbstraction} />
                 )}
 
                 {/* Success state with holographic card */}

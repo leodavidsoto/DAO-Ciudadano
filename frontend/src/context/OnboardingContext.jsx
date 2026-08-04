@@ -6,6 +6,7 @@ import React, {
     createContext,
     useContext,
     useState,
+    useEffect,
     useCallback,
     useMemo,
     useRef,
@@ -25,6 +26,122 @@ const OnboardingContext = createContext(null);
 
 const isRecord = (value) =>
     Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const ACCOUNT_ABSTRACTION_STATUSES = new Set([
+    'checking_config',
+    'deriving_safe',
+    'requesting_sponsorship',
+    'awaiting_authorization',
+    'submitting_user_operation',
+    'submission_unknown',
+    'bundler_pending',
+    'confirmed',
+    'integrity_error',
+    'error',
+]);
+
+const RECOVERABLE_ACCOUNT_ABSTRACTION_STATUSES = new Set([
+    'bundler_pending',
+    'submission_unknown',
+    'integrity_error',
+]);
+const USER_OPERATION_HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
+const ACCOUNT_ABSTRACTION_RECOVERY_PREFIX = 'dao-ciudadano:aa-recovery';
+
+const accountAbstractionRecoveryKey = (address, chainIdValue) => {
+    if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+        return null;
+    }
+    const chainId = Number(chainIdValue);
+    if (!Number.isSafeInteger(chainId) || chainId <= 0) return null;
+    return `${ACCOUNT_ABSTRACTION_RECOVERY_PREFIX}:${address.toLowerCase()}:${chainId}`;
+};
+
+const recoverySnapshot = (state) => {
+    let status = state.status;
+    if (status === 'submitting_user_operation') status = 'submission_unknown';
+    if (!RECOVERABLE_ACCOUNT_ABSTRACTION_STATUSES.has(status)) return null;
+
+    const expectedUserOperationHash = USER_OPERATION_HASH_PATTERN.test(
+        state.expectedUserOperationHash || ''
+    ) ? state.expectedUserOperationHash.toLowerCase() : null;
+    const userOperationHash = USER_OPERATION_HASH_PATTERN.test(
+        state.userOperationHash || ''
+    ) ? state.userOperationHash.toLowerCase() : null;
+    if (status === 'bundler_pending' && !userOperationHash) return null;
+    if (status === 'submission_unknown' && !expectedUserOperationHash) return null;
+    if (status === 'integrity_error' && !expectedUserOperationHash && !userOperationHash) {
+        return null;
+    }
+    return {
+        status,
+        ...(expectedUserOperationHash ? { expectedUserOperationHash } : {}),
+        ...(userOperationHash ? { userOperationHash } : {}),
+        ...(status === 'bundler_pending' ? { timedOut: true } : {}),
+        ...(status === 'submission_unknown' ? { verificationDelayed: true } : {}),
+        ...(status === 'integrity_error'
+            ? { errorCode: 'USER_OPERATION_INTEGRITY_ERROR' }
+            : {}),
+    };
+};
+
+const persistAccountAbstractionRecovery = (key, state) => {
+    if (!key || typeof window === 'undefined') return;
+    try {
+        const snapshot = recoverySnapshot(state);
+        if (snapshot) {
+            window.sessionStorage.setItem(key, JSON.stringify(snapshot));
+        } else if (state.status === 'confirmed' || state.status === 'error') {
+            window.sessionStorage.removeItem(key);
+        }
+    } catch {
+        // Storage is an optional reload guard; the in-memory guard remains.
+    }
+};
+
+const readAccountAbstractionRecovery = (key) => {
+    if (!key || typeof window === 'undefined') return null;
+    try {
+        const parsed = JSON.parse(window.sessionStorage.getItem(key));
+        return isRecord(parsed) ? recoverySnapshot(parsed) : null;
+    } catch {
+        return null;
+    }
+};
+
+const mergeAccountAbstractionProgress = (previous, event) => {
+    if (!isRecord(event) || !ACCOUNT_ABSTRACTION_STATUSES.has(event.status)) {
+        return previous;
+    }
+    const next = { ...previous, status: event.status };
+    const stringFields = [
+        'chainName',
+        'safeAddress',
+        'expectedUserOperationHash',
+        'userOperationHash',
+        'transactionHash',
+        'errorCode',
+    ];
+    stringFields.forEach((field) => {
+        if (typeof event[field] === 'string' && event[field].trim()) {
+            next[field] = event[field];
+        }
+    });
+    if (Number.isSafeInteger(event.chainId) && event.chainId > 0) {
+        next.chainId = event.chainId;
+    }
+    if (event.tokenId != null) next.tokenId = event.tokenId;
+    if (typeof event.timedOut === 'boolean') next.timedOut = event.timedOut;
+    if (typeof event.verificationDelayed === 'boolean') {
+        next.verificationDelayed = event.verificationDelayed;
+    }
+    if (event.status === 'confirmed') {
+        delete next.timedOut;
+        delete next.verificationDelayed;
+        delete next.errorCode;
+    }
+    return next;
+};
 
 /**
  * Capture the issuer credential while accepting the snake_case shape emitted
@@ -127,6 +244,12 @@ export const OnboardingProvider = ({ children }) => {
     // Prueba de conocimiento cero generada localmente (ADR-001, D-2).
     // `status`: idle | enrolling | generating | ready | unavailable | error
     const [zk, setZk] = useState({ status: 'idle' });
+    // Real ERC-4337 milestones only. No timers or fabricated percentages move
+    // this state: every transition comes from the client transport.
+    const [accountAbstraction, setAccountAbstraction] = useState({ status: 'idle' });
+    const accountAbstractionRef = useRef({ status: 'idle' });
+    const accountAbstractionStorageKeyRef = useRef(null);
+    const mintInFlightRef = useRef(false);
     // Real figures only: null until the API responds (never seed fake numbers)
     const [stats, setStats] = useState({ total_members: null, recent_joins: null });
 
@@ -143,6 +266,29 @@ export const OnboardingProvider = ({ children }) => {
         if (grant) identityGrantRef.current = grant;
         return grant;
     }, []);
+
+    const captureAccountAbstractionProgress = useCallback((event) => {
+        const next = mergeAccountAbstractionProgress(
+            accountAbstractionRef.current,
+            event
+        );
+        accountAbstractionRef.current = next;
+        setAccountAbstraction(next);
+        persistAccountAbstractionRecovery(
+            accountAbstractionStorageKeyRef.current,
+            next
+        );
+    }, []);
+
+    useEffect(() => {
+        const key = accountAbstractionRecoveryKey(wallet.address, wallet.chainId);
+        if (!key || key === accountAbstractionStorageKeyRef.current) return;
+        accountAbstractionStorageKeyRef.current = key;
+        const recovered = readAccountAbstractionRecovery(key);
+        const next = recovered || { status: 'idle' };
+        accountAbstractionRef.current = next;
+        setAccountAbstraction(next);
+    }, [wallet.address, wallet.chainId]);
 
     const authenticateClaveUnica = useCallback(async (processingAccepted = false) => {
         if (!processingAccepted) {
@@ -481,6 +627,7 @@ export const OnboardingProvider = ({ children }) => {
     ]);
 
     const mintSBT = useCallback(async () => {
+        if (mintInFlightRef.current) return;
         if (!wallet.address) return;
         if (
             !wallet.eip1193Provider ||
@@ -491,6 +638,13 @@ export const OnboardingProvider = ({ children }) => {
             );
             return;
         }
+        accountAbstractionRef.current = { status: 'idle' };
+        setAccountAbstraction({ status: 'idle' });
+        accountAbstractionStorageKeyRef.current = accountAbstractionRecoveryKey(
+            wallet.address,
+            wallet.chainId
+        );
+        mintInFlightRef.current = true;
         setLoading(true);
         setError('');
         try {
@@ -524,10 +678,17 @@ export const OnboardingProvider = ({ children }) => {
                     nullifierHash: proofResult.nullifierHash,
                     identityRoot: proofResult.identityRoot,
                 },
-                wallet.eip1193Provider
+                wallet.eip1193Provider,
+                captureAccountAbstractionProgress
             );
 
             if (response.data.ok) {
+                captureAccountAbstractionProgress({
+                    status: 'confirmed',
+                    userOperationHash: response.data.user_operation_hash,
+                    transactionHash: response.data.tx_hash,
+                    tokenId: response.data.token_id,
+                });
                 setMint({ ...response.data, status: 'active' });
                 await loadStats();
                 setStep('success');
@@ -554,6 +715,55 @@ export const OnboardingProvider = ({ children }) => {
                 }
             }
         } catch (err) {
+            const lastAccountAbstraction = accountAbstractionRef.current;
+            const operationWasAccepted = Boolean(
+                lastAccountAbstraction.userOperationHash
+            );
+            if (err?.code === 'USER_OPERATION_INTEGRITY_ERROR') {
+                captureAccountAbstractionProgress({
+                    status: 'integrity_error',
+                    errorCode: err.code,
+                });
+                setError(
+                    err.message ||
+                    'La respuesta del Bundler no coincide con la operación autorizada.'
+                );
+                return;
+            }
+            if (
+                err?.code === 'USER_OPERATION_PENDING' ||
+                (operationWasAccepted && err?.code !== 'USER_OPERATION_FAILED')
+            ) {
+                captureAccountAbstractionProgress({
+                    status: 'bundler_pending',
+                    timedOut: true,
+                    verificationDelayed: err?.code !== 'USER_OPERATION_PENDING',
+                });
+                // A delayed receipt is not an on-chain failure. The retained
+                // pending state keeps the authorization button hidden.
+                setError('');
+                return;
+            }
+            if (
+                lastAccountAbstraction.status === 'submitting_user_operation' &&
+                err?.code !== 'USER_OPERATION_REJECTED' &&
+                !(err?.response?.status >= 400 && err.response.status < 500)
+            ) {
+                captureAccountAbstractionProgress({
+                    status: 'submission_unknown',
+                    verificationDelayed: true,
+                });
+                // A submission attempt started but its response is unknown.
+                // Retrying could duplicate a UserOperation.
+                setError('');
+                return;
+            }
+            if (lastAccountAbstraction.status !== 'idle') {
+                captureAccountAbstractionProgress({
+                    status: 'error',
+                    errorCode: err?.code || 'AA_CLIENT_ERROR',
+                });
+            }
             const apiMessage = err.response?.data?.detail || err.response?.data?.error;
             if (typeof apiMessage === 'string' && apiMessage.trim()) {
                 setError(apiMessage);
@@ -566,6 +776,7 @@ export const OnboardingProvider = ({ children }) => {
                 );
             }
         } finally {
+            mintInFlightRef.current = false;
             setLoading(false);
         }
     }, [
@@ -577,6 +788,7 @@ export const OnboardingProvider = ({ children }) => {
         loadStats,
         generateProof,
         requestIdentityCredential,
+        captureAccountAbstractionProgress,
     ]);
 
 
@@ -609,6 +821,9 @@ export const OnboardingProvider = ({ children }) => {
         setWallet({});
         setMint({});
         setIdentity(null);
+        accountAbstractionRef.current = { status: 'idle' };
+        setAccountAbstraction({ status: 'idle' });
+        accountAbstractionStorageKeyRef.current = null;
         identityGrantRef.current = null;
         // El secreto ZK NO se borra acá a propósito: es lo que ata al ciudadano
         // con su nullifier. Perderlo le daría un nullifier distinto para la
@@ -639,6 +854,7 @@ export const OnboardingProvider = ({ children }) => {
         // Prueba ZK local (ADR-001)
         zk,
         zkMintEnabled: true,
+        accountAbstraction,
 
         // Actions
         authenticateClaveUnica,

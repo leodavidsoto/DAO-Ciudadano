@@ -31,6 +31,16 @@ export const CANONICAL_SAFE_4337_MODULE_V141_V07 = getAddress(
     '0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226'
 );
 
+export const ACCOUNT_ABSTRACTION_STATUS = Object.freeze({
+    CHECKING_CONFIG: 'checking_config',
+    DERIVING_SAFE: 'deriving_safe',
+    REQUESTING_SPONSORSHIP: 'requesting_sponsorship',
+    AWAITING_AUTHORIZATION: 'awaiting_authorization',
+    SUBMITTING_USER_OPERATION: 'submitting_user_operation',
+    BUNDLER_PENDING: 'bundler_pending',
+    CONFIRMED: 'confirmed',
+});
+
 const UINT256_MAX = (1n << 256n) - 1n;
 const BN254_BASE_FIELD =
     21888242871839275222246405745257275088696311157297823662689037894645226208583n;
@@ -98,6 +108,17 @@ export class AccountAbstractionError extends Error {
 }
 
 const readResponseData = (response) => response?.data ?? response;
+
+// Progress is presentation-only. A rendering callback must never interrupt a
+// signed operation or make the caller believe it is safe to submit it again.
+const reportProgress = (onProgress, status, details = {}) => {
+    if (typeof onProgress !== 'function') return;
+    try {
+        onProgress(Object.freeze({ status, ...details }));
+    } catch {
+        // The custody boundary is the Safe signature, not the UI observer.
+    }
+};
 
 const toStrictBigInt = (value, label, { max = UINT256_MAX, positive = false } = {}) => {
     if (
@@ -469,13 +490,22 @@ const assertPreparedOperationMatchesDraft = (prepared, draft, config) => {
 };
 
 const assertExpectedUserOperationHash = (reportedHash, expectedHash) => {
-    const normalizedHash = normalizeHash(
-        reportedHash,
-        'El hash de UserOperation devuelto por el bundler'
-    );
+    let normalizedHash;
+    try {
+        normalizedHash = normalizeHash(
+            reportedHash,
+            'El hash de UserOperation devuelto por el bundler'
+        );
+    } catch (error) {
+        throw new AccountAbstractionError(
+            error.message,
+            'USER_OPERATION_INTEGRITY_ERROR'
+        );
+    }
     if (normalizedHash !== expectedHash) {
         throw new AccountAbstractionError(
-            'El backend devolvió el hash de una UserOperation distinta a la firmada.'
+            'El backend devolvió el hash de una UserOperation distinta a la firmada.',
+            'USER_OPERATION_INTEGRITY_ERROR'
         );
     }
     return normalizedHash;
@@ -492,18 +522,28 @@ const assertPositiveTokenId = (value) => {
 };
 
 const readConfirmedMint = (data) => {
-    const hasTransactionHash = data?.tx_hash != null;
-    const hasTokenId = data?.token_id != null;
-    if (hasTransactionHash !== hasTokenId) {
-        throw new AccountAbstractionError(
-            'La confirmación on-chain está incompleta: faltan tx_hash o token_id.'
-        );
-    }
-    if (!hasTransactionHash) return null;
+    try {
+        const hasTransactionHash = data?.tx_hash != null;
+        const hasTokenId = data?.token_id != null;
+        if (hasTransactionHash !== hasTokenId) {
+            throw new AccountAbstractionError(
+                'La confirmación on-chain está incompleta: faltan tx_hash o token_id.'
+            );
+        }
+        if (!hasTransactionHash) return null;
 
-    const txHash = normalizeHash(data.tx_hash, 'El hash de transacción confirmado');
-    assertPositiveTokenId(data.token_id);
-    return { ...data, tx_hash: txHash };
+        const txHash = normalizeHash(data.tx_hash, 'El hash de transacción confirmado');
+        assertPositiveTokenId(data.token_id);
+        return { ...data, tx_hash: txHash };
+    } catch (error) {
+        if (error instanceof AccountAbstractionError) {
+            throw new AccountAbstractionError(
+                error.message,
+                'USER_OPERATION_INTEGRITY_ERROR'
+            );
+        }
+        throw error;
+    }
 };
 
 const validateOperationEnvelope = (response) => {
@@ -530,6 +570,7 @@ export const mintMembershipWithSafe = async ({
     prepareMint,
     submitMint,
     getOperation,
+    onProgress,
     pollIntervalMs = 1500,
     timeoutMs = 120000,
 }) => {
@@ -537,10 +578,15 @@ export const mintMembershipWithSafe = async ({
         throw new AccountAbstractionError('Falta el transporte backend ERC-4337.');
     }
     const normalizedProof = normalizeMintProof(proof);
+    reportProgress(onProgress, ACCOUNT_ABSTRACTION_STATUS.CHECKING_CONFIG);
     const config = normalizeAccountAbstractionConfig(await getConfig());
     if (normalizedProof.chainId !== config.chainId) {
         throw new AccountAbstractionError('La prueba ZK y el patrocinio pertenecen a redes distintas.');
     }
+    reportProgress(onProgress, ACCOUNT_ABSTRACTION_STATUS.DERIVING_SAFE, {
+        chainId: config.chainId,
+        chainName: config.chainName,
+    });
     const call = buildSafeMintCall(normalizedProof);
     const { safeAccount, draft } = await buildSafeUserOperationDraft({
         provider,
@@ -549,6 +595,9 @@ export const mintMembershipWithSafe = async ({
         call,
     });
 
+    reportProgress(onProgress, ACCOUNT_ABSTRACTION_STATUS.REQUESTING_SPONSORSHIP, {
+        safeAddress: safeAccount.address,
+    });
     const prepareResponse = await prepareMint({
         owner_address: normalizedProof.walletAddress,
         safe_address: safeAccount.address,
@@ -575,6 +624,9 @@ export const mintMembershipWithSafe = async ({
         validateOperationEnvelope(prepareResponse);
     assertPreparedOperationMatchesDraft(preparedOperation, draft, config);
 
+    reportProgress(onProgress, ACCOUNT_ABSTRACTION_STATUS.AWAITING_AUTHORIZATION, {
+        safeAddress: safeAccount.address,
+    });
     let signature;
     try {
         await verifyActiveProvider(
@@ -606,6 +658,10 @@ export const mintMembershipWithSafe = async ({
         entryPointVersion: ENTRY_POINT_VERSION,
         chainId: config.chainId,
     }).toLowerCase();
+    reportProgress(onProgress, ACCOUNT_ABSTRACTION_STATUS.SUBMITTING_USER_OPERATION, {
+        safeAddress: safeAccount.address,
+        expectedUserOperationHash,
+    });
     const submitResponse = await submitMint({
         operation_id: preparedData.operation_id,
         owner_address: normalizedProof.walletAddress,
@@ -616,15 +672,26 @@ export const mintMembershipWithSafe = async ({
     const submitted = readResponseData(submitResponse);
     if (!submitted || submitted.ok !== true) {
         throw new AccountAbstractionError(
-            submitted?.error || 'El bundler rechazó la UserOperation firmada.'
+            submitted?.error || 'El bundler rechazó la UserOperation firmada.',
+            'USER_OPERATION_REJECTED'
         );
     }
     const userOperationHash = assertExpectedUserOperationHash(
         submitted.user_operation_hash,
         expectedUserOperationHash
     );
+    reportProgress(onProgress, ACCOUNT_ABSTRACTION_STATUS.BUNDLER_PENDING, {
+        safeAddress: safeAccount.address,
+        userOperationHash,
+    });
     const immediateConfirmation = readConfirmedMint(submitted);
     if (immediateConfirmation) {
+        reportProgress(onProgress, ACCOUNT_ABSTRACTION_STATUS.CONFIRMED, {
+            safeAddress: safeAccount.address,
+            userOperationHash,
+            transactionHash: immediateConfirmation.tx_hash,
+            tokenId: immediateConfirmation.token_id,
+        });
         return {
             data: {
                 ...immediateConfirmation,
@@ -636,10 +703,18 @@ export const mintMembershipWithSafe = async ({
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-        const status = readResponseData(await getOperation(userOperationHash));
+        let status;
+        try {
+            status = readResponseData(await getOperation(userOperationHash));
+        } catch {
+            // The bundler already accepted this hash. A transient receipt-read
+            // failure is still pending and must never trigger a second submit.
+            continue;
+        }
         if (status?.status === 'failed' || status?.ok === false) {
             throw new AccountAbstractionError(
-                status?.error || 'La UserOperation falló antes de confirmar.'
+                status?.error || 'La UserOperation falló antes de confirmar.',
+                'USER_OPERATION_FAILED'
             );
         }
         if (status?.user_operation_hash != null) {
@@ -650,6 +725,12 @@ export const mintMembershipWithSafe = async ({
         }
         const confirmation = readConfirmedMint(status);
         if (confirmation) {
+            reportProgress(onProgress, ACCOUNT_ABSTRACTION_STATUS.CONFIRMED, {
+                safeAddress: safeAccount.address,
+                userOperationHash,
+                transactionHash: confirmation.tx_hash,
+                tokenId: confirmation.token_id,
+            });
             return {
                 data: {
                     ...confirmation,

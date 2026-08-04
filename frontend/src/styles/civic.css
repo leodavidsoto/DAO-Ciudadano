@@ -597,6 +597,226 @@ body:has(.civic-app)::-webkit-scrollbar-thumb:hover {
     border-top-color: #ffffff;
 }
 
+/* === Subsidized smart-account operation ===
+   This is an event-driven state rail, not a timer or a fake percentage. */
+
+.civic-aa-terminal {
+    width: min(100%, 720px);
+    overflow: hidden;
+    background: var(--civic-superficie);
+    border: 1px solid var(--civic-azul-borde);
+    border-top: 3px solid var(--civic-rojo);
+    border-radius: var(--civic-radio);
+    box-shadow: 0 14px 34px rgba(11, 37, 69, .09);
+    color: var(--civic-texto);
+}
+
+.civic-aa-header {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 36px;
+    align-items: start;
+    gap: 14px;
+    padding: 22px 24px 18px;
+    background: linear-gradient(110deg, #FFFFFF 45%, #F3F6FC 100%);
+    border-bottom: 1px solid var(--civic-borde);
+}
+
+.civic-aa-seal,
+.civic-aa-signal {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.civic-aa-seal {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    background: var(--civic-azul);
+    color: #FFFFFF;
+    box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .14);
+}
+
+.civic-aa-seal svg { width: 22px; height: 22px; }
+
+.civic-aa-heading {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.civic-aa-kicker {
+    color: var(--civic-azul);
+    font-family: var(--civic-titulo);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+}
+
+.civic-aa-heading strong {
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 17px;
+    line-height: 1.3;
+}
+
+.civic-aa-heading > span:last-child {
+    color: var(--civic-suave);
+    font-size: 12.5px;
+    line-height: 1.55;
+}
+
+.civic-aa-signal {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--civic-azul-suave);
+    color: var(--civic-azul);
+}
+
+.civic-aa-signal svg { width: 17px; height: 17px; }
+.civic-aa-signal.is-active svg { animation: civicSpin .9s linear infinite; }
+.civic-aa-signal.is-confirmed {
+    background: var(--civic-verde-suave);
+    color: var(--civic-verde-texto);
+}
+
+.civic-aa-signal.is-warning {
+    background: var(--civic-ambar-suave);
+    color: var(--civic-ambar);
+}
+
+.civic-aa-signal.is-error {
+    background: var(--civic-rojo-suave);
+    color: var(--civic-rojo);
+}
+
+.civic-aa-sponsorship {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin: 16px 24px 0;
+    padding: 6px 10px;
+    border: 1px solid #BFD9C9;
+    border-radius: 999px;
+    background: var(--civic-verde-suave);
+    color: var(--civic-verde-texto);
+    font-family: var(--civic-titulo);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.civic-aa-sponsorship svg { width: 14px; height: 14px; }
+
+.civic-aa-rail {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0;
+    padding: 22px 24px 24px;
+    list-style: none;
+}
+
+.civic-aa-rail li {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--civic-suave);
+    font-family: var(--civic-titulo);
+    font-size: 10.5px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.civic-aa-rail li:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    z-index: 0;
+    top: 15px;
+    left: calc(50% + 18px);
+    width: calc(100% - 36px);
+    height: 2px;
+    background: var(--civic-borde-fuerte);
+}
+
+.civic-aa-rail li.is-complete:not(:last-child)::after {
+    background: var(--civic-azul);
+}
+
+.civic-aa-marker {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--civic-borde-fuerte);
+    border-radius: 50%;
+    background: var(--civic-superficie);
+    color: var(--civic-suave);
+    font-size: 11px;
+}
+
+.civic-aa-marker svg { width: 14px; height: 14px; }
+
+.civic-aa-rail li.is-active,
+.civic-aa-rail li.is-complete { color: var(--civic-azul); }
+
+.civic-aa-rail li.is-active .civic-aa-marker {
+    border-color: var(--civic-rojo);
+    color: var(--civic-rojo);
+    box-shadow: 0 0 0 5px rgba(203, 44, 39, .09);
+    animation: civicAaPulse 1.8s ease-in-out infinite;
+}
+
+.civic-aa-rail li.is-complete .civic-aa-marker {
+    border-color: var(--civic-azul);
+    background: var(--civic-azul);
+    color: #FFFFFF;
+}
+
+.civic-aa-identifier {
+    display: grid;
+    gap: 5px;
+    padding: 14px 24px 18px;
+    background: #F3F6FC;
+    border-top: 1px solid var(--civic-borde);
+}
+
+.civic-aa-identifier > span {
+    color: var(--civic-suave);
+    font-family: var(--civic-titulo);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.civic-aa-identifier code {
+    color: var(--civic-tinta);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 10.5px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.civic-app .civic-aa-authorize {
+    max-width: 100%;
+    min-height: 44px;
+    height: auto !important;
+    white-space: normal !important;
+    line-height: 1.35;
+    text-align: center;
+}
+
+@keyframes civicAaPulse {
+    50% { box-shadow: 0 0 0 8px rgba(203, 44, 39, .035); }
+}
+
 /* === Urna privada MACI === */
 
 .civic-ballot {
@@ -724,6 +944,8 @@ body:has(.civic-app)::-webkit-scrollbar-thumb:hover {
 @media (prefers-reduced-motion: reduce) {
     .civic-spinner { animation-duration: 2s; }
     .civic-card-hover:hover { transform: none; }
+    .civic-aa-signal.is-active svg,
+    .civic-aa-rail li.is-active .civic-aa-marker { animation: none; }
 }
 
 /* === Diálogo === */
@@ -750,6 +972,36 @@ body:has(.civic-app)::-webkit-scrollbar-thumb:hover {
     .civic-ballot-heading { flex-direction: column; gap: 12px; }
     .civic-ballot-options { grid-template-columns: 1fr; }
     .civic-ballot-submit { width: 100%; }
+    .civic-aa-header {
+        grid-template-columns: 40px minmax(0, 1fr) 30px;
+        gap: 11px;
+        padding: 19px 18px 16px;
+    }
+    .civic-aa-seal { width: 40px; height: 40px; }
+    .civic-aa-signal { width: 30px; height: 30px; }
+    .civic-aa-sponsorship { margin-inline: 18px; }
+    .civic-aa-rail {
+        grid-template-columns: 1fr;
+        gap: 14px;
+        padding: 20px 18px;
+    }
+    .civic-aa-rail li {
+        grid-template-columns: 32px 1fr;
+        align-items: center;
+        justify-items: start;
+        text-align: left;
+    }
+    .civic-aa-rail li:not(:last-child)::after {
+        top: 34px;
+        left: 15px;
+        width: 2px;
+        height: 14px;
+    }
+    .civic-aa-identifier { padding-inline: 18px; }
+    .civic-app .civic-aa-authorize {
+        width: 100%;
+        padding-block: 11px;
+    }
 }
 
 /* =========================================================================

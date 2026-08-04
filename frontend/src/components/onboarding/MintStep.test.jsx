@@ -26,6 +26,7 @@ const BASE_CONTEXT = {
     mintSBT: jest.fn(),
     setStep: jest.fn(),
     zk: { status: 'idle' },
+    accountAbstraction: { status: 'idle' },
 };
 
 let container;
@@ -79,4 +80,101 @@ test('does not present a fabricated percentage while proof work is indeterminate
 
     expect(container.querySelector('.mint-progress-ring')).toBeNull();
     expect(container.textContent).not.toMatch(/65\s*%/);
+});
+
+test('offers the subsidized authorization without asking for a traditional transaction', async () => {
+    await renderStep({ loading: false });
+
+    const button = container.querySelector('button');
+    expect(button).not.toBeNull();
+    expect(button.textContent).toContain(
+        'Autorizar Emisión (Subsidiada por el Estado)'
+    );
+    expect(button.getAttribute('aria-label')).toBe(
+        'AUTORIZAR EMISIÓN (SUBSIDIADA POR EL ESTADO)'
+    );
+    expect(container.textContent).toMatch(/No es una transacción tradicional/i);
+    expect(container.textContent).toMatch(/no necesitarás ETH/i);
+    expect(container.textContent).not.toMatch(/patrocina el gas/i);
+});
+
+test('prioritizes the real authorization phase over the completed ZK phase', async () => {
+    await renderStep({
+        zk: { status: 'ready' },
+        accountAbstraction: {
+            status: 'awaiting_authorization',
+            chainName: 'Sepolia',
+            safeAddress: '0x2222222222222222222222222222222222222222',
+        },
+    });
+
+    const panel = container.querySelector('[data-aa-status="awaiting_authorization"]');
+    const liveStatus = panel?.querySelector('[role="status"]');
+    expect(panel).not.toBeNull();
+    expect(liveStatus).not.toBeNull();
+    expect(liveStatus.getAttribute('aria-live')).toBe('polite');
+    expect(liveStatus.getAttribute('aria-busy')).toBeNull();
+    expect(liveStatus.textContent).toMatch(/Autorización personal requerida/i);
+    expect(liveStatus.textContent).toMatch(/UserOperation/i);
+    expect(panel.textContent).toMatch(/Costo de red cubierto · Sepolia/i);
+    expect(container.textContent).not.toContain('PRUEBA ZK VERIFICADA LOCALMENTE');
+});
+
+test('keeps a timed-out Bundler operation visible and prevents reauthorization', async () => {
+    const userOperationHash = `0x${'ab'.repeat(32)}`;
+    await renderStep({
+        loading: false,
+        accountAbstraction: {
+            status: 'bundler_pending',
+            userOperationHash,
+            timedOut: true,
+        },
+    });
+
+    const liveStatus = container.querySelector('[data-aa-status="bundler_pending"]');
+    expect(liveStatus).not.toBeNull();
+    expect(liveStatus.textContent).toMatch(/Confirmación aún pendiente/i);
+    expect(liveStatus.textContent).toMatch(/no la reenviamos automáticamente/i);
+    expect(liveStatus.textContent).toContain(userOperationHash);
+    expect(liveStatus.querySelector('.civic-aa-rail .is-active')).toBeNull();
+    expect(liveStatus.querySelector('[aria-current="step"]')).toBeNull();
+    expect(container.querySelector('button')).toBeNull();
+    expect(container.textContent).not.toMatch(/\d+\s*%/);
+});
+
+test('treats an ambiguous Bundler response as non-retryable', async () => {
+    const expectedUserOperationHash = `0x${'cd'.repeat(32)}`;
+    await renderStep({
+        loading: false,
+        accountAbstraction: {
+            status: 'submission_unknown',
+            verificationDelayed: true,
+            expectedUserOperationHash,
+        },
+    });
+
+    const liveStatus = container.querySelector('[data-aa-status="submission_unknown"]');
+    expect(liveStatus).not.toBeNull();
+    expect(liveStatus.textContent).toMatch(/Recepción por confirmar/i);
+    expect(liveStatus.textContent).toMatch(/no pudimos confirmar si el Bundler la recibió/i);
+    expect(liveStatus.textContent).toContain(expectedUserOperationHash);
+    expect(liveStatus.textContent).toMatch(/Identificador UserOp previsto/i);
+    expect(liveStatus.querySelector('.civic-aa-rail .is-active')).toBeNull();
+    expect(container.querySelector('button')).toBeNull();
+});
+
+test('blocks reauthorization when the Bundler response fails integrity checks', async () => {
+    await renderStep({
+        loading: false,
+        accountAbstraction: {
+            status: 'integrity_error',
+            expectedUserOperationHash: `0x${'cd'.repeat(32)}`,
+        },
+    });
+
+    const panel = container.querySelector('[data-aa-status="integrity_error"]');
+    expect(panel).not.toBeNull();
+    expect(panel.textContent).toMatch(/Verificación de integridad detenida/i);
+    expect(panel.textContent).toMatch(/no coincide con la operación autorizada/i);
+    expect(container.querySelector('button')).toBeNull();
 });
