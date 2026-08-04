@@ -457,9 +457,10 @@ async def vote_in_election(
             ),
         )
 
-    # Anti-fraud: same rapid-voting heuristic as proposal votes (A-4)
+    # Antifraude: misma heurística que en propuestas, y con la misma
+    # separación entre comprobar y registrar (P-46).
     suspicious, reason = await fraud_detector.check_rapid_voting(
-        request.voter_address, f"election:{election_id}"
+        request.voter_address
     )
     if suspicious:
         logger.warning(f"Rapid election voting blocked: {request.voter_address} ({reason})")
@@ -557,6 +558,9 @@ async def vote_in_election(
         await election_votes_collection().insert_one(vote)
     except DuplicateKeyError:
         return ElectionVoteResponse(ok=False, error="Ya votaste en esta elección.")
+
+    # La papeleta ya está persistida: ahora sí cuenta para la ventana.
+    await fraud_detector.record_vote(request.voter_address)
 
     logger.info(
         f"Election vote: {request.voter_address} -> {request.candidate_address} "

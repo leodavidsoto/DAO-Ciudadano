@@ -62,6 +62,15 @@ redis.call('EXPIRE', KEYS[1], math.ceil(window) + 1)
 return 1
 """
 
+# Lectura sin escritura: cuántos eventos vivos hay en la ventana. Es lo que
+# permite COMPROBAR sin consumir cuota (P-46).
+_WINDOW_COUNT_LUA = """
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, now - window)
+return redis.call('ZCARD', KEYS[1])
+"""
+
 
 class RateLimitStore(ABC):
     """Un almacén decide si una petición cabe en la ventana de su bucket."""
@@ -74,6 +83,14 @@ class RateLimitStore(ABC):
         """True si la petición se admite y queda registrada."""
 
     @abstractmethod
+    async def count(self, key: str, window_seconds: int) -> int:
+        """Eventos vivos en la ventana, SIN registrar uno nuevo.
+
+        Separar "cuántos van" de "apunta uno más" es lo que permite rechazar
+        una petición inválida sin gastarle la cuota a quien la hizo (P-46).
+        """
+        raise NotImplementedError
+
     async def penalty(self, key: str, delta: int, ttl_seconds: int) -> int:
         """Ajusta y devuelve el contador de penalización de una clave.
 
@@ -114,6 +131,10 @@ class InMemoryRateLimitStore(RateLimitStore):
         bucket.append(now)
         self._buckets[key] = bucket
         return True
+
+    async def count(self, key: str, window_seconds: int) -> int:
+        now = time.time()
+        return len([t for t in self._buckets.get(key, []) if now - t < window_seconds])
 
     def _sweep(self, now: float, window_seconds: int) -> None:
         """Olvida claves inactivas. Amortizado a una vez por ventana.
@@ -162,6 +183,7 @@ class RedisRateLimitStore(RateLimitStore):
         self._client = client
         self._namespace = namespace
         self._script = client.register_script(_SLIDING_WINDOW_LUA)
+        self._count_script = client.register_script(_WINDOW_COUNT_LUA)
         self._counter = 0
 
     def _member(self) -> str:
@@ -180,6 +202,13 @@ class RedisRateLimitStore(RateLimitStore):
             args=[time.time(), window_seconds, limit, self._member()],
         )
         return bool(int(result))
+
+    async def count(self, key: str, window_seconds: int) -> int:
+        result = await self._count_script(
+            keys=[f"{self._namespace}:{key}"],
+            args=[time.time(), window_seconds],
+        )
+        return int(result)
 
     async def penalty(self, key: str, delta: int, ttl_seconds: int) -> int:
         """INCRBY + EXPIRE. El TTL evita que un contador quede para siempre."""
@@ -230,6 +259,19 @@ class FallbackRateLimitStore(RateLimitStore):
                     type(exc).__name__,
                 )
         return await self._fallback.allow(key, limit, window_seconds)
+
+    async def count(self, key: str, window_seconds: int) -> int:
+        if not self._degraded:
+            try:
+                return await self._primary.count(key, window_seconds)
+            except Exception as exc:
+                self._degraded = True
+                logger.error(
+                    "Rate limiter degradado a memoria al contar: Redis no "
+                    "responde (%s).",
+                    type(exc).__name__,
+                )
+        return await self._fallback.count(key, window_seconds)
 
     async def recover(self) -> bool:
         """Reintenta Redis. Devuelve True si volvió a estar disponible."""

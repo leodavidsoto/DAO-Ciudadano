@@ -402,14 +402,19 @@ class FraudDetector:
         """Conecta el almacén compartido. Lo llama main al arrancar."""
         self._store = store
 
-    async def check_rapid_voting(
-        self, voter_address: str, proposal_id: str
-    ) -> tuple[bool, str]:
-        """(sospechoso, motivo) para un intento de voto.
+    async def check_rapid_voting(self, voter_address: str) -> tuple[bool, str]:
+        """(sospechoso, motivo) SIN registrar el intento (P-46).
 
-        `proposal_id` ya no participa en la clave: el límite es por votante y
-        ventana, no por propuesta. Incluirlo permitiría emitir la cuota entera
-        contra cada propuesta rotando el identificador.
+        Antes esta misma llamada comprobaba y apuntaba a la vez, así que diez
+        peticiones inválidas —propuesta inexistente, ya votada, plazo
+        vencido— agotaban la cuota y bloqueaban con 429 a alguien que no había
+        emitido ni un voto. Ahora comprobar es solo leer; registrar es
+        `record_vote`, y el router lo llama cuando la papeleta ya se guardó.
+
+        `proposal_id` desapareció de la firma: nunca formó parte de la clave
+        —incluirlo permitiría gastar la cuota entera contra cada propuesta
+        rotando el identificador— y tenerlo como parámetro sugería lo
+        contrario.
         """
         if self._store is None:
             # Sin almacén no se inventa un veredicto: dejar pasar en silencio
@@ -419,14 +424,32 @@ class FraudDetector:
             )
             return True, "Antifraude no disponible"
 
-        allowed = await self._store.allow(
-            f"votes:{voter_address.lower()}",
+        used = await self._store.count(
+            self._vote_key(voter_address), self.VOTE_WINDOW_SECONDS
+        )
+        if used >= self.MAX_VOTES_PER_WINDOW:
+            return True, "Too many votes in short period"
+        return False, ""
+
+    async def record_vote(self, voter_address: str) -> None:
+        """Apunta un voto EFECTIVAMENTE emitido en la ventana deslizante.
+
+        Se llama después de persistir la papeleta: lo que limita el antifraude
+        son votos, no intentos fallidos. De los intentos fallidos ya se ocupa
+        el limitador por IP, que además penaliza progresivamente.
+        """
+        if self._store is None:
+            logger.error("FraudDetector sin almacén: el voto no se contabiliza")
+            return
+        await self._store.allow(
+            self._vote_key(voter_address),
             limit=self.MAX_VOTES_PER_WINDOW,
             window_seconds=self.VOTE_WINDOW_SECONDS,
         )
-        if not allowed:
-            return True, "Too many votes in short period"
-        return False, ""
+
+    @staticmethod
+    def _vote_key(voter_address: str) -> str:
+        return f"votes:{voter_address.lower()}"
 
     async def reset(self) -> None:
         """Limpia el historial. Solo lo usan los tests."""

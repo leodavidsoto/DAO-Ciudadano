@@ -76,70 +76,79 @@ def test_format_rut():
 # === Fraud detector ===
 
 async def test_fraud_detector_flags_rapid_voting():
-    """El historial de votos vive ahora en el almacén compartido (ROADMAP 3.8)."""
+    """El historial de votos vive en el almacén compartido (ROADMAP 3.8)."""
     from app.core.rate_limit_store import InMemoryRateLimitStore
 
     detector = FraudDetector(store=InMemoryRateLimitStore())
 
-    flagged = False
-    for _ in range(15):
-        suspicious, reason = await detector.check_rapid_voting("0xabc", "prop-1")
-        if suspicious:
-            flagged = True
-            assert "Too many votes" in reason
-            break
+    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW):
+        suspicious, _ = await detector.check_rapid_voting("0xabc")
+        assert suspicious is False
+        await detector.record_vote("0xabc")
 
-    assert flagged is True
+    suspicious, reason = await detector.check_rapid_voting("0xabc")
+
+    assert suspicious is True
+    assert "Too many votes" in reason
+
+
+async def test_checking_does_not_consume_quota():
+    """P-46: comprobar es leer. Antes, comprobar apuntaba.
+
+    Diez peticiones inválidas —propuesta inexistente, ya votada, plazo
+    vencido— agotaban la cuota y bloqueaban con 429 a quien no había emitido
+    ni un voto.
+    """
+    from app.core.rate_limit_store import InMemoryRateLimitStore
+
+    detector = FraudDetector(store=InMemoryRateLimitStore())
+
+    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW * 3):
+        suspicious, _ = await detector.check_rapid_voting("0xabc")
+        assert suspicious is False, "comprobar gastó cuota"
+
+    # Y la cuota sigue entera para votos de verdad.
+    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW):
+        await detector.record_vote("0xabc")
+    suspicious, _ = await detector.check_rapid_voting("0xabc")
+    assert suspicious is True
 
 
 async def test_rapid_voting_cannot_be_evaded_by_rotating_the_proposal():
     """El límite es por votante, no por propuesta.
 
-    Si la propuesta formara parte de la clave, bastaría rotar el identificador
-    para emitir la cuota entera contra cada una.
+    La propuesta ya no está ni en la firma: si formara parte de la clave,
+    bastaría rotar el identificador para emitir la cuota entera contra cada
+    una.
     """
     from app.core.rate_limit_store import InMemoryRateLimitStore
 
     detector = FraudDetector(store=InMemoryRateLimitStore())
+    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW):
+        await detector.record_vote("0xabc")
 
-    verdicts = [
-        (await detector.check_rapid_voting("0xabc", f"prop-{i}"))[0]
-        for i in range(12)
-    ]
+    suspicious, _ = await detector.check_rapid_voting("0xabc")
 
-    assert any(verdicts), "rotar el proposal_id evadió el límite"
+    assert suspicious is True
 
 
-async def test_fraud_detector_without_a_store_fails_closed():
-    """Sin almacén no se inventa un veredicto favorable.
+async def test_another_voter_keeps_their_own_quota():
+    from app.core.rate_limit_store import InMemoryRateLimitStore
 
-    Dejar pasar en silencio desactivaría el antifraude sin que nadie lo note.
-    """
+    detector = FraudDetector(store=InMemoryRateLimitStore())
+    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW):
+        await detector.record_vote("0xabc")
+
+    suspicious, _ = await detector.check_rapid_voting("0xdef")
+
+    assert suspicious is False
+
+
+async def test_without_a_store_it_fails_closed():
+    """Sin almacén no se inventa un veredicto."""
     detector = FraudDetector(store=None)
 
-    suspicious, reason = await detector.check_rapid_voting("0xabc", "prop-1")
+    suspicious, reason = await detector.check_rapid_voting("0xabc")
 
     assert suspicious is True
     assert "no disponible" in reason
-
-
-async def test_rapid_voting_state_is_shared_between_workers():
-    """Dos procesos contra el mismo almacén comparten el historial.
-
-    Es la razón de la migración: con estado por proceso, un votante duplicaba
-    su cuota simplemente cayendo en otra instancia.
-    """
-    import fakeredis.aioredis
-
-    from app.core.rate_limit_store import RedisRateLimitStore
-
-    client = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    worker_a = FraudDetector(store=RedisRateLimitStore(client))
-    worker_b = FraudDetector(store=RedisRateLimitStore(client))
-
-    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW):
-        assert (await worker_a.check_rapid_voting("0xabc", "p"))[0] is False
-
-    # El siguiente se marca aunque llegue al OTRO worker.
-    suspicious, _ = await worker_b.check_rapid_voting("0xabc", "p")
-    assert suspicious is True

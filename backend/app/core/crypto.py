@@ -37,6 +37,7 @@ resuelta y no debe declararse como tal.
 Falla cerrado: sin ninguna llave válida y DEBUG=False, encrypt()/decrypt()
 lanzan EncryptionKeyMissing.
 """
+import base64
 import hashlib
 from typing import List
 
@@ -49,7 +50,22 @@ class EncryptionKeyMissing(RuntimeError):
     """No hay ninguna llave de PII configurada y DEBUG=False (fail closed)."""
 
 
-_DEV_ONLY_KEY = Fernet.generate_key().decode("utf-8")
+# Llave de DESARROLLO, determinística a propósito (P-47).
+#
+# Antes se generaba con `Fernet.generate_key()` al importar el módulo, o sea
+# una distinta POR PROCESO. Con `--reload` o varios workers, lo que cifraba un
+# proceso no lo podía descifrar otro: el nombre del ciudadano volvía como
+# `None` sin ningún error que explicara por qué.
+#
+# Derivarla de una constante fija hace que todos los procesos locales
+# compartan la misma. El valor es obviamente de desarrollo y está en el
+# repositorio a la vista: NO es un secreto, y por eso solo se usa cuando no
+# hay ninguna llave configurada Y `DEBUG` está activo. `key_status()` no la
+# cuenta, así que readiness sigue bloqueando producción por falta de llave.
+_DEV_ONLY_SEED = b"dao-ciudadana::dev-only::insecure-pii-key::do-not-use-in-production"
+_DEV_ONLY_KEY = base64.urlsafe_b64encode(
+    hashlib.sha256(_DEV_ONLY_SEED).digest()
+).decode("ascii")
 
 
 def _configured_keys() -> List[str]:

@@ -435,9 +435,11 @@ async def cast_vote(
             detail="Esta votación requiere una papeleta firmada (EIP-712). Ver GET /governance/ballot-schema.",
         )
 
-    # Anti-fraud: rapid-voting pattern check (A-4, wired per ROADMAP 3.4)
+    # Antifraude: se COMPRUEBA aquí y se REGISTRA solo si el voto llega a
+    # guardarse (P-46). Antes esta llamada apuntaba el intento, así que diez
+    # peticiones inválidas bloqueaban con 429 a quien no había votado nunca.
     suspicious, reason = await fraud_detector.check_rapid_voting(
-        request.voter_address, request.proposal_id
+        request.voter_address
     )
     if suspicious:
         logger.warning(f"Rapid voting blocked: {request.voter_address} ({reason})")
@@ -556,6 +558,9 @@ async def cast_vote(
             await votes_collection().insert_one(vote_record)
         except DuplicateKeyError:
             return VoteResponse(ok=False, error="Already voted on this proposal")
+        # La papeleta ya está persistida: ahora sí cuenta para la ventana.
+        await fraud_detector.record_vote(request.voter_address)
+
         logger.info(
             f"Vote cast: {request.voter_address} -> {request.vote} "
             f"on {request.proposal_id} (weight {weight})"
