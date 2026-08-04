@@ -15,7 +15,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from ..core.config import settings
 from ..services import chain_service, maci_service
@@ -90,9 +90,32 @@ async def maci_status():
         "private_voting": False,
         "coordinator_configured": False,
         "tally_proof": False,
+        # Cuatro garantías del PROTOCOLO que la auditoría cruzada encontró
+        # ausentes (REQUEST_TO_CLAUDE.md, TAREA 5). Van en false porque hoy no
+        # se cumplen, y solo pueden subir tras pruebas negativas contra el
+        # circuito, el verifier y el contrato REALES — no contra un mock.
+        # Publicarlas en true sin eso sería afirmar privacidad que no existe.
+        #
+        # 1. El pollId no entra en el comando firmado ni en messageHash, y
+        #    stateIndex no se compara con pathIndices: un mensaje de un poll
+        #    puede repetirse en otro.
+        "poll_bound_messages": False,
+        # 2. currentNonce es entrada privada libre y el nonce no forma parte
+        #    de StateLeaf: nada demuestra la transición.
+        "stateful_nonces": False,
+        # 3. maci_tally acepta la misma hoja repetida en las cinco posiciones
+        #    del batch y la suma cinco veces.
+        "unique_tally_leaves": False,
+        # 4. processMessages produce raíces por mensaje sin enlace verificable
+        #    hasta el stateRoot del tally, y las señales públicas del circuito
+        #    no coinciden con las que espera publishTally.
+        "process_tally_linked": False,
         "detail": (
-            "Solo está operativo el registro de llaves. Cifrado de papeletas, "
-            "coordinador y prueba de tally siguen pendientes (ROADMAP fase 3)."
+            "Solo está operativo el registro de llaves. El transporte anónimo "
+            "existe pero no acredita anonimato (correlación por IP y tiempo), "
+            "y el protocolo tiene cuatro garantías sin cumplir: replay entre "
+            "polls, nonces sin estado, hojas duplicadas en el tally y falta de "
+            "enlace verificable entre processMessages y el recuento."
         ),
     }
 
@@ -247,13 +270,25 @@ async def get_poll_for_proposal(
 
 
 class AnonymousMessage(BaseModel):
+    # `forbid` también aquí: un campo extra dentro del mensaje es igual de
+    # capaz de transportar identidad que uno de primer nivel.
+    model_config = ConfigDict(extra="forbid")
+
     data: List[str]
 
 
 class AnonymousMessageRequest(BaseModel):
     """Frontera anónima. NO acepta wallet_address, choice, comando, firma,
     salt, shared key ni llave privada: cualquiera de esos campos volvería a
-    enlazar el texto cifrado con una persona."""
+    enlazar el texto cifrado con una persona.
+
+    `extra="forbid"` es la diferencia entre decir eso y cumplirlo. Antes, un
+    cliente que enviara `wallet_address` recibía 200: Pydantic descartaba el
+    campo en silencio y nadie se enteraba de que el frontend estaba filtrando
+    identidad en cada voto. Ahora se rechaza con 422 y el nombre del campo.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     protocol_version: str
     proposal_id: str
@@ -284,6 +319,26 @@ async def publish_anonymous_message(poll_id: str, request: AnonymousMessageReque
         )
     if request.poll_id != poll_id:
         raise HTTPException(status_code=422, detail="poll_id inconsistente.")
+
+    # El poll tiene que existir, estar abierto y ser el de esta propuesta.
+    # Antes `proposal_id` llegaba y no se miraba: un mensaje podía encolarse
+    # contra un poll inexistente o cerrado, creando un acumulador nuevo desde
+    # cero que nadie podría reconciliar.
+    expected_poll = await maci_service.poll_id_for_proposal(request.proposal_id)
+    if expected_poll != poll_id:
+        raise HTTPException(
+            status_code=422,
+            detail="El poll indicado no corresponde a esa propuesta.",
+        )
+
+    if not await maci_service.poll_is_open(request.proposal_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "La propuesta de esta urna no existe o su plazo ya terminó. "
+                "Un mensaje encolado ahora no lo contaría nadie."
+            ),
+        )
 
     key = await maci_service.read_coordinator_key_onchain()
     if key is None:

@@ -418,13 +418,39 @@ async def test_anonymous_transport_takes_no_bearer(client):
     assert response.status_code != 401
 
 
+async def _open_poll(proposal_id="prop-1"):
+    """Propuesta vigente + poll registrado para ella.
+
+    Sin esto, la petición muere antes en la validación del poll y el test no
+    comprobaría lo que dice comprobar.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.core.database import proposals_collection
+    from app.services import maci_service
+
+    await proposals_collection().insert_one({
+        "id": proposal_id,
+        "title": "Propuesta con urna",
+        "status": "active",
+        "ends_at": datetime.now(timezone.utc) + timedelta(days=7),
+    })
+    return await maci_service.poll_id_for_proposal(proposal_id)
+
+
 async def test_anonymous_transport_refuses_without_an_anchored_key(client):
     """Sin llave anclada on-chain no se acepta nada.
 
     Aceptar cifrado hacia una llave no verificada produciría votos que el
     coordinador no puede descifrar: se perderían en silencio.
     """
-    response = await client.post("/api/maci/polls/1/messages", json=ANON_BODY)
+    poll_id = await _open_poll()
+
+    response = await client.post(
+        f"/api/maci/polls/{poll_id}/messages",
+        json={**ANON_BODY, "poll_id": poll_id},
+    )
+
     assert response.status_code == 503
 
 
@@ -529,3 +555,122 @@ def test_two_generated_keypairs_differ():
     first, _ = maci_service.generate_coordinator_keypair()
     second, _ = maci_service.generate_coordinator_keypair()
     assert first != second
+
+
+# === Frontera anónima endurecida (TAREA 5) ===
+
+async def test_extra_fields_are_rejected_not_ignored(client):
+    """Antes se descartaban en silencio: el frontend podía estar filtrando
+    identidad en cada voto sin que nadie se enterara."""
+    poll_id = await _open_poll()
+
+    response = await client.post(
+        f"/api/maci/polls/{poll_id}/messages",
+        json={**ANON_BODY, "poll_id": poll_id, "wallet_address": "0x" + "11" * 20},
+    )
+
+    assert response.status_code == 422
+    assert "wallet_address" in str(response.json()).lower()
+
+
+async def test_an_extra_field_inside_the_message_is_also_rejected(client):
+    poll_id = await _open_poll()
+
+    response = await client.post(
+        f"/api/maci/polls/{poll_id}/messages",
+        json={
+            **ANON_BODY,
+            "poll_id": poll_id,
+            "message": {"data": [str(i + 1) for i in range(10)], "choice": "for"},
+        },
+    )
+
+    assert response.status_code == 422
+
+
+async def test_a_poll_from_another_proposal_is_rejected(client):
+    """`proposal_id` llegaba y no se miraba."""
+    poll_id = await _open_poll("prop-1")
+    await _open_poll("prop-2")
+
+    response = await client.post(
+        f"/api/maci/polls/{poll_id}/messages",
+        json={**ANON_BODY, "poll_id": poll_id, "proposal_id": "prop-2"},
+    )
+
+    assert response.status_code == 422
+    assert "no corresponde" in response.json()["detail"]
+
+
+async def test_a_closed_proposal_does_not_accept_messages(client):
+    """Encolar un voto que nadie contará es peor que rechazarlo."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.core.database import proposals_collection
+    from app.services import maci_service
+
+    await proposals_collection().insert_one({
+        "id": "prop-cerrada",
+        "status": "expired",
+        "ends_at": datetime.now(timezone.utc) - timedelta(days=1),
+    })
+    poll_id = await maci_service.poll_id_for_proposal("prop-cerrada")
+
+    response = await client.post(
+        f"/api/maci/polls/{poll_id}/messages",
+        json={**ANON_BODY, "poll_id": poll_id, "proposal_id": "prop-cerrada"},
+    )
+
+    assert response.status_code == 409
+    assert "plazo" in response.json()["detail"]
+
+
+def test_the_accumulator_matches_the_contract():
+    """keccak256(abi.encode(...)), igual que MACICoordinator.
+
+    Vector contrastado con `ethers.AbiCoder`: si alguien cambia el formato,
+    el recibo deja de ser recomputable contra la cadena y este test lo dice.
+    """
+    from app.services import maci_service
+
+    chain = maci_service.next_message_chain(
+        maci_service.ZERO_MESSAGE_CHAIN,
+        12345678901234567890,
+        98765432109876543210,
+        list(range(1, 11)),
+    )
+
+    assert chain == (
+        "0x7ec175c5b4535fde4ddf8c338d742c74b28282f41caebbd6652020d2911a43f6"
+    )
+
+
+def test_the_accumulator_chains_previous_values():
+    """Cambiar el acumulador anterior cambia el resultado: es una cadena."""
+    from app.services import maci_service
+
+    first = maci_service.next_message_chain(
+        maci_service.ZERO_MESSAGE_CHAIN, 1, 2, [3] * 10
+    )
+    second = maci_service.next_message_chain(first, 1, 2, [3] * 10)
+
+    assert first != second
+    assert second == maci_service.next_message_chain(first, 1, 2, [3] * 10)
+
+
+async def test_status_declares_the_four_protocol_gaps(client):
+    """Las cuatro garantías que la auditoría cruzada encontró ausentes."""
+    body = (await client.get("/api/maci/status")).json()
+
+    assert body["poll_bound_messages"] is False
+    assert body["stateful_nonces"] is False
+    assert body["unique_tally_leaves"] is False
+    assert body["process_tally_linked"] is False
+    assert body["private_voting"] is False
+
+
+def test_the_anonymous_transport_has_its_own_rate_limit():
+    from app.core.security_middleware import RateLimitMiddleware
+
+    assert RateLimitMiddleware._is_sensitive_path("/api/maci/polls/7/messages")
+    assert not RateLimitMiddleware._is_sensitive_path("/api/maci/status")

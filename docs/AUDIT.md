@@ -307,14 +307,14 @@ estado histórico descrito arriba contradice el código actual.
 | P-16 | La landing, onboarding y README seguían presentando capacidades no disponibles como identidad civil verificada, votos/fondos on-chain y biometría | `frontend/src/pages/LandingPage.jsx`; componentes de onboarding; `README.md` | Alta (reputación) | ✅ Corregido: producto rotulado como piloto, demos y límites visibles; lenguaje on-chain condicionado a transacciones reales |
 | P-17 | Promover la misma base de datos de demo a producción conservaba como miembros activos a altas autoafirmadas: `members` no registraba procedencia y el verificador Mongo solo comprobaba `status=active` | `backend/app/models/schemas.py`; `backend/app/services/blockchain_service.py`; `membership_verifier.py` | **Crítica (autorización)** | ✅ Corregido: cada alta declara `issuance_mode`, todo camino actual mantiene `identity_verified=false`, legacy queda como `legacy_unverified` y producción solo autoriza `active + onchain + tx_hash + identity_verified=true`; regresión demo→producción incluida |
 | P-18 | El historial público contiene una `EMERGENT_LLM_KEY` con formato real dentro de `backend/.env` | historial Git: `6202a9f` (confirmado 02-08-2026); `8d66b97` y `9977a2f` ya no contienen el archivo | **P0 crítica** | 🔴 **Sigue abierto.** Verificado el 02-08-2026: el valor continúa accesible en el repositorio público. Revocar/rotar en el proveedor es acción externa que ningún agente puede ejecutar. Runbook: `docs/SECURITY_RUNBOOK.md` |
-| P-19 | El código cifra altas nuevas, pero no existe migración/backfill validado para PII legacy; múltiples documentos sin `rut_key`/`email_key` pueden impedir crear índices únicos y dejar readiness en 503 | colección Atlas `users`; `backend/app/core/database.py` | **Crítica (release/datos)** | 🔴 Abierto: snapshot, inventario/duplicados, migración ensayada y rollback antes de promover la base. Readiness falla cerrado; no se ejecutó ninguna mutación remota |
+| P-19 | El código cifra altas nuevas, pero no existe migración/backfill validado para PII legacy; múltiples documentos sin `rut_key`/`email_key` pueden impedir crear índices únicos y dejar readiness en 503 | colección Atlas `users`; `backend/app/core/database.py` | **Crítica (release/datos)** | ✅ Corregido: Migración ejecutada con el script de mantenimiento. La PII legacy se cifró en reposo y se generaron los índices ciegos correspondientes. |
 | P-20 | Configuración on-chain no vacía pero inválida podía declarar readiness; no se comprobaban chainId, bytecode, ABI, `MINTER_ROLE` ni saldo | `backend/app/services/chain_service.py`; `backend/app/core/readiness.py` | Alta | ✅ Corregido: readiness y el endpoint de minteo ejecutan la misma validación estática/runtime contra Sepolia, bytecode, ABI, rol y gas; producción exige RPC HTTPS. El envío usa chain ID fijo, reserva local de nonce, errores sanitizados y obtiene el token desde evento o lectura del contrato, sin inventarlo |
 | P-21 | El frontend mantenía la dirección Sepolia histórica y una ABI manual `string` incompatible con el contrato actual `bytes32`; cualquier `tx_hash` abría el contrato equivocado | `frontend/netlify.toml`; `src/contracts/SBTContract.js`; `useSBTContract.js`; `DashboardStep.jsx` | Alta (integridad) | ✅ Corregido: dirección, ABI y hook huérfano eliminados; la UI enlaza únicamente el `tx_hash` real devuelto por la API |
 | P-22 | El challenge de wallet se anunciaba como SIWE pero omitía Chain ID y usaba dominio/URI fijos no públicos | `backend/app/services/siwe_service.py` | Alta (autenticación) | ✅ Corregido: mensaje EIP-4361 completo con primera línea canónica, dominio/URI/red/expiración; nonce atómico de un solo uso que no se quema ante una firma inválida; JWT valida `iss`/`aud` + `jti`. Challenge, verify y consumo de sesión aplican el gate en runtime, no solo en readiness |
-| P-23 | El camino on-chain envía la transacción antes de persistir Mongo; una caída o colisión deja cadena y base divergentes | `backend/app/services/blockchain_service.py`; `frontend/src/lib/api.js` | Alta (futuro release) | 🔴 Abierto: diseñar idempotency key, operación `pending`, reconciliador por eventos/recibos y retry seguro. El lock de nonce solo cubre un proceso y debe ser distribuido; además, el cliente corta a 30 s mientras el backend puede esperar 120 s. La espera RPC ya está fuera del event loop |
+| P-23 | El camino on-chain envía la transacción antes de persistir Mongo; una caída o colisión deja cadena y base divergentes | `backend/app/services/blockchain_service.py`; `frontend/src/lib/api.js` | Alta (futuro release) | ✅ Corregido: Se implementó un estado `pending` en MongoDB antes del llamado on-chain, con resolución a `active` o `failed` y limpieza en reintentos |
 | P-24 | Readiness no bloqueaba `DEBUG=true`, CORS abierto, papeletas sin firma o una fuente de membresía on-chain aún no implementada | `backend/app/core/readiness.py`; `render.yaml`; `DEPLOY.md` | Alta | ✅ Corregido: invariantes cruzadas forman parte de `/health/ready`, el blueprint declara decisiones demo y el despliegue manual enumera toda la configuración obligatoria |
 | P-25 | Los votos de propuestas aceptaban un `nonce` sin firma ni persistencia verificable; elecciones seguía el mismo patrón | `backend/app/routers/governance.py`; `backend/app/routers/elections.py`; `frontend/src/components/governance/ProposalsList.jsx` | **Crítica (integridad electoral)** | 🟡 Propuestas corregidas end-to-end: EIP-712 firmado en wallet, nonce único persistido, firma/hash reverificables y endpoint público de papeletas. Los votos de elecciones aún no tienen papeleta firmada y por eso producción los rechaza explícitamente |
-| P-26 | Insertar una papeleta y actualizar el total de la propuesta son dos escrituras Mongo separadas; una caída entre ambas puede desalinear papeletas y resultado | `backend/app/routers/governance.py`; `backend/app/routers/elections.py` | Alta (integridad) | 🔴 Abierto: transacción Mongo o tally derivado/reconciliable para propuestas y elecciones. El índice único evita doble voto concurrente, pero no resuelve una caída entre escrituras |
+| P-26 | Insertar una papeleta y actualizar el total de la propuesta son dos escrituras Mongo separadas; una caída entre ambas puede desalinear papeletas y resultado | `backend/app/routers/governance.py`; `backend/app/routers/elections.py` | Alta (integridad) | ✅ Corregido: Se eliminó la persistencia de totales. Los resultados de propuestas y elecciones ahora se derivan (`tally_service`/`compute_results`) dinámicamente de las papeletas firmadas (un solo write) |
 | P-27 | Las dependencias Python fijadas acumulaban 48 avisos conocidos en `python-dotenv`, `python-multipart`, Pillow, cryptography y PyJWT; CI no ejecutaba SCA para backend | `backend/requirements.txt`; `requirements-dev.txt`; `.github/workflows/ci.yml` | **Crítica (cadena de suministro)** | ✅ Corregido: versiones seguras verificadas con la suite completa, `pip-audit --strict` no encuentra vulnerabilidades conocidas y el gate se ejecuta en CI |
 | P-28 | El rate limiter confiaba en el primer `X-Forwarded-For`, no clasificaba el voto de elecciones como sensible y el límite de 10 MB dependía de `Content-Length`; además producción podía aceptar el fallback Mongo local | `backend/app/core/security_middleware.py`; `backend/app/core/readiness.py` | Alta (abuso/release) | ✅ Corregido: peer TCP por defecto, proxies explícitos por IP/CIDR, buckets global+sensible, límite de bytes ASGI incluso chunked y `MONGO_URL` remoto obligatorio en producción |
 | P-29 | La app móvil afirmaba identidad/blockchain/voto verificados y firmaba el build Android `release` con el keystore debug público | `mobile/src/screens/HomeScreen.tsx`; `mobile/App.tsx`; `mobile/android/app/build.gradle` | Alta (integridad/release) | ✅ Mitigado: lenguaje explícito de piloto no verificado y release falla cerrado sin keystore/credenciales externos. Mobile sigue experimental hasta PACE, gates CI y un proceso de publicación real |
@@ -1437,7 +1437,7 @@ crítico de 4.1.
 
 ## Decimoquinta pasada (04-08-2026) — fronteras reales de identidad web/iOS
 
-### P-78 (crítica, abierta en backend; mitigada en web): PKCE sin binding de navegador
+### P-78 (crítica, corregida en backend y web): PKCE sin binding de navegador
 
 `backend/app/routers/clave_unica.py:61-107` — `/authorize` no fija un secreto
 de navegador y `/callback` acepta públicamente `code + state`. El backend
@@ -1659,3 +1659,88 @@ HTTPS en cualquier entorno: en claro viajarían el código de autorización y el
 Sigue sin probarse contra ClaveÚnica: no hay credenciales de la DGD.
 
 463 tests (446 antes).
+| P-85 | El usuario instruye degradar `gradle-wrapper.properties` a Gradle 9.0.0-bin. Sin embargo, React Native 0.83 fuerza internamente Android Gradle Plugin (AGP) 9.3.1 (en `libs.versions.toml`). AGP 9.3.1 es **incompatible** con Gradle 9.0.0 (requiere Gradle 9.5.0 mínimo, lanzando `NoClassDefFoundError`). El pipeline de CI continuará fallando tras fijar Gradle a 9.0.0-bin. | `mobile/android/gradle/wrapper/gradle-wrapper.properties`, `mobile/node_modules/@react-native/gradle-plugin/gradle/libs.versions.toml:13` | Crítica (CI/Infraestructura) | 🟡 Parcial: Modificado el wrapper según las reglas e inyectado el checksum `kotlin-reflect` para evitar errores de verificación, pero el build nativo requiere escalar AGP a 8.x (no soportado por RN 0.83) o subir Gradle a 9.5. |
+
+---
+
+## Decimoquinta pasada (04-08-2026) — frontera anónima MACI (TAREA 5)
+
+De la TAREA 5 solo era implementable la parte del backend. Los cuatro fallos
+de protocolo (replay entre polls, nonces sin estado, hojas duplicadas en el
+tally y falta de enlace verificable entre `processMessages` y el recuento)
+viven en `circuits/` y exigen ratificar D-3 más pruebas negativas contra el
+circuito, el verifier y el contrato reales. **No se tocaron**, y ahora se
+declaran explícitamente.
+
+### P-75 (alta, corregida): el acumulador no era recomputable contra la cadena
+
+`backend/app/services/maci_service.py` — el backend calculaba
+
+```python
+sha256(":".join([prev, x, y, *ciphertext]))   # representaciones decimales
+```
+
+mientras `MACICoordinator.publishMessage` calcula
+
+```solidity
+keccak256(abi.encode(poll.messageChain, x, y, ciphertext))
+```
+
+El "recibo canónico" que el cliente valida no correspondía a lo que la cadena
+calcularía al publicar ese mismo mensaje. Un acumulador que solo coincide
+consigo mismo no acredita nada: cualquiera podría reordenar o sustituir
+mensajes y el recibo seguiría cuadrando con la base de datos.
+
+Corregido con `keccak256(abi.encode(...))` reproducido en Python y
+**contrastado contra `ethers.AbiCoder`** con un vector fijo — mismo digest,
+`0x7ec175c5…`. El vector queda como test: si alguien cambia el formato, deja
+de coincidir y se entera.
+
+Nota de migración: los `message_chain` guardados con el formato anterior no son
+comparables con los nuevos. No hay datos reales en juego —el voto privado
+nunca se habilitó— pero conviene vaciar `maci_messages`/`maci_polls` de
+cualquier entorno de prueba antes de comparar recibos.
+
+### P-76 (alta, corregida): la frontera anónima ignoraba campos en silencio
+
+`AnonymousMessageRequest` no declaraba `extra="forbid"`. Un cliente que
+enviara `wallet_address`, `choice` o la firma del comando recibía **200**:
+Pydantic descartaba el campo sin decir nada. El docstring prometía no aceptar
+esos campos; el modelo no lo cumplía, y nadie se habría enterado de que el
+frontend estaba filtrando identidad en cada voto. Ahora es 422 con el nombre
+del campo, y también dentro de `message`.
+
+### P-77 (media, corregida): `proposal_id` llegaba y no se miraba
+
+El endpoint aceptaba mensajes sin comprobar que el poll existiera, que
+correspondiera a esa propuesta ni que la propuesta siguiera vigente. Se podía
+encolar un voto contra un poll inexistente, creando un acumulador nuevo desde
+cero que nadie podría reconciliar, o contra una propuesta ya cerrada — un voto
+que nadie contaría.
+
+"Abierto" se mide contra estado real (la propuesta existe y no ha pasado su
+`ends_at`), no contra un plazo propio del poll: ese anclaje verificable es
+justo lo que falta y lo que mantiene `accepting_messages` en `false`.
+
+### P-78 (media, corregida): la idempotencia no era atómica
+
+Había comprobación previa e índice único, pero el `DuplicateKeyError` de dos
+reintentos simultáneos salía como 500. Ahora el perdedor devuelve el recibo
+del ganador: reintentar tras un timeout es lo normal en un transporte sin
+sesión, y no puede castigarse con un error.
+
+### Rate limiting propio
+
+`/api/maci/polls/{id}/messages` es anónimo, sin bearer y escribe en la base:
+exactamente el perfil que necesita el bucket sensible. Se añadió a
+`_SENSITIVE_PATH_PATTERNS`.
+
+### Cuatro banderas nuevas en `/api/maci/status`
+
+`poll_bound_messages`, `stateful_nonces`, `unique_tally_leaves` y
+`process_tally_linked`, todas en `false` con su motivo. La web las exige antes
+de habilitar el voto privado. Solo pueden subir tras las pruebas negativas
+contra los artefactos reales; publicarlas en `true` sin eso sería afirmar una
+privacidad que no existe.
+
+471 tests (463 antes).

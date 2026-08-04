@@ -428,6 +428,60 @@ async def next_nonce(poll_id: str, wallet_address: str) -> int:
     return (int(record["nonce"]) + 1) if record else 1
 
 
+ZERO_MESSAGE_CHAIN = "0x" + "00" * 32
+
+
+def next_message_chain(previous_chain: str, eph_x, eph_y, ciphertext) -> str:
+    """Acumulador IDÉNTICO al del contrato: keccak256(abi.encode(...)).
+
+    Antes se usaba `sha256(":".join(...))` sobre representaciones decimales.
+    Ese valor no lo puede recomputar nadie contra `MACICoordinator`, así que
+    el "recibo canónico" que el cliente valida no correspondía a lo que la
+    cadena calcularía al publicar el mismo mensaje. Un acumulador que solo
+    coincide consigo mismo no acredita nada.
+
+    Verificado contra `ethers.AbiCoder` con un vector fijo: mismo digest.
+    """
+    from eth_abi import encode
+    from eth_utils import keccak
+
+    previous = previous_chain or ZERO_MESSAGE_CHAIN
+    previous_bytes = bytes.fromhex(previous.removeprefix("0x"))
+    if len(previous_bytes) != 32:
+        raise MaciMessageError("El acumulador anterior no es un bytes32 válido.")
+
+    encoded = encode(
+        ["bytes32", "uint256", "uint256", "uint256[]"],
+        [previous_bytes, int(eph_x), int(eph_y), [int(v) for v in ciphertext]],
+    )
+    return "0x" + keccak(encoded).hex()
+
+
+async def poll_is_open(proposal_id: str) -> bool:
+    """¿Sigue vigente el plazo de la propuesta que respalda este poll?
+
+    "Abierto" se mide contra estado REAL: la propuesta existe y no ha pasado
+    su `ends_at`. No se inventa un plazo propio del poll —el anclaje
+    verificable entre propuesta, poll y deadline es justo lo que falta y lo
+    que mantiene `accepting_messages` en false—, pero aceptar mensajes para
+    una propuesta ya cerrada sería encolar votos que nadie va a contar.
+    """
+    from ..core.database import proposals_collection
+
+    proposal = await proposals_collection().find_one({"id": proposal_id})
+    if not proposal:
+        return False
+
+    ends_at = proposal.get("ends_at")
+    if ends_at is None:
+        return False
+    if ends_at.tzinfo is None:
+        # Mongo devuelve datetimes sin zona; compararlos con uno consciente
+        # lanza TypeError.
+        ends_at = ends_at.replace(tzinfo=timezone.utc)
+    return ends_at > datetime.now(timezone.utc)
+
+
 async def publish_anonymous_message(
     poll_id: str,
     ephemeral_x,
@@ -444,7 +498,7 @@ async def publish_anonymous_message(
     La idempotencia es por `idempotency_key` que aporta el cliente, no por
     wallet: es la única forma de deduplicar un reintento sin identificarlo.
     """
-    import hashlib
+    from pymongo.errors import DuplicateKeyError
 
     if not idempotency_key or len(str(idempotency_key)) < 8:
         raise MaciMessageError("Falta una idempotency_key utilizable.")
@@ -463,25 +517,41 @@ async def publish_anonymous_message(
         }
 
     poll = await maci_polls_collection().find_one({"poll_id": poll_id})
-    previous_chain = poll["message_chain"] if poll else "0" * 64
+    previous_chain = poll["message_chain"] if poll else ZERO_MESSAGE_CHAIN
     index = int(poll["message_count"]) if poll else 0
 
-    payload = ":".join(
-        [previous_chain, str(eph_x), str(eph_y)] + [str(v) for v in parsed]
-    )
-    chain = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    chain = next_message_chain(previous_chain, eph_x, eph_y, parsed)
 
-    await maci_messages_collection().insert_one({
-        "poll_id": poll_id,
-        # Sin wallet_address: es la diferencia con el transporte autenticado.
-        "index": index,
-        "ephemeral_x": str(eph_x),
-        "ephemeral_y": str(eph_y),
-        "ciphertext": [str(v) for v in parsed],
-        "message_chain": chain,
-        "idempotency_key": idempotency_key,
-        "published_at": datetime.now(timezone.utc),
-    })
+    try:
+        await maci_messages_collection().insert_one({
+            "poll_id": poll_id,
+            # Sin wallet_address: es la diferencia con el transporte autenticado.
+            "index": index,
+            "ephemeral_x": str(eph_x),
+            "ephemeral_y": str(eph_y),
+            "ciphertext": [str(v) for v in parsed],
+            "message_chain": chain,
+            "idempotency_key": idempotency_key,
+            "published_at": datetime.now(timezone.utc),
+        })
+    except DuplicateKeyError:
+        # Dos reintentos simultáneos con la misma idempotency_key: el índice
+        # único es lo que decide. El que pierde devuelve el recibo del que
+        # ganó, no un error — reintentar tras un timeout es lo normal en un
+        # transporte anónimo sin sesión.
+        stored = await maci_messages_collection().find_one(
+            {"poll_id": poll_id, "idempotency_key": idempotency_key}
+        )
+        if not stored:
+            raise MaciMessageError(
+                "No se pudo registrar el mensaje; vuelve a intentarlo."
+            )
+        return {
+            "index": int(stored["index"]),
+            "message_chain": stored["message_chain"],
+            "duplicate": True,
+        }
+
     await maci_polls_collection().update_one(
         {"poll_id": poll_id},
         {"$set": {"message_chain": chain, "message_count": index + 1}},

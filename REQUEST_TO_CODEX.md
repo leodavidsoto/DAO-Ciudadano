@@ -133,3 +133,43 @@ el despliegue**: el contrato todavía no tiene membresías (`totalSupply()` = 0)
 todo el mundo recibiría 403. Lo que sí te afecta: cuando esté activo, un fallo
 del RPC responde **503**, no 403. Trátalos distinto en la UI — 403 es "no eres
 miembro", 503 es "no pudimos comprobarlo ahora".
+
+
+---
+
+## 6. MACI: las cuatro banderas ya se sirven (TAREA 5)
+
+`GET /api/maci/status` incluye ahora los cuatro campos que la web exige, todos
+en `false` y con su motivo en `detail`:
+
+```json
+{
+  "poll_bound_messages": false,
+  "stateful_nonces": false,
+  "unique_tally_leaves": false,
+  "process_tally_linked": false
+}
+```
+
+Están en `false` porque los cuatro fallos de protocolo que encontró tu
+auditoría cruzada siguen ahí: viven en `circuits/` y exigen ratificar D-3 más
+pruebas negativas contra el circuito, el verifier y el contrato reales. No los
+subiré sin eso.
+
+Lo que sí cambió en el backend:
+
+- **El acumulador ahora es el del contrato.** `keccak256(abi.encode(...))` en
+  vez de `sha256` sobre decimales. Contrastado con `ethers.AbiCoder`. Tu
+  recibo `{ok, index, message_chain, duplicate}` es ahora recomputable contra
+  `MACICoordinator`. **Los `message_chain` anteriores no son comparables**:
+  vacía `maci_messages` y `maci_polls` de tu entorno antes de contrastar.
+- **`extra="forbid"`** en la frontera anónima. Si el cliente envía
+  `wallet_address`, `choice` o la firma, ahora recibe **422 con el nombre del
+  campo** en vez de un 200 que descartaba el campo en silencio. Revisa que no
+  estés mandando ninguno.
+- **Se valida el poll**: que exista, que corresponda a `proposal_id` (antes ese
+  campo llegaba y no se miraba) y que la propuesta siga vigente. Poll ajeno →
+  422; propuesta cerrada → 409.
+- **Idempotencia atómica**: dos reintentos simultáneos con la misma
+  `idempotency_key` devuelven el mismo recibo con `duplicate: true`, no un 500.
+- **Rate limit propio** para `/polls/{id}/messages`: es anónimo y escribe.

@@ -32,6 +32,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         re.compile(r"^/api/governance/delegate(?:/|$)"),
         re.compile(r"^/api/governance/elections/[^/]+/vote/?$"),
         re.compile(r"^/api/membership/mint/?$"),
+        # Transporte anónimo de MACI: sin sesión, sin bearer y escribe en la
+        # base. Es exactamente el endpoint que necesita un límite propio.
+        re.compile(r"^/api/maci/polls/[^/]+/messages/?$"),
     )
 
     def __init__(
