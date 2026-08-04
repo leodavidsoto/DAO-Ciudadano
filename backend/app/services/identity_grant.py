@@ -53,7 +53,9 @@ def provider_is_configured() -> bool:
     return bool(settings.IDENTITY_PROVIDER.strip())
 
 
-async def issue(subject_key: str, provider: str) -> str:
+async def issue(
+    subject_key: str, provider: str, browser_binding: Optional[str] = None
+) -> str:
     """Emite un grant para `subject_key`. Solo lo llama un proveedor real.
 
     Devuelve el valor en claro una única vez: no se puede recuperar después.
@@ -73,6 +75,9 @@ async def issue(subject_key: str, provider: str) -> str:
         "digest": digest(grant),
         "subject_key": subject_key,
         "provider": provider,
+        # Hash del binding de navegador que autorizó este grant. Copiar el
+        # grant a otro navegador no sirve: el canje lo vuelve a exigir.
+        "browser_binding": browser_binding,
         "created_at": now,
         "expires_at": now + timedelta(seconds=settings.IDENTITY_GRANT_TTL_SECONDS),
         "consumed": False,
@@ -82,22 +87,36 @@ async def issue(subject_key: str, provider: str) -> str:
     return grant
 
 
-async def consume(grant: str) -> str:
+async def consume(grant: str, browser_binding: Optional[str] = None) -> str:
     """Canjea el grant y devuelve su `subject_key`.
 
     Atómico: el filtro exige `consumed: False` y no expirado, así que dos
     peticiones simultáneas con el mismo grant producen exactamente una
     credencial.
+
+    Si el grant se emitió ligado a un navegador, ese binding entra EN EL
+    FILTRO: canjearlo desde otro navegador no encuentra documento y falla
+    antes de emitir nada. Robar el grant (o el bearer de sesión) no basta.
     """
     if not grant or not isinstance(grant, str):
         raise IdentityGrantError("Falta el grant de verificación civil.")
 
+    query = {
+        "digest": digest(grant),
+        "consumed": False,
+        "expires_at": {"$gt": datetime.now(timezone.utc)},
+    }
+    stored = await identity_grants_collection().find_one({"digest": digest(grant)})
+    if stored is not None and stored.get("browser_binding"):
+        if not browser_binding:
+            raise IdentityGrantError(
+                "Falta la cookie de sesión de ClaveÚnica: este grant solo se "
+                "puede canjear desde el navegador que se identificó."
+            )
+        query["browser_binding"] = browser_binding
+
     record = await identity_grants_collection().find_one_and_update(
-        {
-            "digest": digest(grant),
-            "consumed": False,
-            "expires_at": {"$gt": datetime.now(timezone.utc)},
-        },
+        query,
         {"$set": {"consumed": True, "consumed_at": datetime.now(timezone.utc)}},
     )
     if not record:

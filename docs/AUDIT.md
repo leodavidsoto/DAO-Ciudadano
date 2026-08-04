@@ -1076,39 +1076,33 @@ cierra una rotación de pepper.
 
 ## Novena pasada (03-08-2026) — observabilidad y regresión en iOS
 
-### P-66 (alta, corregida): `identityVerified` sin comprobar la cadena, en iOS
+### P-66 (alta, corregida y rectificada): cadena documental iOS
 
-`mobile/ios/DAOCiudadanaApp/PassportReader.swift` — la implementación PACE de
-iOS (añadida sobre `NFCPassportReader` mientras se trabajaba en otra tarea)
-calculaba:
+`mobile/ios/DAOCiudadanaApp/PassportReader.swift` — la primera descripción de
+este hallazgo invirtió dos nombres contraintuitivos de `NFCPassportReader`.
+Leyendo las implementaciones, no sus etiquetas:
 
-```swift
-passport.verifyPassport(masterListURL: nil)
-let passed = passport.passportDataNotTampered && passport.passportCorrectlySigned
-```
+- `passportDataNotTampered` compara hashes DG↔EF.SOD;
+- `documentSigningCertificateVerified` valida la firma CMS/RFC 5652 del SOD
+  con el Document Signer;
+- `passportCorrectlySigned` construye la cadena Document Signer→CSCA contra el
+  `CAFile` recibido.
 
-Es **P-63 otra vez**, en otra plataforma. Los dos booleanos que componen
-`passed` son comprobaciones de coherencia interna del documento: los hashes
-cuadran con su propio SOD y la firma verifica con su propio Document Signer.
-Un documento **falsificado** que traiga su propio DS y su propia CSCA cumple
-ambas. La única comprobación que lo detecta —`documentSigningCertificateVerified`—
-se calculaba dos líneas más abajo y no entraba en el veredicto.
+Por tanto, con `masterListURL: nil`, `passportCorrectlySigned` queda falso: esa
+versión concreta no habría aprobado la cadena por sí sola. La conclusión
+histórica de que ese flag sólo era "coherencia interna" era incorrecta y se
+rectifica aquí. La brecha real era distinta y más básica: los archivos
+`PassportReader.swift`/`.m` no estaban en Sources del target Xcode, por lo que
+el bridge auditado no existía en el binario; además, una revisión intermedia
+abría una sesión CoreNFC y luego pedía a la librería abrir una segunda.
 
-Verificado leyendo la librería (`NFCPassportModel.swift:286`): con
-`masterListURL: nil`, `verifyPassport` **ni siquiera intenta** validar la
-cadena, así que ese flag se queda en `false` por defecto. Es decir, en el
-estado en que se dejó, iOS habría devuelto `identityVerified: true` para
-cualquier documento internamente coherente, incluido uno fabricado.
+Corregido: ambos archivos pertenecen al target, una sola instancia
+`NFCPassportReader.PassportReader(masterListURL:)` posee la sesión, y el
+veredicto exige PACE, DG1/DG2/SOD, perfil/emisor chileno, hashes, firma SOD y
+cadena CSCA. La ausencia del PEM aborta antes de abrir NFC.
 
-Corregido: `passed` exige las tres, igual que `PassportReaderModule.kt`, y la
-master list se busca empaquetada (`cscaMasterList.pem`), que es el equivalente
-iOS de `assets/csca/`. Mientras no exista, iOS devuelve `identityVerified:
-false` con el motivo explícito, igual que Android.
-
-El escenario está cubierto en Android por el test `un documento que trae su
-propia raiz no se valida a si mismo`. iOS **no tiene test equivalente**: no hay
-forma de ejecutar esa librería sin dispositivo, y eso sigue siendo una brecha
-de verificación declarada.
+La corrección todavía no equivale a acreditar una cédula: falta el trust store
+autorizado y un test físico iOS. Ambos permanecen bloqueantes explícitos.
 
 ### P-67 (media, corregida): `/metrics` público
 
@@ -1374,7 +1368,7 @@ elecciones quedaron detallados en `REQUEST_TO_CLAUDE.md`, sin modificar
 
 ---
 
-## Decimotercera pasada (04-08-2026) — ClaveÚnica OIDC real (4.1)
+## Decimocuarta pasada (04-08-2026) — ClaveÚnica OIDC real (4.1)
 
 `backend/app/services/clave_unica.py` y `backend/app/routers/clave_unica.py`.
 
@@ -1384,9 +1378,8 @@ elecciones quedaron detallados en `REQUEST_TO_CLAUDE.md`, sin modificar
 devolvía `demo:clave-unica:<uuid>` con un `assurance_level` inventado. No
 autenticaba a nadie. Mantenerlo junto al flujo real dejaría dos puertas donde
 una finge identidad civil (AGENTS.md, regla 2). Ahora responde **410** con la
-ruta correcta, en vez de un 404 mudo, porque hay clientes desplegados
-llamándolo — el frontend usa `authAPI.claveUnica` en
-`OnboardingContext.jsx:301`.
+ruta correcta, en vez de un 404 mudo, porque podía haber clientes desplegados
+llamándolo. El frontend actual ya no expone ni consume ese método.
 
 ### Lo que NO se tocó, y por qué
 
@@ -1439,3 +1432,230 @@ interoperabilidad real. El trámite administrativo sigue siendo el camino
 crítico de 4.1.
 
 446 tests (420 antes).
+
+---
+
+## Decimoquinta pasada (04-08-2026) — fronteras reales de identidad web/iOS
+
+### P-78 (crítica, abierta en backend; mitigada en web): PKCE sin binding de navegador
+
+`backend/app/routers/clave_unica.py:61-107` — `/authorize` no fija un secreto
+de navegador y `/callback` acepta públicamente `code + state`. El backend
+conserva el `code_verifier`, por lo que otro cliente que obtenga esos dos
+valores puede usar el endpoint como oráculo PKCE y recibir el grant civil. El
+`state` one-shot evita replay, pero no demuestra qué navegador lo canjeó.
+
+El cliente no pretende compensar una frontera backend con JavaScript:
+`frontend/src/lib/claveUnica.js` exige un status versionado con
+`browser_bound`, `credential_exchange_browser_bound`, `callback_idempotent` y
+`grant_single_use` verdaderos antes de redirigir y antes del canje. El segundo
+binding es necesario porque proteger sólo `/callback` deja el grant bearer
+transferible al pedir `/identity-credential` desde otra sesión/wallet. Como el
+endpoint status aún no existe, el flujo permanece bloqueado sin fallback demo.
+El contrato y las pruebas negativas requeridas quedaron en
+`REQUEST_TO_CLAUDE.md`.
+
+### P-79 (crítica, código corregido; build/dispositivo pendientes): bridge NFC ausente del binario
+
+`mobile/ios/DAOCiudadanaApp.xcodeproj/project.pbxproj:109-122` — el proyecto
+compilaba sólo `AppDelegate.swift`: los dos archivos del módulo React Native no
+pertenecían a Sources. La revisión anterior de P-66 auditó código muerto.
+Además, ese bridge abría CoreNFC y luego llamaba a una librería que abre su
+propia sesión, una combinación que no puede completar una lectura.
+
+Ahora ambos archivos están incluidos en Sources y una sola
+`NFCPassportReader.PassportReader` posee la sesión. El AND de
+`mobile/ios/DAOCiudadanaApp/PassportReader.swift` exige explícitamente
+`documentSigningCertificateVerified == true`, cadena DS→CSCA, hashes,
+PACE-CAN sin fallback BAC, DG1/DG2/SOD, emisor `CHL`, perfil de cédula,
+vigencia, una CSCA chilena usada realmente por la cadena y al menos una ancla.
+El fork pudo emitir un módulo Swift arm64/iOS 15 y el bridge pasó `typecheck`
+contra ese módulo, OpenSSL, React Core y Yoga. Falta enlazar la aplicación con
+un build Xcode integral y ejecutarla sobre hardware; por esa razón no se marca
+4.2 completa.
+
+### P-80 (alta, abierta): el proyecto no dispone de una Master List chilena con procedencia aprobada
+
+Los dos PEM encontrados bajo los ejemplos de `NFCPassportReader` no son
+aceptables: uno es un certificado autofirmado de prueba y el otro es una lista
+grande sin manifiesto que permita reconstruir origen ICAO, fecha, firma,
+licencia y fingerprints validados por segundo canal. Promover cualquiera a
+trust store cambiaría un `nil` honesto por confianza no demostrada.
+
+`mobile/scripts/install-csca-master-list.sh` y
+`.github/workflows/mobile-release.yml` implementan el aprovisionamiento desde
+environment protegido: el release falla si falta el PEM/SHA-256, valida su
+estructura, rechaza cualquier ancla cuyo país no sea Chile, lo instala en el
+bundle y vuelve a comparar la huella extraída del IPA. El bridge además exige
+que la CSCA elegida por OpenSSL sea chilena y del Registro Civil. **No se
+incorporó ningún certificado al repositorio.**
+Sigue faltando que el dueño entregue/autorice el artefacto oficial y su huella
+obtenida por un canal independiente.
+
+El instalador se ejercitó además con certificados OpenSSL sintéticos en
+`/private/tmp`: instaló byte a byte una CA chilena con SHA-256 correcto y
+rechazó una huella incorrecta, una CA sólo extranjera, un bundle mixto
+chileno/extranjero y un certificado chileno con `CA:FALSE`. Sin fuente, el
+modo distribución falló y el modo no distribución avisó sin inventar una
+ancla. Son siete regresiones del mecanismo de aprovisionamiento; no acreditan
+la procedencia de una CSCA real.
+
+### P-81 (crítica, cliente corregido; contrato backend abierto): booleano NFC autorizaba alta
+
+`mobile/src/screens/WalletScreen.tsx:70-99` — después de una lectura local, la
+app usaba un serial/UID como `docHash` de placeholder y pedía minteo con
+assurance alto. Un booleano de React Native, aun derivado de criptografía local,
+no es una atestación que el servidor pueda confiar: un cliente modificado lo
+puede fabricar.
+
+Se retiró el autominteo. La wallet puede abrir una sesión y consultar una
+membresía existente, pero una alta nueva muestra el bloqueo explícito y no
+llama al backend. Falta ratificar una atestación verificable o decidir que NFC
+no emite; `REQUEST_TO_CLAUDE.md` exige que cualquier solución termine en el
+mismo grant corto, one-shot y ligado a SIWE, nunca en un UID/hash declarado por
+el cliente.
+
+### P-82 (alta, parcialmente corregida): fork PACE-CAN no validado y material secreto en logs
+
+`mobile/ios/NFCPassportReader/Sources/NFCPassportReader/` — el fork imprimía a
+OSLog CAN/MRZ, claves derivadas y de sesión, nonces, shared secrets, tokens y
+APDU con contenido documental. Esos logs se retiraron. También se corrigió el
+alcance de `paceKeyReference`, que impedía compilar el fork, se prohibió el
+fallback BAC para CAN y se añadió cancelación de la sesión CoreNFC propietaria.
+
+El soporte CAN sigue sin validación upstream ni prueba física chilena; la
+propia base 2.3.3 lo describe como no soportado. El bridge exige
+`PACEStatus.success` y rechaza el fallback BAC, de modo que esta incertidumbre
+produce indisponibilidad explícita, no identidad falsa. Procedencia y cambios
+locales están registrados en
+`mobile/ios/NFCPassportReader/DAO-PROVENANCE.md`; cerrar el hallazgo requiere
+vectores o cédula física, CAN correcto/erróneo y evidencia reproducible.
+
+En web pasaron las 90 pruebas y un E2E de navegador contra el fixture del
+contrato OIDC seguro → emisión ZK subsidiada, manteniendo MACI cerrado. No es
+una prueba contra el backend/IdP real. En mobile pasaron 43 pruebas y
+`tsc --noEmit`. `testDebugUnitTest` pasó al invocar explícitamente el binario
+cacheado Gradle 9.0.0 (`BUILD SUCCESSFUL`, 221 tareas), pero eso no demuestra
+el gate normal: el wrapper del árbol de trabajo apunta a Gradle 9.6.1 y falla
+en `:gradle-plugin:settings-plugin:compileKotlin` por metadata Kotlin 2.3.0
+incompatible con el compilador 2.1.0. El fork iOS sí emitió un módulo Swift
+arm64 y el bridge pasó comprobación semántica contra OpenSSL/React, pero el
+build integral terminó antes de compilar la app (exit 70): Xcode informó que la
+plataforma iOS 18.5 no estaba instalada. Esa comprobación no demuestra que el
+módulo haya quedado enlazado en un binario de aplicación.
+
+### P-83 (alta, abierta): no se consulta revocación documental
+
+`mobile/ios/NFCPassportReader/Sources/NFCPassportReader/NFCPassportModel.swift`
+declara `hasCertBeenRevoked`, pero la propia librería lo marca como no usado;
+Android configura `PKIXParameters.isRevocationEnabled = false` en
+`mobile/android/app/src/main/java/com/daociudadanaapp/PassiveAuthenticator.kt`.
+La Master List autentica raíces, no sustituye CRL/defect lists. Un DS revocado
+podría seguir aceptándose. Falta una política de actualización y revocación
+autorizada, con comportamiento offline definido; la UI ya no presenta este
+resultado como identidad civil completa y la emisión móvil permanece bloqueada.
+
+### P-84 (alta, abierta): autenticación pasiva no prueba chip genuino ni titular
+
+`mobile/ios/DAOCiudadanaApp/PassportReader.swift` lee DG1/DG2/SOD, pero no
+ejecuta Active Authentication o Chip Authentication ni compara el rostro DG2
+con liveness. Una copia de datos legítimamente firmados no queda descartada por
+PACE + autenticación pasiva. La pantalla ahora dice “DOCUMENTO VERIFICADO” y
+expone esta limitación; cerrarla requiere ratificar el perfil real de la cédula
+chilena, prueba física y un proveedor/protocolo biométrico autorizado.
+
+### P-85 (alta, abierta): el wrapper Android vigente no es compatible ni conserva la huella
+
+`mobile/android/gradle/wrapper/gradle-wrapper.properties:1-6` — el árbol de
+trabajo apunta a Gradle 9.6.1 y ya no contiene `distributionSha256Sum`,
+`networkTimeout` ni `validateDistributionUrl`. Con ese wrapper,
+`testDebugUnitTest` falla antes de las pruebas porque el plugin de React Native
+espera metadata Kotlin 2.1 y Gradle aporta 2.3. La misma tarea sí terminó con
+éxito usando directamente el binario cacheado Gradle 9.0.0, pero esa ejecución
+no valida el camino que usarán CI y otros clones. Hasta fijar una versión
+compatible con su SHA-256 y ejecutar el wrapper normal, el gate Android nativo
+permanece rojo.
+
+---
+
+## Decimocuarta pasada (04-08-2026) — binding de navegador en ClaveÚnica (4.1)
+
+### P-72 (alta, corregida): `/callback` era un oráculo PKCE
+
+Reportado por Codex en `REQUEST_TO_CLAUDE.md` (TAREA 6) y **confirmado**: el
+callback aceptaba `code + state` de cualquier cliente HTTP.
+
+Que el flujo use PKCE no lo impide. PKCE protege el canje contra quien
+intercepte el código *camino del proveedor*, pero aquí el **backend** guarda el
+`code_verifier` y actúa como cliente confidencial: quien consiguiera `code` y
+`state` —de la barra de direcciones, del historial, de un `Referer`, de otra
+app en el mismo dispositivo— podía llamar a `/callback` desde su propia
+máquina y recibir el `identity_grant`. Comparar el `state` en `sessionStorage`
+no cubre esa frontera, porque esa comprobación vive en el navegador honesto.
+
+Corregido con **binding de navegador**: `/authorize` genera un secreto
+aleatorio, lo fija en una cookie `HttpOnly` (`Path=/api`, `SameSite=None` +
+`Secure` en producción, `Lax` en local porque los navegadores descartan
+`None` sin `Secure` sobre http) y persiste **solo su hash**. `/callback` exige
+esa cookie **antes** de hablar con el proveedor, así que un tercero ni siquiera
+llega a gastar el código de autorización. Verificado con dos clientes HTTP
+distintos sobre la misma app.
+
+Dos detalles que no son accesorios:
+
+* El intento del atacante **no quema el `state`** del ciudadano legítimo, que
+  puede completar su flujo después. Comprobar el binding antes de consumir
+  evita convertir el ataque en una denegación de servicio.
+* El mensaje es el mismo falte la cookie o no coincida: no hay nada que ganar
+  diciéndole a quien roba un código cuál de las dos cosas le falta.
+
+### Idempotencia del callback
+
+Requisito 3 del contrato: si la respuesta HTTP se pierde, repetir el callback
+desde el mismo navegador devuelve **el mismo grant vigente**. Emitir uno nuevo
+duplicaría identidades; responder 401 dejaría a la persona sin credencial y sin
+forma de obtener otra. El grant se recuerda **cifrado** en el intento de login
+(con la llave de PII), por la misma razón por la que los grants solo se
+persisten como digest: quien lea la base no debe poder canjear el de nadie. Si
+el grant ya se canjeó o caducó, se responde 401 en vez de resucitarlo.
+
+### El canje de la credencial también está ligado
+
+`/identity-credential` exige ahora la misma cookie **además** de SIWE y CSRF, y
+el binding entra en el filtro atómico de `identity_grant.consume`: copiar el
+grant —o el bearer de sesión— a otro navegador falla antes de emitir nada. Los
+grants antiguos sin binding se siguen canjeando: exigirlo retroactivamente
+dejaría sin credencial a quien ya lo tenía.
+
+### P-73 (media, corregida): un timeout del proveedor salía como 500
+
+Un fallo de red hablando con ClaveÚnica escapaba al manejador global. Ahora hay
+`ClaveUnicaProviderError` → **502**: un timeout del Estado no es "tu inicio de
+sesión no es válido", y mandar al ciudadano a repetir un flujo que no falló por
+su culpa es una respuesta falsa.
+
+### P-74 (media, corregida): comparación de fechas con y sin zona
+
+`_load_login_session` comparaba el `expires_at` leído de Mongo —que llega **sin
+tzinfo**— contra `datetime.now(timezone.utc)`, lo que lanza `TypeError`. Lo
+detectaron los tests, pero habría ocurrido igual en producción en el primer
+callback. Se normaliza a UTC antes de comparar.
+
+### Telemetría
+
+`GET /api/auth/clave-unica/status` devuelve el contrato exacto que la web exige
+antes de habilitar el botón. Cada bandera describe una garantía que este
+backend cumple de verdad: si alguna dejara de cumplirse habría que bajarla, no
+maquillarla. Es público y no expone `client_id` ni secretos.
+
+### Readiness
+
+Producción bloquea si `IDENTITY_PROVIDER` no es exactamente `clave-unica` —un
+nombre de sandbox olvidado emitiría grants sin verificación— o si ClaveÚnica
+está declarada con configuración incompleta. Los endpoints del Estado deben ser
+HTTPS en cualquier entorno: en claro viajarían el código de autorización y el
+`client_secret`.
+
+Sigue sin probarse contra ClaveÚnica: no hay credenciales de la DGD.
+
+463 tests (446 antes).

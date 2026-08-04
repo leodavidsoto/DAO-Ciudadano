@@ -204,6 +204,10 @@ class Settings(BaseSettings):
     CLAVE_UNICA_JWKS_URI: str = os.environ.get('CLAVE_UNICA_JWKS_URI', '')
     CLAVE_UNICA_SCOPES: str = os.environ.get('CLAVE_UNICA_SCOPES', 'openid run name')
     # Ventana de vida de un intento de login (state/nonce/verifier PKCE).
+    # Cookie HttpOnly que ata el canje al navegador que inició el flujo.
+    CLAVE_UNICA_BINDING_COOKIE_NAME: str = os.environ.get(
+        'CLAVE_UNICA_BINDING_COOKIE_NAME', 'dao_cu_binding'
+    )
     CLAVE_UNICA_LOGIN_TTL_SECONDS: int = int(
         os.environ.get('CLAVE_UNICA_LOGIN_TTL_SECONDS', '600')
     )

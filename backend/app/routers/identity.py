@@ -18,12 +18,14 @@ Lo que sí exige, y falla cerrado si falta:
 """
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel, field_validator
+
+from typing import Optional
 
 from ..core.config import settings
 from ..core.poseidon import FIELD
-from ..services import identity_grant, identity_issuer
+from ..services import clave_unica, identity_grant, identity_issuer
 from .deps import current_address, ensure_acts_as_self
 
 logger = logging.getLogger(__name__)
@@ -62,10 +64,14 @@ class IdentityCredentialRequest(BaseModel):
         return v
 
 
+BINDING_COOKIE_ALIAS = settings.CLAVE_UNICA_BINDING_COOKIE_NAME
+
+
 @router.post("/identity-credential")
 async def issue_identity_credential(
     request: IdentityCredentialRequest,
     authenticated: str = Depends(current_address),
+    binding: Optional[str] = Cookie(default=None, alias=BINDING_COOKIE_ALIAS),
 ):
     """Emite la credencial firmada con su ruta Merkle.
 
@@ -106,12 +112,20 @@ async def issue_identity_credential(
             detail="El contrato declarado no corresponde al configurado en el servidor.",
         )
 
+    # Tercera barrera, ADEMÁS de SIWE y CSRF: el grant se canjea solo desde el
+    # navegador que se identificó ante ClaveÚnica. Copiar el bearer de sesión
+    # a otro navegador, o el grant a otro cliente, falla aquí — antes de emitir
+    # nada. Los grants antiguos sin binding siguen canjeándose igual: exigirlo
+    # retroactivamente dejaría a esas personas sin credencial.
     try:
         credential = await identity_issuer.issue_credential(
             wallet_address=request.wallet_address,
             identity_commitment=int(request.identity_commitment),
             membership_scope=int(request.membership_scope),
             grant=request.identity_grant,
+            browser_binding=(
+                clave_unica.hash_browser_binding(binding) if binding else None
+            ),
         )
     except identity_grant.IdentityGrantError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

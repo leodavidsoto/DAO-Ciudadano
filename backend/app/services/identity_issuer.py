@@ -25,6 +25,7 @@ las mayúsculas de la dirección— invalida todas las credenciales emitidas.
 """
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 from ..core.config import settings
 from . import identity_grant, identity_tree
@@ -111,6 +112,7 @@ async def issue_credential(
     identity_commitment: int,
     membership_scope: int,
     grant: str,
+    browser_binding: Optional[str] = None,
 ) -> IssuedCredential:
     """Emite la credencial completa. Ver el orden de pasos en el docstring."""
     if not settings.IDENTITY_ISSUER_PRIVATE_KEY.strip():
@@ -124,7 +126,7 @@ async def issue_credential(
     # 2. Grant civil de un solo uso. Si ya se canjeó, puede ser un reintento
     #    legítimo: se recupera el sujeto y la ruta ya emitida.
     try:
-        subject_key = await identity_grant.consume(grant)
+        subject_key = await identity_grant.consume(grant, browser_binding=browser_binding)
     except identity_grant.IdentityGrantError:
         subject_key = await identity_grant.peek_subject(grant)
         if not subject_key:

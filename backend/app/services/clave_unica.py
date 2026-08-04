@@ -46,6 +46,9 @@ from ..core.identity import lookup_key
 logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "clave-unica"
+# Versión del contrato que el frontend exige literalmente antes de habilitar
+# el botón. Si cambia la semántica de alguna garantía, cambia esta cadena.
+PROTOCOL_VERSION = "clave-unica-oidc-pkce-v1"
 # Nivel de aseguramiento que declara una autenticación con ClaveÚnica. No es
 # una constante decorativa: distingue esta credencial de las de los demos.
 ASSURANCE_LEVEL = "CLAVE_UNICA"
@@ -57,6 +60,15 @@ CLOCK_SKEW_SECONDS = 60
 
 class ClaveUnicaError(RuntimeError):
     """Fallo atribuible al flujo o a la respuesta del proveedor."""
+
+
+class ClaveUnicaProviderError(ClaveUnicaError):
+    """El proveedor no respondió, tardó demasiado o devolvió algo ilegible.
+
+    Se distingue de `ClaveUnicaError` a propósito: un timeout del Estado no es
+    "tu inicio de sesión no es válido". Decirle eso al ciudadano lo mandaría a
+    repetir un flujo que no falló por su culpa; el router responde 502.
+    """
 
 
 class ClaveUnicaUnavailable(RuntimeError):
@@ -94,6 +106,19 @@ def configuration_errors() -> dict[str, str]:
     if redirect and settings.is_production and not redirect.startswith("https://"):
         errors["CLAVE_UNICA_REDIRECT_URI"] = "debe ser HTTPS en producción"
 
+    # Los endpoints del Estado son HTTPS. Aceptar http aquí expondría el
+    # código de autorización y el client_secret en claro, en cualquier entorno.
+    for key in (
+        "CLAVE_UNICA_ISSUER",
+        "CLAVE_UNICA_AUTHORIZATION_ENDPOINT",
+        "CLAVE_UNICA_TOKEN_ENDPOINT",
+        "CLAVE_UNICA_USERINFO_ENDPOINT",
+        "CLAVE_UNICA_JWKS_URI",
+    ):
+        value = str(getattr(settings, key, "")).strip()
+        if value and not value.startswith("https://"):
+            errors[key] = "debe ser HTTPS"
+
     return errors
 
 
@@ -108,6 +133,54 @@ def _require_configuration() -> None:
             "ClaveÚnica no está configurada: "
             + ", ".join(f"{k} ({v})" for k, v in errors.items())
         )
+
+
+def new_browser_binding() -> tuple[str, str]:
+    """Devuelve (valor para la cookie, hash que se persiste).
+
+    El problema que resuelve
+    ────────────────────────
+    El backend guarda el `code_verifier`, así que ES el cliente confidencial
+    frente a ClaveÚnica. PKCE protege el canje contra un atacante que
+    intercepte el código *camino del proveedor*, pero no protege ESTA
+    frontera: quien consiga `code + state` puede llamar a `/callback` desde
+    cualquier cliente HTTP y recibir el grant. El backend haría de oráculo
+    PKCE. Comparar el `state` en sessionStorage no lo impide, porque esa
+    comprobación vive en el navegador honesto, no aquí.
+
+    El binding ata el canje al MISMO agente de usuario que inició el flujo:
+    sin la cookie no hay grant, y la cookie es `HttpOnly`, así que ni un XSS
+    puede leerla para reenviarla.
+
+    Se persiste solo el hash: quien lea la base de datos no puede fabricar la
+    cookie de nadie.
+    """
+    value = secrets.token_urlsafe(32)
+    return value, hash_browser_binding(value)
+
+
+def _as_utc(value) -> Optional[datetime]:
+    """Normaliza una fecha leída de Mongo a UTC con zona.
+
+    El driver devuelve datetimes SIN tzinfo (Mongo guarda milisegundos UTC),
+    así que compararlas con `datetime.now(timezone.utc)` revienta con
+    "can't compare offset-naive and offset-aware". No es un detalle de los
+    tests: pasaría igual en producción.
+    """
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def hash_browser_binding(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def binding_matches(presented: Optional[str], stored_hash: Optional[str]) -> bool:
+    """Comparación en tiempo constante. Sin cookie o sin hash, no coincide."""
+    if not presented or not stored_hash:
+        return False
+    return secrets.compare_digest(hash_browser_binding(presented), stored_hash)
 
 
 def _b64url(raw: bytes) -> str:
@@ -126,8 +199,9 @@ def code_challenge_for(verifier: str) -> str:
 async def start_login() -> dict:
     """Crea el intento de login y devuelve la URL de autorización.
 
-    El verificador PKCE y el nonce se quedan en el servidor: el navegador solo
-    ve `state`, que por sí solo no sirve para completar el intercambio.
+    El verificador PKCE, el nonce y el hash del binding se quedan en el
+    servidor: el navegador solo recibe `state` (en la URL) y el binding (en
+    una cookie HttpOnly que no puede leer).
     """
     _require_configuration()
 
@@ -135,12 +209,14 @@ async def start_login() -> dict:
     nonce = secrets.token_urlsafe(32)
     # 43-128 caracteres según RFC 7636; 32 bytes urlsafe dan 43.
     verifier = secrets.token_urlsafe(32)
+    binding_value, binding_hash = new_browser_binding()
     now = datetime.now(timezone.utc)
 
     await login_sessions_collection().insert_one({
         "state": state,
         "nonce": nonce,
         "code_verifier": verifier,
+        "browser_binding": binding_hash,
         "created_at": now,
         "expires_at": now + timedelta(seconds=settings.CLAVE_UNICA_LOGIN_TTL_SECONDS),
         "consumed": False,
@@ -163,47 +239,77 @@ async def start_login() -> dict:
         "authorization_url": url,
         "state": state,
         "expires_in": settings.CLAVE_UNICA_LOGIN_TTL_SECONDS,
+        # Lo fija el router en una cookie HttpOnly; nunca va en el cuerpo que
+        # el navegador pueda leer desde JavaScript.
+        "browser_binding": binding_value,
     }
 
 
-async def _consume_login_session(state: str) -> dict:
-    """Canjea el `state` atómicamente. Un solo uso, como el código."""
+async def _load_login_session(state: str, binding: Optional[str]) -> dict:
+    """Recupera el intento y EXIGE el binding, antes de tocar la red.
+
+    El orden importa: comprobar la cookie antes de llamar al proveedor evita
+    que un tercero con `code + state` use este endpoint como oráculo PKCE, y
+    además no gasta el código de autorización de nadie.
+    """
     if not state:
         raise ClaveUnicaError("Falta el parámetro state.")
 
-    record = await login_sessions_collection().find_one_and_update(
+    record = await login_sessions_collection().find_one({"state": state})
+    expires_at = _as_utc(record.get("expires_at")) if record else None
+    if not record or not expires_at or expires_at <= datetime.now(timezone.utc):
+        raise ClaveUnicaError(
+            "El intento de inicio de sesión no existe o expiró. Vuelve a empezar."
+        )
+
+    if not binding_matches(binding, record.get("browser_binding")):
+        # Mismo mensaje tanto si falta la cookie como si no coincide: no hay
+        # nada que ganar diciéndole a quien roba un código cuál de las dos
+        # cosas le falta.
+        raise ClaveUnicaError(
+            "Este intento de inicio de sesión pertenece a otro navegador. "
+            "Vuelve a empezar desde el mismo dispositivo."
+        )
+    return record
+
+
+async def _claim_login_session(state: str, binding_hash: str) -> Optional[dict]:
+    """Marca el intento como consumido. `None` si otro lo ganó primero."""
+    return await login_sessions_collection().find_one_and_update(
         {
             "state": state,
+            "browser_binding": binding_hash,
             "consumed": False,
             "expires_at": {"$gt": datetime.now(timezone.utc)},
         },
         {"$set": {"consumed": True, "consumed_at": datetime.now(timezone.utc)}},
     )
-    if not record:
-        raise ClaveUnicaError(
-            "El intento de inicio de sesión no existe, expiró o ya se usó. "
-            "Vuelve a empezar."
-        )
-    return record
 
 
 def _exchange_code(code: str, verifier: str) -> dict:
     """Canjea el código por tokens. Bloqueante: llamar en un hilo."""
     import requests
 
-    response = requests.post(
-        settings.CLAVE_UNICA_TOKEN_ENDPOINT.strip(),
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": settings.CLAVE_UNICA_REDIRECT_URI.strip(),
-            "client_id": settings.CLAVE_UNICA_CLIENT_ID.strip(),
-            "client_secret": settings.CLAVE_UNICA_CLIENT_SECRET.strip(),
-            "code_verifier": verifier,
-        },
-        timeout=10,
-        headers={"Accept": "application/json"},
-    )
+    try:
+        response = requests.post(
+            settings.CLAVE_UNICA_TOKEN_ENDPOINT.strip(),
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": settings.CLAVE_UNICA_REDIRECT_URI.strip(),
+                "client_id": settings.CLAVE_UNICA_CLIENT_ID.strip(),
+                "client_secret": settings.CLAVE_UNICA_CLIENT_SECRET.strip(),
+                "code_verifier": verifier,
+            },
+            timeout=10,
+            headers={"Accept": "application/json"},
+        )
+    except Exception as exc:
+        logger.error("No se pudo contactar a ClaveÚnica (%s)", type(exc).__name__)
+        raise ClaveUnicaProviderError(
+            "El proveedor de identidad no respondió. Intenta de nuevo en unos minutos."
+        ) from exc
+
     if response.status_code != 200:
         # Nunca se refleja el cuerpo del proveedor: puede traer el código, el
         # secreto o datos del titular, y acabaría en logs y en pantalla.
@@ -212,9 +318,14 @@ def _exchange_code(code: str, verifier: str) -> dict:
         )
         raise ClaveUnicaError("El proveedor rechazó el intercambio del código.")
 
-    payload = response.json()
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ClaveUnicaProviderError(
+            "El proveedor devolvió una respuesta que no es JSON."
+        ) from exc
     if not isinstance(payload, dict) or not payload.get("id_token"):
-        raise ClaveUnicaError("El proveedor no devolvió un id_token.")
+        raise ClaveUnicaProviderError("El proveedor no devolvió un id_token.")
     return payload
 
 
@@ -362,8 +473,83 @@ def subject_key_for(run: str) -> str:
     return lookup_key(run, domain="clave-unica-run")
 
 
-async def complete_login(code: str, state: str) -> dict:
-    """Cierra el flujo: canje, validación, RUN y grant de un solo uso.
+class LoginAlreadyCompleted(RuntimeError):
+    """El intento ya terminó: hay un grant emitido para este mismo flujo."""
+
+    def __init__(self, grant: str, name: str):
+        super().__init__("El intento de inicio de sesión ya se completó.")
+        self.grant = grant
+        self.name = name
+
+
+class LoginInProgress(RuntimeError):
+    """Otro callback del mismo flujo está en curso ahora mismo."""
+
+
+async def remember_issued_grant(state: str, grant: str, name: str) -> None:
+    """Guarda el grant CIFRADO para poder repetir la respuesta.
+
+    Requisito de idempotencia: si la respuesta HTTP se pierde, el navegador
+    reintenta y debe recibir EL MISMO grant, no otro —eso duplicaría
+    identidades— ni un 401 —eso dejaría a la persona sin credencial y sin
+    forma de obtenerla—.
+
+    Se cifra en reposo por la misma razón que los grants solo se persisten
+    como digest: quien lea la base no debe poder canjear el de nadie. Aquí
+    hace falta el valor, no un digest, así que se cifra con la llave de PII.
+    """
+    from ..core.crypto import encrypt
+
+    await login_sessions_collection().update_one(
+        {"state": state},
+        {"$set": {
+            "issued_grant": encrypt(grant),
+            "issued_name": name,
+            "completed_at": datetime.now(timezone.utc),
+        }},
+    )
+
+
+async def _replay_issued_grant(session: dict) -> None:
+    """Repite el grant del intento si sigue vigente. Lanza si corresponde."""
+    from ..core.crypto import decrypt
+    from . import identity_grant
+
+    stored = session.get("issued_grant")
+    if not stored:
+        # Consumido pero sin grant guardado: hay otro callback a mitad de
+        # camino. Decirlo es más honesto que devolver "no existe".
+        raise LoginInProgress(
+            "Este inicio de sesión ya se está completando. Espera un momento."
+        )
+
+    try:
+        grant = decrypt(stored)
+    except ValueError as exc:
+        raise ClaveUnicaError(
+            "No se pudo recuperar el grant de este intento; vuelve a empezar."
+        ) from exc
+
+    record = await identity_grant.identity_grants_collection().find_one(
+        {"digest": identity_grant.digest(grant)}
+    )
+    grant_expires_at = _as_utc(record.get("expires_at")) if record else None
+    if not record or record.get("consumed") or (
+        grant_expires_at and grant_expires_at <= datetime.now(timezone.utc)
+    ):
+        # El grant ya se canjeó o caducó. Devolverlo otra vez sería entregar
+        # algo que no sirve; emitir uno nuevo sin volver a autenticar sería
+        # peor.
+        raise ClaveUnicaError(
+            "La credencial de este inicio de sesión ya se emitió o caducó. "
+            "Vuelve a identificarte con ClaveÚnica."
+        )
+
+    raise LoginAlreadyCompleted(grant, session.get("issued_name", ""))
+
+
+async def complete_login(code: str, state: str, binding: Optional[str]) -> dict:
+    """Cierra el flujo: binding, canje, validación, RUN y grant.
 
     Devuelve `{subject_key, assurance_level, name}`; el grant lo emite el
     router, que es quien conoce el servicio de grants.
@@ -374,12 +560,40 @@ async def complete_login(code: str, state: str) -> dict:
     if not code:
         raise ClaveUnicaError("Falta el código de autorización.")
 
-    session = await _consume_login_session(state)
+    # PRIMERO el binding: sin la cookie correcta no se habla con el proveedor
+    # ni se gasta el código de autorización.
+    session = await _load_login_session(state, binding)
 
-    tokens = await asyncio.to_thread(_exchange_code, code, session["code_verifier"])
-    claims = await asyncio.to_thread(
-        validate_id_token, tokens["id_token"], session["nonce"]
-    )
+    if session.get("consumed"):
+        await _replay_issued_grant(session)
+
+    claimed = await _claim_login_session(state, session["browser_binding"])
+    if claimed is None:
+        # Alguien lo consumió entre la lectura y la reclamación: se vuelve a
+        # mirar por si ya dejó un grant que repetir.
+        refreshed = await login_sessions_collection().find_one({"state": state})
+        await _replay_issued_grant(refreshed or {})
+    session = claimed
+
+    try:
+        tokens = await asyncio.to_thread(
+            _exchange_code, code, session["code_verifier"]
+        )
+    except ClaveUnicaError:
+        raise
+    except Exception as exc:
+        # Red, DNS, TLS, timeouts: nada de esto es culpa de quien inicia
+        # sesión, y ninguno debe salir como un 500 opaco.
+        logger.error("Fallo hablando con ClaveÚnica (%s)", type(exc).__name__)
+        raise ClaveUnicaProviderError(
+            "El proveedor de identidad no respondió. Intenta de nuevo en unos minutos."
+        ) from exc
+
+    id_token = tokens.get("id_token")
+    if not id_token:
+        raise ClaveUnicaProviderError("El proveedor no devolvió un id_token.")
+
+    claims = await asyncio.to_thread(validate_id_token, id_token, session["nonce"])
 
     try:
         run = extract_run(claims)
@@ -403,4 +617,33 @@ async def complete_login(code: str, state: str) -> dict:
         "subject_key": subject_key_for(run),
         "assurance_level": ASSURANCE_LEVEL,
         "name": claims.get("name") or "",
+        # El router ata el grant a este mismo navegador y recuerda el
+        # resultado para poder repetirlo si la respuesta se pierde.
+        "browser_binding": session["browser_binding"],
+        "state": state,
+    }
+
+
+def status() -> dict:
+    """Contrato que el frontend exige literalmente antes de redirigir.
+
+    Cada campo describe una garantía que este backend cumple de verdad; si
+    alguna dejara de cumplirse habría que bajar la bandera, no maquillarla.
+    """
+    return {
+        "available": is_configured(),
+        "protocol_version": PROTOCOL_VERSION,
+        "pkce_method": "S256",
+        # El canje exige la cookie HttpOnly fijada en /authorize.
+        "browser_bound": True,
+        # …y /identity-credential exige la misma cookie más el binding del
+        # grant, además de SIWE y CSRF.
+        "credential_exchange_browser_bound": True,
+        # Repetir un callback del mismo flujo devuelve el mismo grant vigente.
+        "callback_idempotent": True,
+        "grant_single_use": True,
+        # El Estado redirige al frontend, que hace POST de code+state: nunca
+        # viaja un grant por la URL.
+        "redirect_transport": "frontend-post",
+        "grant_ttl_seconds": settings.IDENTITY_GRANT_TTL_SECONDS,
     }

@@ -256,11 +256,29 @@ def _service_blockers() -> list[str]:
 
     # Proveedor civil: sin él la emisión de credenciales falla cerrada, así que
     # el flujo de alta completo no existe.
-    if not settings.IDENTITY_PROVIDER.strip():
+    provider = settings.IDENTITY_PROVIDER.strip()
+    if not provider:
         blockers.append(
             "IDENTITY_PROVIDER no está configurado: no se pueden emitir grants "
             "civiles y el alta de nuevos ciudadanos queda bloqueada"
         )
+    elif provider != "clave-unica":
+        # El único proveedor civil real implementado. Un valor distinto
+        # significa que algo emite grants sin haber verificado identidad, o
+        # que alguien dejó un nombre de sandbox en producción.
+        blockers.append(
+            f"IDENTITY_PROVIDER='{provider}' no corresponde a ningún proveedor "
+            "civil implementado; el único es 'clave-unica'"
+        )
+    else:
+        from ..services import clave_unica as _clave_unica
+
+        missing = _clave_unica.configuration_errors()
+        if missing:
+            blockers.append(
+                "ClaveÚnica está declarada como proveedor pero su configuración "
+                "está incompleta: " + ", ".join(sorted(missing))
+            )
 
     # Rate limiter: con varios workers y sin Redis el límite efectivo se
     # multiplica por el número de instancias (ROADMAP 3.8).
