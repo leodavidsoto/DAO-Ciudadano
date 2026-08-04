@@ -1,7 +1,11 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import VotingBallot from './VotingBallot';
-import { governanceAPI, maciAPI } from '../../lib/api';
+import {
+    governanceAPI,
+    maciAPI,
+    normalizeEncryptedBallotReceipt,
+} from '../../lib/api';
 import {
     createBallotIdempotencyKey,
     createMaciKeypair,
@@ -19,6 +23,7 @@ jest.mock('../../lib/api', () => ({
         getVotingConfig: jest.fn(),
         submitEncryptedBallot: jest.fn(),
     },
+    normalizeEncryptedBallotReceipt: jest.fn(),
 }));
 
 jest.mock('../../lib/maci', () => ({
@@ -33,6 +38,17 @@ jest.mock('../../lib/maci', () => ({
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
 const WALLET = '0x1111111111111111111111111111111111111111';
+const EIP1193_PROVIDER = { request: jest.fn() };
+const READY_STATUS = {
+    key_registry: true,
+    private_voting: true,
+    coordinator_configured: true,
+    tally_proof: true,
+    poll_bound_messages: true,
+    stateful_nonces: true,
+    unique_tally_leaves: true,
+    process_tally_linked: true,
+};
 const PROPOSAL = {
     id: 'proposal-1',
     title: 'Presupuesto comunal',
@@ -95,7 +111,12 @@ beforeEach(async () => {
     encryptMaciBallot.mockResolvedValue(ENCRYPTED);
     createBallotIdempotencyKey.mockReturnValue('12345678-1234-4234-9234-123456789abc');
     maciAPI.submitEncryptedBallot.mockResolvedValue({
-        data: { ok: true, message_hash: `0x${'cd'.repeat(32)}` },
+        data: { ok: true, index: 0, message_chain: 'cd'.repeat(32) },
+    });
+    normalizeEncryptedBallotReceipt.mockReturnValue({
+        messageId: `0x${'cd'.repeat(32)}`,
+        index: 0,
+        duplicate: false,
     });
 });
 
@@ -106,7 +127,8 @@ afterEach(async () => {
 
 test('lists real active proposals but fails closed while MACI is not ready', async () => {
     await act(async () => {
-        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111} />);
+        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111}
+                                  eip1193Provider={EIP1193_PROVIDER} />);
     });
     await flush();
 
@@ -123,15 +145,11 @@ test('lists real active proposals but fails closed while MACI is not ready', asy
 test('fails closed when the trusted on-chain deployment manifest is missing', async () => {
     delete process.env.REACT_APP_MACI_COORDINATOR_ADDRESS;
     maciAPI.getStatus.mockResolvedValue({
-        data: {
-            key_registry: true,
-            private_voting: true,
-            coordinator_configured: true,
-            tally_proof: true,
-        },
+        data: READY_STATUS,
     });
     await act(async () => {
-        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111} />);
+        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111}
+                                  eip1193Provider={EIP1193_PROVIDER} />);
     });
     await flush();
 
@@ -141,15 +159,11 @@ test('fails closed when the trusted on-chain deployment manifest is missing', as
 
 test('registers a public voter key and sends only the encrypted MACI envelope', async () => {
     maciAPI.getStatus.mockResolvedValue({
-        data: {
-            key_registry: true,
-            private_voting: true,
-            coordinator_configured: true,
-            tally_proof: true,
-        },
+        data: READY_STATUS,
     });
     await act(async () => {
-        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111} />);
+        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111}
+                                  eip1193Provider={EIP1193_PROVIDER} />);
     });
     await flush();
 
@@ -179,7 +193,10 @@ test('registers a public voter key and sends only the encrypted MACI envelope', 
         expect.anything(),
         { proposalId: PROPOSAL.id, chainId: 11155111 }
     );
-    expect(verifyMaciCoordinatorOnChain).toHaveBeenCalledWith({ config: CONFIG });
+    expect(verifyMaciCoordinatorOnChain).toHaveBeenCalledWith({
+        config: CONFIG,
+        ethereum: EIP1193_PROVIDER,
+    });
     expect(encryptMaciBallot).toHaveBeenCalledWith({
         voterKeypair: KEYPAIR,
         config: CONFIG,
@@ -191,25 +208,23 @@ test('registers a public voter key and sends only the encrypted MACI envelope', 
     });
     expect(JSON.stringify(maciAPI.submitEncryptedBallot.mock.calls[0][0]))
         .not.toContain('in-memory-keypair');
+    expect(normalizeEncryptedBallotReceipt).toHaveBeenCalledWith(expect.anything());
     expect(container.textContent).toMatch(/Mensaje cifrado recibido/i);
+    expect(container.textContent).toContain(`0x${'cd'.repeat(32)}`);
 });
 
 test('discards the private key and ambiguous retry after a wallet change', async () => {
     const nextWallet = '0x2222222222222222222222222222222222222222';
     maciAPI.getStatus.mockResolvedValue({
-        data: {
-            key_registry: true,
-            private_voting: true,
-            coordinator_configured: true,
-            tally_proof: true,
-        },
+        data: READY_STATUS,
     });
     maciAPI.submitEncryptedBallot
         .mockRejectedValueOnce({ request: {}, message: 'Network Error' })
         .mockResolvedValueOnce({ data: { ok: true, message_id: 'message-wallet-b' } });
 
     await act(async () => {
-        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111} />);
+        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111}
+                                  eip1193Provider={EIP1193_PROVIDER} />);
     });
     await flush();
 
@@ -234,7 +249,8 @@ test('discards the private key and ambiguous retry after a wallet change', async
     await flush();
 
     await act(async () => {
-        root.render(<VotingBallot walletAddress={nextWallet} chainId={11155111} />);
+        root.render(<VotingBallot walletAddress={nextWallet} chainId={11155111}
+                                  eip1193Provider={EIP1193_PROVIDER} />);
     });
     await flush();
     expect(container.querySelector('select[name="proposal"]').value).toBe('');
@@ -256,18 +272,14 @@ test('discards the private key and ambiguous retry after a wallet change', async
 
 test('regenerates a ballot after a definitive backend rejection', async () => {
     maciAPI.getStatus.mockResolvedValue({
-        data: {
-            key_registry: true,
-            private_voting: true,
-            coordinator_configured: true,
-            tally_proof: true,
-        },
+        data: READY_STATUS,
     });
     maciAPI.submitEncryptedBallot
         .mockRejectedValueOnce({ response: { status: 422, data: { detail: 'Poll stale' } } })
         .mockResolvedValueOnce({ data: { ok: true, message_id: 'message-fresh' } });
     await act(async () => {
-        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111} />);
+        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111}
+                                  eip1193Provider={EIP1193_PROVIDER} />);
     });
     await flush();
 
@@ -299,12 +311,7 @@ test('regenerates a ballot after a definitive backend rejection', async () => {
 
 test('retries ambiguous network and 5xx failures with the same ciphertext and idempotency key', async () => {
     maciAPI.getStatus.mockResolvedValue({
-        data: {
-            key_registry: true,
-            private_voting: true,
-            coordinator_configured: true,
-            tally_proof: true,
-        },
+        data: READY_STATUS,
     });
     maciAPI.submitEncryptedBallot
         .mockRejectedValueOnce({ request: {}, message: 'Network Error' })
@@ -313,7 +320,8 @@ test('retries ambiguous network and 5xx failures with the same ciphertext and id
             data: { ok: true, message_id: 'message-1' },
         });
     await act(async () => {
-        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111} />);
+        root.render(<VotingBallot walletAddress={WALLET} chainId={11155111}
+                                  eip1193Provider={EIP1193_PROVIDER} />);
     });
     await flush();
 

@@ -52,6 +52,16 @@ const removeAuthorizationHeader = (headers) => {
     delete headers.authorization;
 };
 
+const removeCsrfHeader = (headers) => {
+    if (!headers) return;
+    if (typeof headers.delete === 'function') {
+        headers.delete(CSRF_HEADER_NAME);
+        return;
+    }
+    delete headers[CSRF_HEADER_NAME];
+    delete headers[CSRF_HEADER_NAME.toLowerCase()];
+};
+
 const setRequestHeader = (headers, name, value) => {
     if (typeof headers?.set === 'function') {
         headers.set(name, value);
@@ -59,6 +69,14 @@ const setRequestHeader = (headers, name, value) => {
         headers[name] = value;
     }
 };
+
+anonymousMaciApi.interceptors.request.use((config) => {
+    // Enforce the unlinkable transport boundary even if another library or
+    // caller mutates Axios defaults after this instance was created.
+    removeAuthorizationHeader(config.headers);
+    removeCsrfHeader(config.headers);
+    return config;
+});
 
 const captureCsrfToken = (response) => {
     const bodyHasToken = Object.prototype.hasOwnProperty.call(
@@ -342,6 +360,27 @@ export const buildEncryptedBallotPayload = ({
     };
 };
 
+export const normalizeEncryptedBallotReceipt = (response) => {
+    const receipt = response?.data ?? response;
+    if (!receipt || receipt.ok !== true) {
+        throw new Error(receipt?.error || 'La urna no confirmó la recepción del mensaje.');
+    }
+    if (!Number.isSafeInteger(receipt.index) || receipt.index < 0) {
+        throw new Error('La urna respondió sin un índice verificable del mensaje.');
+    }
+    if (!/^(?:0x)?[0-9a-fA-F]{64}$/.test(receipt.message_chain || '')) {
+        throw new Error('La urna respondió sin un acumulador verificable del mensaje.');
+    }
+    const normalizedChain = receipt.message_chain.startsWith('0x')
+        ? receipt.message_chain.toLowerCase()
+        : `0x${receipt.message_chain.toLowerCase()}`;
+    return {
+        messageId: normalizedChain,
+        index: receipt.index,
+        duplicate: receipt.duplicate === true,
+    };
+};
+
 export const maciAPI = {
     getStatus: () => api.get('/maci/status'),
     registerKey: (walletAddress, publicKey) => api.post('/maci/keys', {
@@ -386,15 +425,9 @@ export const electionsAPI = {
             statement,
         }),
 
-    // Voting
-    getBallotSchema: () => api.get('/governance/elections/ballot-schema'),
-    vote: (electionId, voterAddress, candidateAddress, nonce, signature) =>
-        api.post(`/governance/elections/${electionId}/vote`, {
-            voter_address: voterAddress,
-            candidate_address: candidateAddress,
-            nonce,
-            signature,
-        }),
+    // Voting is intentionally absent. The legacy election endpoint serializes
+    // voter_address and candidate_address in plaintext; the UI must stay
+    // closed until the backend publishes an election-specific MACI poll.
     results: (electionId) => api.get(`/governance/elections/${electionId}/results`),
 
     // Elected representatives with an active term

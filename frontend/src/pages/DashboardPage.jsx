@@ -39,6 +39,7 @@ const DashboardLayout = () => {
         address,
         shortAddress,
         chainId,
+        eip1193Provider,
         isConnected,
         connect,
         disconnect,
@@ -141,7 +142,11 @@ const DashboardLayout = () => {
                 )}
 
                 <main style={{ padding: '28px 0 48px' }}>
-                    <Outlet context={{ walletAddress: address, chainId }} />
+                    <Outlet context={{
+                        walletAddress: address,
+                        chainId,
+                        eip1193Provider,
+                    }} />
                 </main>
 
                 <footer className="civic-footer">
@@ -165,10 +170,14 @@ const OverviewSection = () => {
 };
 
 const ProposalsSection = () => {
-    const { walletAddress, chainId } = useOutletContext();
+    const { walletAddress, chainId, eip1193Provider } = useOutletContext();
     return (
         <div className="space-y-10">
-            <VotingBallot walletAddress={walletAddress} chainId={chainId} />
+            <VotingBallot
+                walletAddress={walletAddress}
+                chainId={chainId}
+                eip1193Provider={eip1193Provider}
+            />
             <ProposalsList walletAddress={walletAddress} />
         </div>
     );

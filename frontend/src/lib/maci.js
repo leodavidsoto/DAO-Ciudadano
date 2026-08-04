@@ -11,7 +11,7 @@ import {
     subOrder,
 } from './babyJubjub';
 import { BrowserProvider, Contract, ZeroAddress, getAddress } from 'ethers';
-import { poseidon2 } from 'poseidon-lite';
+import { poseidon2, poseidon3, poseidon6 } from 'poseidon-lite';
 
 export const MACI_PROTOCOL_VERSION = 'maci-v2.5.0';
 const IDENTITY_POINT = [0n, 1n];
@@ -118,6 +118,10 @@ export const getMaciReadiness = (response) => {
     if (status.private_voting !== true) missing.push('votación privada');
     if (status.coordinator_configured !== true) missing.push('coordinador MACI');
     if (status.tally_proof !== true) missing.push('verificación del tally');
+    if (status.poll_bound_messages !== true) missing.push('vinculación mensaje-poll');
+    if (status.stateful_nonces !== true) missing.push('nonce ligado al estado');
+    if (status.unique_tally_leaves !== true) missing.push('unicidad de hojas del tally');
+    if (status.process_tally_linked !== true) missing.push('encadenamiento de pruebas');
     return {
         ready: missing.length === 0,
         missing,
@@ -219,7 +223,7 @@ export const normalizeMaciVotingConfig = (
  */
 export const verifyMaciCoordinatorOnChain = async ({
     config,
-    ethereum = globalThis.ethereum,
+    ethereum,
     expectedAddress = process.env.REACT_APP_MACI_COORDINATOR_ADDRESS,
     expectedTallyVerifier = process.env.REACT_APP_MACI_TALLY_VERIFIER_ADDRESS,
 }) => {
@@ -336,21 +340,32 @@ export const encryptMaciBallot = async ({ voterKeypair, config, choice }) => {
     if (!keypairHasSafePublicKey(voterKeypair)) {
         throw new MaciBallotError('No existe una llave privada de votación válida en memoria.');
     }
-    if (!Object.prototype.hasOwnProperty.call(config.voteOptions, choice)) {
+    if (
+        !config?.voteOptions ||
+        !Object.prototype.hasOwnProperty.call(config.voteOptions, choice)
+    ) {
         throw new MaciBallotError('Selecciona una opción de voto válida.');
     }
-    const { Keypair, PCommand, PubKey } = await import('maci-domainobjs');
+    const [{ Keypair, PubKey }, { signMessage, verifySignature }] = await Promise.all([
+        import('maci-domainobjs'),
+        import('@zk-kit/eddsa-poseidon'),
+    ]);
     const coordinator = new PubKey(config.coordinatorPoint);
-    const command = new PCommand(
+    const voterPublicKey = voterKeypair.pubKey.rawPubKey.map(BigInt);
+    const command = [
         config.stateIndex,
-        voterKeypair.pubKey,
         config.voteOptions[choice],
         config.voteWeight,
         config.nonce,
-        config.pollId
+        voterPublicKey[0],
+        voterPublicKey[1],
+    ];
+    const commandHash = poseidon6(command);
+    const signature = signMessage(
+        voterKeypair.privKey.rawPrivKey.toString(),
+        commandHash
     );
-    const signature = command.sign(voterKeypair.privKey);
-    if (!command.verifySignature(signature, voterKeypair.pubKey)) {
+    if (!verifySignature(commandHash, signature, voterPublicKey)) {
         throw new MaciBallotError('La firma interna de la papeleta MACI falló.');
     }
 
@@ -363,17 +378,29 @@ export const encryptMaciBallot = async ({ voterKeypair, config, choice }) => {
         { x: sharedKey[0].toString(), y: sharedKey[1].toString() },
         'La llave ECDH compartida'
     );
-    const encryptedMessage = command.encrypt(signature, sharedKey);
-    const message = encryptedMessage.asContractParam();
-    if (!Array.isArray(message.data) || message.data.length !== 10) {
-        throw new MaciBallotError('MACI produjo un mensaje cifrado incompleto.');
-    }
+
+    // This repository's approved processMessages.circom boundary deliberately
+    // differs from reference MACI's packed PCommand + poseidonEncrypt format.
+    // Keep these ten fields and this additive stream cipher in lockstep with
+    // circuits/processMessages.circom. Using PCommand.encrypt here produces a
+    // valid reference-MACI message which this project's circuit cannot tally.
+    const plaintext = [
+        ...command,
+        BigInt(signature.R8[0]),
+        BigInt(signature.R8[1]),
+        BigInt(signature.S),
+        0n,
+    ];
+    const ciphertext = plaintext.map((value, index) => {
+        const pad = poseidon3([sharedKey[0], sharedKey[1], BigInt(index)]);
+        return (value + pad) % BABY_JUB_FIELD_MODULUS;
+    });
 
     return {
         protocolVersion: config.protocolVersion,
         proposalId: config.proposalId,
         pollId: config.pollId.toString(),
-        message,
+        message: { data: ciphertext.map(String) },
         encryptionPublicKey: getMaciPublicKey(ephemeralKeypair),
         coordinatorKeyHash: config.coordinatorKeyHash,
     };

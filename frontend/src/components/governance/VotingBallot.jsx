@@ -1,13 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     AlertTriangle,
-    CheckCircle2,
     KeyRound,
     LockKeyhole,
     Send,
     ShieldCheck,
 } from 'lucide-react';
-import { governanceAPI, maciAPI } from '../../lib/api';
+import {
+    governanceAPI,
+    maciAPI,
+    normalizeEncryptedBallotReceipt,
+} from '../../lib/api';
+import MaciBallotProgress from './MaciBallotProgress';
 
 const CHOICES = [
     { value: 'for', label: 'A favor', description: 'Apoyar la propuesta' },
@@ -58,6 +62,10 @@ const getMaciReadiness = (response) => {
     if (status.private_voting !== true) missing.push('votación privada');
     if (status.coordinator_configured !== true) missing.push('coordinador MACI');
     if (status.tally_proof !== true) missing.push('verificación del tally');
+    if (status.poll_bound_messages !== true) missing.push('vinculación mensaje-poll');
+    if (status.stateful_nonces !== true) missing.push('nonce ligado al estado');
+    if (status.unique_tally_leaves !== true) missing.push('unicidad de hojas del tally');
+    if (status.process_tally_linked !== true) missing.push('encadenamiento de pruebas');
     if (!hasTrustedMaciDeployment()) missing.push('manifiesto on-chain del frontend');
     return {
         ready: missing.length === 0,
@@ -66,7 +74,7 @@ const getMaciReadiness = (response) => {
     };
 };
 
-const VotingBallot = ({ walletAddress, chainId }) => {
+const VotingBallot = ({ walletAddress, chainId, eip1193Provider }) => {
     const walletSessionKey = `${walletAddress?.trim().toLowerCase() || ''}:${
         chainId == null ? '' : String(chainId)
     }`;
@@ -82,12 +90,13 @@ const VotingBallot = ({ walletAddress, chainId }) => {
     const [choice, setChoice] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
-    const [receipt, setReceipt] = useState(null);
+    const [cryptoState, setCryptoState] = useState(null);
     const voterKeypairRef = useRef(null);
     const pendingBallotRef = useRef(null);
     const submittingRef = useRef(false);
     const activeOperationRef = useRef(null);
     const walletSessionRef = useRef(walletSessionKey);
+    const cryptoPhaseRef = useRef(null);
     const mountedRef = useRef(true);
 
     const loadBallot = useCallback(async () => {
@@ -137,9 +146,10 @@ const VotingBallot = ({ walletAddress, chainId }) => {
         setProposalId('');
         setChoice('');
         setError('');
-        setReceipt(null);
+        setCryptoState(null);
+        cryptoPhaseRef.current = null;
         setSubmitting(false);
-    }, [walletSessionKey]);
+    }, [eip1193Provider, walletSessionKey]);
 
     const selectedProposal = useMemo(
         () => proposals.find((proposal) => String(proposal.id) === proposalId) || null,
@@ -149,6 +159,8 @@ const VotingBallot = ({ walletAddress, chainId }) => {
     const canSubmit = Boolean(
         walletAddress &&
         chainId != null &&
+        eip1193Provider &&
+        typeof eip1193Provider.request === 'function' &&
         readiness.ready &&
         selectedProposal &&
         choice &&
@@ -160,7 +172,8 @@ const VotingBallot = ({ walletAddress, chainId }) => {
         setProposalId(event.target.value);
         setChoice('');
         setError('');
-        setReceipt(null);
+        setCryptoState(null);
+        cryptoPhaseRef.current = null;
         pendingBallotRef.current = null;
     };
 
@@ -187,7 +200,13 @@ const VotingBallot = ({ walletAddress, chainId }) => {
         };
         setSubmitting(true);
         setError('');
-        setReceipt(null);
+        setCryptoState(null);
+        cryptoPhaseRef.current = null;
+        let dispatchAttempted = false;
+        const advanceCryptoPhase = (status, extra = {}) => {
+            cryptoPhaseRef.current = status;
+            if (mountedRef.current) setCryptoState({ status, ...extra });
+        };
         try {
             let ballotPayload = null;
             const pending = pendingBallotRef.current;
@@ -199,6 +218,7 @@ const VotingBallot = ({ walletAddress, chainId }) => {
                 // A timeout after transport must retry the exact same
                 // ciphertext and idempotency key, never create another vote.
                 ballotPayload = pending.payload;
+                advanceCryptoPhase('retrying_same');
             } else {
                 // Load ~400 kB of MACI/BabyJub/Poseidon only for an actual
                 // ballot; browsing proposals must not pay that bundle cost.
@@ -211,6 +231,7 @@ const VotingBallot = ({ walletAddress, chainId }) => {
                     verifyMaciCoordinatorOnChain,
                 } = await import('../../lib/maci');
                 assertCurrentSession();
+                advanceCryptoPhase('preparing_key');
                 const voterKeypair =
                     voterKeypairRef.current || await createMaciKeypair();
                 assertCurrentSession();
@@ -219,19 +240,26 @@ const VotingBallot = ({ walletAddress, chainId }) => {
 
                 // Registration remains SIWE-bound. The subsequent ciphertext
                 // uses the separate bearer-free transport in api.js.
+                advanceCryptoPhase('registering_key');
                 await maciAPI.registerKey(walletAddress, voterPublicKey);
                 assertCurrentSession();
+                advanceCryptoPhase('loading_poll');
                 const configResponse = await maciAPI.getVotingConfig(selectedProposal.id);
                 assertCurrentSession();
                 const config = normalizeMaciVotingConfig(configResponse, {
                     proposalId: selectedProposal.id,
                     chainId,
                 });
-                await verifyMaciCoordinatorOnChain({ config });
+                advanceCryptoPhase('verifying_coordinator');
+                await verifyMaciCoordinatorOnChain({
+                    config,
+                    ethereum: eip1193Provider,
+                });
                 assertCurrentSession();
                 if (!proposalStillOpen(selectedProposal)) {
                     throw new Error('La propuesta cerró antes de publicar el mensaje cifrado.');
                 }
+                advanceCryptoPhase('encrypting');
                 const encryptedBallot = await encryptMaciBallot({
                     voterKeypair,
                     config,
@@ -250,19 +278,20 @@ const VotingBallot = ({ walletAddress, chainId }) => {
                 };
             }
             assertCurrentSession();
+            if (cryptoPhaseRef.current !== 'retrying_same') {
+                advanceCryptoPhase('publishing');
+            }
+            dispatchAttempted = true;
             const response = await maciAPI.submitEncryptedBallot(ballotPayload);
             assertCurrentSession();
-            const data = response?.data ?? response;
-            if (!data || data.ok === false) {
-                throw new Error(data?.error || 'La urna no confirmó la recepción del mensaje.');
-            }
-            const messageId = data.message_id || data.message_hash || data.tx_hash;
-            if (typeof messageId !== 'string' || !messageId.trim()) {
-                throw new Error('La urna respondió sin una referencia verificable del mensaje.');
-            }
+            const ballotReceipt = normalizeEncryptedBallotReceipt(response);
             if (!mountedRef.current) return;
             pendingBallotRef.current = null;
-            setReceipt({ messageId });
+            advanceCryptoPhase('received', {
+                messageId: ballotReceipt.messageId,
+                messageIndex: ballotReceipt.index,
+                duplicate: ballotReceipt.duplicate,
+            });
             setChoice('');
         } catch (submitError) {
             const isCurrentOperation =
@@ -272,13 +301,27 @@ const VotingBallot = ({ walletAddress, chainId }) => {
             if (isCurrentOperation) {
                 // Only an ambiguous transport failure may reuse an identical
                 // ciphertext. A backend rejection needs a fresh poll/config.
-                if (isDefinitiveBallotRejection(submitError)) {
+                const definitiveRejection = isDefinitiveBallotRejection(submitError);
+                if (definitiveRejection) {
                     pendingBallotRef.current = null;
                 }
-                setError(getApiError(
+                const errorMessage = getApiError(
                     submitError,
                     'No fue posible contactar la urna. Puedes reintentar sin crear otra papeleta.'
-                ));
+                );
+                setError(errorMessage);
+                if (dispatchAttempted && !definitiveRejection) {
+                    setCryptoState({
+                        status: 'delivery_unknown',
+                        lastStatus: cryptoPhaseRef.current,
+                    });
+                } else {
+                    setCryptoState({
+                        status: 'failed',
+                        lastStatus: cryptoPhaseRef.current,
+                        errorMessage,
+                    });
+                }
             }
         } finally {
             if (activeOperationRef.current === operationToken) {
@@ -299,13 +342,14 @@ const VotingBallot = ({ walletAddress, chainId }) => {
                         Emitir voto cifrado
                     </h2>
                     <p className="civic-muted civic-ballot-intro">
-                        La papeleta se cifra en este dispositivo. El transporte recibe sólo
-                        el ciphertext; el coordinador lo procesa dentro del tally verificable.
+                        La preferencia se cifra en este dispositivo con la llave pública del
+                        coordinador. El transporte recibe sólo el sobre MACI; la recepción no
+                        demuestra inclusión ni un tally válido.
                     </p>
                 </div>
                 <span className={`civic-tag ${readiness.ready ? 'civic-tag-green' : 'civic-tag-amber'}`}>
                     {readiness.ready ? <ShieldCheck className="w-3 h-3" /> : <KeyRound className="w-3 h-3" />}
-                    {readiness.ready ? 'Privacidad activa' : 'Verificación pendiente'}
+                    {readiness.ready ? 'Canal preparado' : 'Canal no disponible'}
                 </span>
             </div>
 
@@ -325,6 +369,13 @@ const VotingBallot = ({ walletAddress, chainId }) => {
                         <div className="civic-note civic-note-info">
                             <KeyRound className="w-4 h-4" />
                             <span>Conecta y firma tu sesión de wallet para habilitar la urna.</span>
+                        </div>
+                    )}
+
+                    {walletAddress && (!eip1193Provider || typeof eip1193Provider.request !== 'function') && (
+                        <div className="civic-note civic-note-warn" role="status">
+                            <AlertTriangle className="w-4 h-4" />
+                            <span>La sesión no expone el proveedor fijado que debe verificar el coordinador on-chain.</span>
                         </div>
                     )}
 
@@ -379,7 +430,8 @@ const VotingBallot = ({ walletAddress, chainId }) => {
                                         onChange={(event) => {
                                             setChoice(event.target.value);
                                             setError('');
-                                            setReceipt(null);
+                                            setCryptoState(null);
+                                            cryptoPhaseRef.current = null;
                                             pendingBallotRef.current = null;
                                         }}
                                     />
@@ -395,10 +447,21 @@ const VotingBallot = ({ walletAddress, chainId }) => {
                     <div className="civic-ballot-privacy">
                         <ShieldCheck className="w-4 h-4" />
                         <span>
-                            La llave privada permanece sólo en esta sesión. No cierres esta
-                            pantalla hasta recibir la referencia de tu mensaje cifrado.
+                            El registro SIWE asocia tu wallet sólo con la llave pública MACI.
+                            La llave privada permanece en esta pestaña y el sobre cifrado se
+                            publica después por un transporte sin credenciales.
                         </span>
                     </div>
+
+                    <div className="civic-note civic-note-info">
+                        <AlertTriangle className="w-4 h-4" />
+                        <span>
+                            Piloto no vinculante: el coordinador descifra para procesar el
+                            tally y todavía debes verificar inclusión y prueba final.
+                        </span>
+                    </div>
+
+                    <MaciBallotProgress state={cryptoState} />
 
                     {error && (
                         <div className="civic-note civic-note-error" role="alert">
@@ -406,18 +469,6 @@ const VotingBallot = ({ walletAddress, chainId }) => {
                             <span>{error}</span>
                         </div>
                     )}
-                    {receipt && (
-                        <div className="civic-note civic-note-ok" role="status">
-                            <CheckCircle2 className="w-4 h-4" />
-                            <span>
-                                Mensaje cifrado recibido por la urna.
-                                {receipt.messageId
-                                    ? ` Referencia ${String(receipt.messageId).slice(0, 18)}…`
-                                    : ' Su inclusión y tally aún deben verificarse.'}
-                            </span>
-                        </div>
-                    )}
-
                     <button
                         type="submit"
                         className="civic-btn civic-btn-primary civic-ballot-submit"
@@ -425,7 +476,11 @@ const VotingBallot = ({ walletAddress, chainId }) => {
                         aria-busy={submitting}
                     >
                         {submitting ? <span className="civic-spinner civic-spinner-light" /> : <Send className="w-4 h-4" />}
-                        {submitting ? 'Cifrando y enviando…' : 'Cifrar y enviar papeleta'}
+                        {submitting
+                            ? cryptoState?.status === 'publishing' || cryptoState?.status === 'retrying_same'
+                                ? 'Publicando sobre cifrado…'
+                                : 'Blindando papeleta…'
+                            : 'Blindar y enviar papeleta'}
                     </button>
                 </form>
             )}

@@ -1,16 +1,33 @@
 import { Base8, r as BABY_JUB_FIELD_MODULUS } from './babyJubjub';
 import { Interface } from 'ethers';
-import { Keypair, Message, PCommand, PubKey } from 'maci-domainobjs';
+import { deriveSecretScalar, verifySignature } from '@zk-kit/eddsa-poseidon';
+import { Keypair, PubKey } from 'maci-domainobjs';
+import {
+    poseidon2,
+    poseidon3,
+    poseidon4,
+    poseidon6,
+    poseidon10,
+} from 'poseidon-lite';
 import {
     MACI_PROTOCOL_VERSION,
     createMaciKeypair,
     deriveMaciPublicKeyHash,
     encryptMaciBallot,
+    getMaciReadiness,
     getMaciPublicKey,
     normalizeMaciPublicKey,
     normalizeMaciVotingConfig,
     verifyMaciCoordinatorOnChain,
 } from './maci';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const snarkjs = require('snarkjs');
+
+global.setImmediate = global.setImmediate || ((callback, ...args) =>
+    setTimeout(callback, 0, ...args));
 
 const PROPOSAL_ID = 'proposal-1';
 const CHAIN_ID = 11155111;
@@ -112,6 +129,22 @@ test('rejects stale, mismatched and overflowing poll configuration', async () =>
     })).toThrow(/plazo/i);
 });
 
+test('does not treat legacy readiness flags as a reviewed private-voting pipeline', () => {
+    const readiness = getMaciReadiness({
+        key_registry: true,
+        private_voting: true,
+        coordinator_configured: true,
+        tally_proof: true,
+    });
+    expect(readiness.ready).toBe(false);
+    expect(readiness.missing).toEqual(expect.arrayContaining([
+        'vinculación mensaje-poll',
+        'nonce ligado al estado',
+        'unicidad de hojas del tally',
+        'encadenamiento de pruebas',
+    ]));
+});
+
 test('anchors the coordinator key and tally verifier to the trusted on-chain deployment', async () => {
     const coordinator = await createMaciKeypair();
     const publicKey = getMaciPublicKey(coordinator);
@@ -138,7 +171,7 @@ test('anchors the coordinator key and tally verifier to the trusted on-chain dep
     });
 });
 
-test('produces an official ten-field PCommand message that the coordinator decrypts', async () => {
+test('produces the approved ten-field stream message that the coordinator decrypts', async () => {
     const voter = await createMaciKeypair();
     const coordinator = await createMaciKeypair();
     const config = normalizeMaciVotingConfig(
@@ -162,15 +195,33 @@ test('produces an official ten-field PCommand message that the coordinator decry
         coordinator.privKey,
         ephemeralPublicKey
     );
-    const message = new Message(encrypted.message.data.map(BigInt));
-    const { command, signature } = PCommand.decrypt(message, coordinatorSharedKey);
+    const plaintext = encrypted.message.data.map((value, index) => {
+        const pad = poseidon3([
+            coordinatorSharedKey[0],
+            coordinatorSharedKey[1],
+            BigInt(index),
+        ]);
+        return (BigInt(value) - pad + BABY_JUB_FIELD_MODULUS) %
+            BABY_JUB_FIELD_MODULUS;
+    });
 
-    expect(command.stateIndex).toBe(4n);
-    expect(command.pollId).toBe(7n);
-    expect(command.voteOptionIndex).toBe(1n);
-    expect(command.newVoteWeight).toBe(1n);
-    expect(command.verifySignature(signature, voter.pubKey)).toBe(true);
-    expect(command.newPubKey.equals(voter.pubKey)).toBe(true);
+    expect(plaintext.slice(0, 6)).toEqual([
+        4n,
+        1n,
+        1n,
+        1n,
+        ...voter.pubKey.rawPubKey,
+    ]);
+    expect(plaintext[9]).toBe(0n);
+    const signature = {
+        R8: [plaintext[6], plaintext[7]],
+        S: plaintext[8],
+    };
+    expect(verifySignature(
+        poseidon6(plaintext.slice(0, 6)),
+        signature,
+        voter.pubKey.rawPubKey
+    )).toBe(true);
 
     const serialized = JSON.stringify(encrypted);
     expect(serialized).not.toContain('against');
@@ -178,3 +229,84 @@ test('produces an official ten-field PCommand message that the coordinator decry
     expect(serialized).not.toContain('sharedKey');
     expect(serialized).not.toContain('signature');
 });
+
+test('the browser ciphertext produces a valid processMessages circuit witness', async () => {
+    const voter = await createMaciKeypair();
+    const coordinator = await createMaciKeypair();
+    const config = normalizeMaciVotingConfig(
+        rawConfig(getMaciPublicKey(coordinator)),
+        { proposalId: PROPOSAL_ID, chainId: CHAIN_ID }
+    );
+    const encrypted = await encryptMaciBallot({
+        voterKeypair: voter,
+        config,
+        choice: 'against',
+    });
+
+    const depth = 10;
+    const zeros = [0n];
+    for (let level = 0; level < depth; level += 1) {
+        zeros.push(poseidon2([zeros[level], zeros[level]]));
+    }
+    const currentVotes = [0n, 0n, 0n];
+    const newVotes = [0n, 1n, 0n];
+    const voterPublicKey = voter.pubKey.rawPubKey;
+    const leafOf = (votes) => poseidon4([
+        voterPublicKey[0],
+        voterPublicKey[1],
+        1n,
+        poseidon3(votes),
+    ]);
+    const pathElements = [];
+    const pathIndices = [];
+    let position = Number(config.stateIndex);
+    for (let level = 0; level < depth; level += 1) {
+        pathElements.push(zeros[level].toString());
+        pathIndices.push(position % 2);
+        position = Math.floor(position / 2);
+    }
+    const rootOf = (leaf) => {
+        let current = leaf;
+        let index = Number(config.stateIndex);
+        for (let level = 0; level < depth; level += 1) {
+            current = index % 2 === 0
+                ? poseidon2([current, zeros[level]])
+                : poseidon2([zeros[level], current]);
+            index = Math.floor(index / 2);
+        }
+        return current;
+    };
+    const ephemeralPublicKey = [
+        BigInt(encrypted.encryptionPublicKey.x),
+        BigInt(encrypted.encryptionPublicKey.y),
+    ];
+    const ciphertext = encrypted.message.data.map((value) => BigInt(value));
+    const messageHash = poseidon3([
+        ephemeralPublicKey[0],
+        ephemeralPublicKey[1],
+        poseidon10(ciphertext),
+    ]);
+    const input = {
+        coordinatorPrivKey: deriveSecretScalar(
+            coordinator.privKey.rawPrivKey.toString()
+        ).toString(),
+        ephemeralPubKey: ephemeralPublicKey.map(String),
+        ciphertext: encrypted.message.data,
+        voterPubKey: voterPublicKey.map(String),
+        voiceCredits: '1',
+        currentVotes: currentVotes.map(String),
+        currentNonce: (config.nonce - 1n).toString(),
+        pathElements,
+        pathIndices,
+        currentStateRoot: rootOf(leafOf(currentVotes)).toString(),
+        newStateRoot: rootOf(leafOf(newVotes)).toString(),
+        messageHash: messageHash.toString(),
+    };
+
+    const wasmPath = path.resolve(
+        __dirname,
+        '../../../circuits/build/process/processMessages_js/processMessages.wasm'
+    );
+    const witnessPath = path.join(os.tmpdir(), `frontend-maci-${process.pid}.wtns`);
+    await expect(snarkjs.wtns.calculate(input, wasmPath, witnessPath)).resolves.toBeUndefined();
+}, 30000);

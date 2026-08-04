@@ -5,9 +5,20 @@
  * Nothing here is fabricated: with no data we render an honest empty state.
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { Vote, Users, Clock, Trophy, UserPlus, Plus, ArrowLeft, AlertCircle, Check } from 'lucide-react';
+import {
+    AlertCircle,
+    ArrowLeft,
+    Check,
+    Clock,
+    LockKeyhole,
+    Plus,
+    ShieldAlert,
+    Trophy,
+    UserPlus,
+    Users,
+    Vote,
+} from 'lucide-react';
 import { electionsAPI } from '@/lib/api';
-import useWallet from '@/hooks/useWallet';
 
 const STATUS_META = {
     nominations: { label: 'Candidaturas abiertas', cls: 'civic-tag-blue' },
@@ -141,7 +152,6 @@ const CreateElectionForm = ({ walletAddress, onCreated, onCancel }) => {
 // === Detalle ===
 
 const ElectionDetail = ({ election, walletAddress, onBack, onChanged }) => {
-    const { signer } = useWallet();
     const [candidacies, setCandidacies] = useState([]);
     const [results, setResults] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -177,46 +187,6 @@ const ElectionDetail = ({ election, walletAddress, onBack, onChanged }) => {
             if (onChanged) onChanged();
         } catch (err) {
             setError(errText(err, 'La operación falló'));
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    const actVote = async (electionId, candidateAddress) => {
-        setBusy(true); setError(''); setNotice('');
-        try {
-            const schemaRes = await electionsAPI.getBallotSchema();
-            const schema = schemaRes.data;
-            let signature = null;
-            let nonce = null;
-
-            if (schema.signed_ballots_required) {
-                if (!signer) throw new Error("Billetera no conectada para firmar");
-                nonce = Date.now().toString() + Math.random().toString(36).substring(2, 7);
-                const message = {
-                    electionId: electionId,
-                    voter: walletAddress,
-                    candidate: candidateAddress,
-                    nonce: nonce,
-                };
-                // Ethers v6 signTypedData signature: domain, types, message
-                // However, we need to strip EIP712Domain from types as Ethers adds it automatically
-                const types = { ...schema.types };
-                delete types.EIP712Domain;
-                
-                signature = await signer.signTypedData(schema.domain, types, message);
-            }
-
-            await electionsAPI.vote(electionId, walletAddress, candidateAddress, nonce, signature);
-            setNotice('Voto registrado');
-            await load();
-            if (onChanged) onChanged();
-        } catch (err) {
-            if (err?.code === 4001 || err?.message?.includes('user rejected')) {
-                setError('Firma rechazada por el usuario.');
-            } else {
-                setError(errText(err, 'La operación de voto falló'));
-            }
         } finally {
             setBusy(false);
         }
@@ -258,13 +228,13 @@ const ElectionDetail = ({ election, walletAddress, onBack, onChanged }) => {
             </div>
 
             {error && (
-                <div className="civic-note civic-note-error">
+                <div className="civic-note civic-note-error" role="alert">
                     <AlertCircle className="w-4 h-4" />
                     {error}
                 </div>
             )}
             {notice && (
-                <div className="civic-note civic-note-ok">
+                <div className="civic-note civic-note-ok" role="status">
                     <Check className="w-4 h-4" />
                     {notice}
                 </div>
@@ -286,6 +256,7 @@ const ElectionDetail = ({ election, walletAddress, onBack, onChanged }) => {
                     />
                     <button
                         disabled={busy || !statement.trim() || !walletAddress}
+                        aria-busy={busy}
                         onClick={() => act(
                             () => electionsAPI.runForOffice(election.id, walletAddress, statement),
                             'Candidatura registrada'
@@ -295,6 +266,33 @@ const ElectionDetail = ({ election, walletAddress, onBack, onChanged }) => {
                         Presentar candidatura
                     </button>
                 </div>
+            )}
+
+            {election.status === 'voting' && (
+                <section
+                    className="civic-election-privacy-gate"
+                    aria-labelledby="election-private-vote-title"
+                    role="status"
+                >
+                    <span className="civic-election-privacy-seal" aria-hidden="true">
+                        <ShieldAlert />
+                    </span>
+                    <div>
+                        <p className="civic-eyebrow">Urna MACI obligatoria</p>
+                        <h3 id="election-private-vote-title">
+                            Votación detenida hasta disponer de cifrado verificable
+                        </h3>
+                        <p>
+                            Esta elección aún no publica un poll MACI ni el mapeo
+                            candidato–opción anclado. La interfaz no enviará tu wallet,
+                            candidato ni firma EIP-712 por el endpoint de voto en claro.
+                        </p>
+                        <span className="civic-tag civic-tag-amber">
+                            <LockKeyhole className="w-3 h-3" />
+                            Esperando parámetros MACI de la elección
+                        </span>
+                    </div>
+                </section>
             )}
 
             <div>
@@ -328,14 +326,13 @@ const ElectionDetail = ({ election, walletAddress, onBack, onChanged }) => {
                                         <p className="civic-muted text-sm whitespace-pre-line">{c.statement}</p>
                                     </div>
                                     {election.status === 'voting' && (
-                                        <button
-                                            disabled={busy || !walletAddress}
-                                            onClick={() => actVote(election.id, c.candidate_address)}
-                                            className="civic-btn civic-btn-primary civic-btn-sm shrink-0"
+                                        <span
+                                            className="civic-election-vote-locked"
+                                            aria-label="Voto bloqueado hasta habilitar MACI"
                                         >
-                                            <Vote className="w-4 h-4" />
-                                            Votar
-                                        </button>
+                                            <LockKeyhole className="w-4 h-4" />
+                                            Urna privada pendiente
+                                        </span>
                                     )}
                                 </div>
                             </div>

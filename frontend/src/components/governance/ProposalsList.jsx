@@ -9,7 +9,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
     Vote,
     Clock, Users, CheckCircle, XCircle, Timer,
-    PlusCircle
+    LockKeyhole, PlusCircle
 } from 'lucide-react';
 import { governanceAPI } from '@/lib/api';
 import CreateProposalModal from './CreateProposalModal';
@@ -67,20 +67,31 @@ const ProposalCard = ({ proposal }) => {
 
             <p className="civic-muted text-sm mb-4 line-clamp-2">{proposal.description}</p>
 
-            <div className="mb-4">
-                <div className="flex justify-between text-xs mb-1.5">
-                    <span style={{ color: '#1F6B45' }}>A favor: {proposal.votes_for}</span>
-                    <span style={{ color: '#A9211D' }}>En contra: {proposal.votes_against}</span>
+            {proposal.status === 'active' ? (
+                <div className="civic-sealed-tally" role="note">
+                    <LockKeyhole className="w-4 h-4" />
+                    <span>
+                        <strong>Sin recuento parcial</strong>
+                        Las preferencias no se publican mientras la urna está abierta.
+                        El resultado requiere cierre y tally verificable.
+                    </span>
                 </div>
-                <div className="civic-bar">
-                    <div className="civic-bar-for" style={{ width: `${forPercent}%` }} />
-                    <div className="civic-bar-against" style={{ width: `${againstPercent}%` }} />
+            ) : (
+                <div className="mb-4">
+                    <div className="flex justify-between text-xs mb-1.5">
+                        <span style={{ color: '#1F6B45' }}>A favor: {proposal.votes_for}</span>
+                        <span style={{ color: '#A9211D' }}>En contra: {proposal.votes_against}</span>
+                    </div>
+                    <div className="civic-bar">
+                        <div className="civic-bar-for" style={{ width: `${forPercent}%` }} />
+                        <div className="civic-bar-against" style={{ width: `${againstPercent}%` }} />
+                    </div>
+                    <div className="flex justify-between civic-faint text-xs mt-1.5">
+                        <span><Users className="inline w-3 h-3 mr-1" />{totalVotes} votos</span>
+                        <span>Quórum: {proposal.quorum_required}</span>
+                    </div>
                 </div>
-                <div className="flex justify-between civic-faint text-xs mt-1.5">
-                    <span><Users className="inline w-3 h-3 mr-1" />{totalVotes} votos</span>
-                    <span>Quórum: {proposal.quorum_required}</span>
-                </div>
-            </div>
+            )}
 
         </article>
     );

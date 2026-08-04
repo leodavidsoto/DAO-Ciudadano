@@ -2,6 +2,8 @@ import {
     buildEncryptedBallotPayload,
     buildIdentityCredentialRequest,
     buildZkMintPayload,
+    electionsAPI,
+    normalizeEncryptedBallotReceipt,
 } from './api';
 
 test('builds the one-time credential exchange without identity secret or PII', () => {
@@ -117,4 +119,28 @@ test('rejects malformed MACI ciphertext before transport', () => {
         coordinatorKeyHash: `0x${'ab'.repeat(32)}`,
         idempotencyKey: '12345678-1234-4234-9234-123456789abc',
     })).toThrow(/diez elementos decimales/i);
+});
+
+test('accepts only the real indexed MACI message-chain receipt', () => {
+    expect(normalizeEncryptedBallotReceipt({
+        data: {
+            ok: true,
+            index: 3,
+            message_chain: 'AB'.repeat(32),
+            duplicate: true,
+        },
+    })).toEqual({
+        messageId: `0x${'ab'.repeat(32)}`,
+        index: 3,
+        duplicate: true,
+    });
+
+    expect(() => normalizeEncryptedBallotReceipt({
+        data: { ok: true, message_id: 'not-the-backend-contract' },
+    })).toThrow(/índice verificable/i);
+});
+
+test('does not expose the legacy plaintext election-vote transport', () => {
+    expect(electionsAPI.vote).toBeUndefined();
+    expect(electionsAPI.getBallotSchema).toBeUndefined();
 });
