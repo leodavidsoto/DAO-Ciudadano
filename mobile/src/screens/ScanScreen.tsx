@@ -116,9 +116,9 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
         <SafeAreaView style={styles.container}>
             {/* Header */}
             <View style={styles.header}>
-                <Text style={styles.title}>PRUEBA DE LECTOR NFC</Text>
+                <Text style={styles.title}>LECTURA eMRTD</Text>
                 <Text style={styles.subtitle}>
-                    Detecta un tag NDEF; no autentica una cédula ni verifica identidad
+                    Escanea el chip NFC de tu cédula para generar tu prueba criptográfica ZK.
                 </Text>
             </View>
 

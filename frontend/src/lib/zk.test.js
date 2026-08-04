@@ -41,6 +41,7 @@ const {
     generateIdentityProof,
     importSecret,
     normalizeIdentityCredential,
+    readMembershipDeployment,
     releaseZkResources,
     verifyProofLocally,
     ZkProofError,
@@ -178,6 +179,15 @@ test('rejects a credential with a tampered issuer signature', async () => {
         recipient: RECIPIENT,
         expectedScope: SCOPE,
     })).rejects.toThrow(/firma|emisor/i);
+});
+
+test('requires the EIP-1193 provider pinned by the wallet session for deployment reads', async () => {
+    await expect(readMembershipDeployment(
+        11155111,
+        null,
+        RECIPIENT,
+        null
+    )).rejects.toThrow(/proveedor EIP-1193 fijado/i);
 });
 
 test('rejects a credential issued for a different local secret', async () => {

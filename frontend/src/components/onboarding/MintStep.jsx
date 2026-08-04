@@ -56,65 +56,36 @@ const Confetti = ({ show }) => {
     );
 };
 
-// Circular progress ring
-const MintProgressRing = ({ progress, stage }) => {
-    const radius = 52;
-    const circumference = 2 * Math.PI * radius;
-    const offset = circumference - (progress / 100) * circumference;
+const ZK_LOADING_STATES = Object.freeze({
+    enrolling: {
+        text: 'VALIDANDO CREDENCIAL ZK…',
+        detail: 'El grant de un solo uso se intercambia por una credencial ligada a esta wallet.',
+    },
+    generating: {
+        text: 'GENERANDO PRUEBA ZK LOCALMENTE…',
+        detail: 'El secreto de identidad y la ruta Merkle permanecen en este navegador.',
+    },
+    ready: {
+        text: 'PRUEBA ZK VERIFICADA LOCALMENTE…',
+        detail: 'Preparando la autorización subsidiada que firmarás en MetaMask.',
+    },
+});
 
-    return (
-        <div className="mint-animation-container">
-            <div className="mint-progress-ring">
-                <svg width="120" height="120" viewBox="0 0 120 120">
-                    <defs>
-                        <linearGradient id="mintGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                            <stop offset="0%" stopColor="#00FFFF" />
-                            <stop offset="50%" stopColor="#FF00FF" />
-                            <stop offset="100%" stopColor="#39FF14" />
-                        </linearGradient>
-                    </defs>
-                    <circle className="bg" cx="60" cy="60" r={radius} />
-                    <circle
-                        className="progress"
-                        cx="60"
-                        cy="60"
-                        r={radius}
-                        strokeDasharray={circumference}
-                        strokeDashoffset={offset}
-                    />
-                </svg>
-                <div className="absolute inset-0 flex items-center justify-center">
-                    <Cpu className="w-10 h-10 text-cyan-400 icon-pulse" />
-                </div>
-            </div>
-            <div className="mint-stage-text">{stage}</div>
-        </div>
-    );
-};
+const DEFAULT_LOADING_STATE = Object.freeze({
+    text: 'PROCESANDO EMISIÓN NO CUSTODIAL…',
+    detail: 'La operación solo continuará si todas las verificaciones locales son válidas.',
+});
 
 const MintStep = () => {
     const navigate = useNavigate();
-    const { loading, mint, wallet, identity, mintSBT, setStep } = useOnboarding();
-    const [mintProgress, setMintProgress] = useState(0);
-    const [currentStage, setCurrentStage] = useState('');
+    const { loading, mint, wallet, identity, mintSBT, setStep, zk } = useOnboarding();
     const [showConfetti, setShowConfetti] = useState(false);
     const hasVerifiedIdentity = Boolean(identity);
-
-    // The proof, sponsorship request, wallet approval and confirmation are
-    // asynchronous. Until the transport exposes real phase events, show one
-    // honest indeterminate state instead of advancing through invented stages.
-    useEffect(() => {
-        if (loading) {
-            setMintProgress(65);
-            setCurrentStage('PROCESANDO EMISIÓN NO CUSTODIAL...');
-        }
-    }, [loading]);
+    const loadingState = ZK_LOADING_STATES[zk?.status] || DEFAULT_LOADING_STATE;
 
     // Show confetti when mint succeeds
     useEffect(() => {
         if (mint.token_id && !loading) {
-            setMintProgress(100);
-            setCurrentStage('¡COMPLETADO!');
             setShowConfetti(true);
         }
     }, [mint.token_id, loading]);
@@ -175,7 +146,11 @@ const MintStep = () => {
 
                 {/* Minting progress */}
                 {loading && (
-                    <MintProgressRing progress={mintProgress} stage={currentStage} />
+                    <CyberLoader
+                        className="civic-loading"
+                        text={loadingState.text}
+                        detail={loadingState.detail}
+                    />
                 )}
 
                 {/* Success state with holographic card */}

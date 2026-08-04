@@ -147,6 +147,12 @@ test('mint sends only contract arguments after a positive local verification', a
     );
     expect(JSON.stringify(membershipAPI.mintWithProof.mock.calls[0][0]))
         .not.toContain(IDENTITY.signature);
+    expect(readMembershipDeployment).toHaveBeenCalledWith(
+        11155111,
+        '11',
+        WALLET,
+        EIP1193_PROVIDER
+    );
     expect(context.step).toBe('success');
 });
 
@@ -163,6 +169,29 @@ test.each([false, null])(
         expect(context.zk.status).toBe('error');
     }
 );
+
+test('exposes generating while the local prover is pending and does not contact the relayer', async () => {
+    let resolveProof;
+    generateIdentityProof.mockReturnValue(new Promise((resolve) => {
+        resolveProof = resolve;
+    }));
+
+    let proofPromise;
+    await act(async () => {
+        proofPromise = context.generateProof();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(context.zk.status).toBe('generating');
+    expect(membershipAPI.mintWithProof).not.toHaveBeenCalled();
+
+    await act(async () => {
+        resolveProof(PROOF_RESULT);
+        await proofPromise;
+    });
+
+    expect(context.zk.status).toBe('ready');
+});
 
 test('mint fails closed when the pinned MetaMask provider is missing', async () => {
     await act(async () => {

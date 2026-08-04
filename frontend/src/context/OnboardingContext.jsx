@@ -286,7 +286,12 @@ export const OnboardingProvider = ({ children }) => {
     const requestIdentityCredential = useCallback(async (walletOverride = null) => {
         if (identityEnrollmentInFlight.current) return null;
         const targetWallet = walletOverride || wallet;
-        if (!targetWallet?.address || targetWallet.chainId == null) {
+        if (
+            !targetWallet?.address ||
+            targetWallet.chainId == null ||
+            !targetWallet.eip1193Provider ||
+            typeof targetWallet.eip1193Provider.request !== 'function'
+        ) {
             setError('Conecta una wallet y una red antes de solicitar la credencial identity.');
             return null;
         }
@@ -312,7 +317,8 @@ export const OnboardingProvider = ({ children }) => {
             const deployment = await readMembershipDeployment(
                 targetWallet.chainId,
                 null,
-                targetWallet.address
+                targetWallet.address,
+                targetWallet.eip1193Provider
             );
             const identityCommitment = await deriveIdentityCommitment({
                 recipient: targetWallet.address,
@@ -354,7 +360,8 @@ export const OnboardingProvider = ({ children }) => {
             await readMembershipDeployment(
                 targetWallet.chainId,
                 normalized.identityRoot,
-                targetWallet.address
+                targetWallet.address,
+                targetWallet.eip1193Provider
             );
 
             const credential = {
@@ -422,7 +429,8 @@ export const OnboardingProvider = ({ children }) => {
             const deployment = await readMembershipDeployment(
                 wallet.chainId,
                 normalizedIdentity.identityRoot,
-                wallet.address
+                wallet.address,
+                wallet.eip1193Provider
             );
             const result = await generateIdentityProof({
                 identity: activeIdentity,
@@ -465,7 +473,12 @@ export const OnboardingProvider = ({ children }) => {
             setError(err.message || 'No se pudo generar la prueba de identidad.');
             return null;
         }
-    }, [identity, wallet.address, wallet.chainId]);
+    }, [
+        identity,
+        wallet.address,
+        wallet.chainId,
+        wallet.eip1193Provider,
+    ]);
 
     const mintSBT = useCallback(async () => {
         if (!wallet.address) return;
@@ -492,7 +505,8 @@ export const OnboardingProvider = ({ children }) => {
             const currentDeployment = await readMembershipDeployment(
                 wallet.chainId,
                 proofResult.identityRoot,
-                wallet.address
+                wallet.address,
+                wallet.eip1193Provider
             );
             if (currentDeployment.scope !== proofResult.scope) {
                 throw new Error(

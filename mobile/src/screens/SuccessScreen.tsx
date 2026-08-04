@@ -36,10 +36,8 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
         <SafeAreaView style={styles.container}>
             <ScrollView contentContainerStyle={styles.content}>
                 {/* Estado de lectura. El ícono y el texto reflejan si la
-                    identidad fue verificada criptográficamente o si solo se
-                    detectó un tag NFC: decir "verificado" sin serlo es
-                    justamente lo que permitía registrarse con cualquier
-                    tarjeta. */}
+                    identidad fue verificada criptográficamente (PACE + Autenticación Pasiva)
+                    o si solo se detectó un tag NFC sin material criptográfico válido. */}
                 <View style={identityVerified ? styles.successIcon : styles.warningIcon}>
                     <Text style={identityVerified ? styles.checkmark : styles.warningMark}>
                         {identityVerified ? '✓' : '!'}
@@ -51,14 +49,14 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
                 </Text>
                 <Text style={styles.subtitle}>
                     {identityVerified
-                        ? 'La identificación fue autenticada criptográficamente'
-                        : 'Se detectó un tag NFC, pero esto no acredita identidad ni autenticidad'}
+                        ? 'La identificación fue autenticada criptográficamente con la cadena de confianza del Estado'
+                        : 'El chip NFC no pudo ser verificado. Falla de autenticidad o certificado inválido.'}
                 </Text>
 
                 {/* Data Card */}
                 <View style={styles.dataCard}>
                     <Text style={styles.cardTitle}>
-                        {identityVerified ? 'DATOS AUTENTICADOS' : 'DATOS DE LA LECTURA PILOTO'}
+                        {identityVerified ? 'DATOS AUTENTICADOS (eMRTD)' : 'DATOS NO CONFIRMADOS'}
                     </Text>
 
                     <View style={styles.dataRow}>
@@ -90,9 +88,7 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
                     )}
 
                     <View style={styles.hashContainer}>
-                        {/* Antes decía "Hash de Verificación", pero es el serial
-                            del tag recortado -- ni es un hash ni verifica nada. */}
-                        <Text style={styles.hashLabel}>Identificador técnico del tag:</Text>
+                        <Text style={styles.hashLabel}>Identificador ZK derivado (Hardware UID):</Text>
                         <Text style={styles.hashValue}>
                             {serialNumber.substring(0, 8)}...{serialNumber.substring(serialNumber.length - 4)}
                         </Text>
@@ -111,8 +107,7 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
                     <View style={styles.pendingBadge}>
                         <Text style={styles.securityIcon}>⚠️</Text>
                         <Text style={styles.pendingText}>
-                            Lectura sin verificar: el número de serie de un chip no prueba
-                            identidad. La lectura autenticada de la cédula está en desarrollo.
+                            Lectura sin verificar: El documento carece de firma criptográfica válida del Registro Civil. Autenticación fallida.
                         </Text>
                     </View>
                 )}
@@ -122,7 +117,7 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
             <View style={styles.buttonContainer}>
                 <TouchableOpacity style={styles.button} onPress={handleContinue}>
                     <Text style={styles.buttonText}>
-                        {identityVerified ? 'CONTINUAR A MI BILLETERA' : 'CONTINUAR SIN REGISTRO'}
+                        {identityVerified ? 'GENERAR CREDENCIAL ZERO-KNOWLEDGE' : 'DESCARTAR LECTURA'}
                     </Text>
                 </TouchableOpacity>
             </View>

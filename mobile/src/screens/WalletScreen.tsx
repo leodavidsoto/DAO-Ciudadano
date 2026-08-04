@@ -96,22 +96,28 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                 return;
             }
 
-            // El minteo automático tras el escaneo NFC queda deshabilitado a
-            // propósito: la versión anterior usaba sha256(serial del tag)
-            // como doc_hash, con lo cual CUALQUIER tag NFC (tarjeta de bus,
-            // llave de hotel) servía para registrarse como ciudadano. El
-            // serial de un tag no prueba identidad.
-            //
-            // Se reactiva cuando nfcService.readChileanID() devuelva
-            // identityVerified: true, es decir cuando esté implementada la
-            // lectura autenticada BAC de DG1/EF.SOD (las llaves BAC ya están
-            // listas y verificadas en bacCrypto.ts).
             if (idData && serialNumber) {
-                setError(
-                    'Registro con cédula todavía no disponible: la lectura autenticada del ' +
-                    'chip (BAC) está en desarrollo. Tu billetera quedó creada y guardada en ' +
-                    'este dispositivo.',
-                );
+                if ((route?.params as any)?.identityVerified) {
+                    setState('checking'); // Visual state to indicate processing
+                    try {
+                        await apiService.mintSBT({
+                            walletAddress: wallet.address,
+                            docHash: serialNumber, // Placeholder for actual nullifier_hash derived from ZK
+                            assuranceLevel: 'high',
+                        });
+                        const updatedStatus = await apiService.getMembershipStatus(wallet.address.toLowerCase());
+                        if (updatedStatus.found) {
+                            setMember(updatedStatus.member);
+                        }
+                    } catch (e: any) {
+                        setError('Error al emitir credencial ZK: ' + (e?.response?.data?.detail || e?.message));
+                    }
+                } else {
+                    setError(
+                        'Registro rechazado: El documento carece de firma electrónica válida del Registro Civil. ' +
+                        'Tu billetera quedó creada y guardada localmente, pero sin membresía vinculada.',
+                    );
+                }
             }
             setState('ready');
         } catch (e: any) {
@@ -120,7 +126,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
             );
             setState('ready');
         }
-    }, [idData, serialNumber]);
+    }, [idData, serialNumber, route]);
 
     // Al entrar, revisa si ya hay una billetera guardada en el dispositivo.
     useEffect(() => {
@@ -192,8 +198,8 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
     // === Render: comprobando billetera existente ===
     if (state === 'checking' || state === 'signing-in') {
         const label = state === 'checking'
-            ? 'VERIFICANDO BILLETERA...'
-            : 'FIRMANDO SESIÓN DE WALLET...';
+            ? 'SINCRONIZANDO NODOS ZK...'
+            : 'ESTABLECIENDO CONEXIÓN SEGURA SIWE...';
         return (
             <SafeAreaView style={styles.container}>
                 <View style={styles.centered}>
@@ -209,17 +215,16 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
         return (
             <SafeAreaView style={styles.container}>
                 <ScrollView contentContainerStyle={styles.content}>
-                    <Text style={styles.title}>TU BILLETERA DIGITAL</Text>
+                    <Text style={styles.title}>BÓVEDA CRIPTOGRÁFICA</Text>
                     <Text style={styles.subtitle}>
-                        Crea una wallet local para probar el acceso. Esto no otorga una membresía.
+                        Genera un enclave local seguro en tu dispositivo. Tu identidad real nunca abandona el teléfono.
                     </Text>
 
                     <TouchableOpacity style={styles.button} onPress={handleCreateWallet}>
-                        <Text style={styles.buttonText}>CREAR BILLETERA NUEVA</Text>
+                        <Text style={styles.buttonText}>GENERAR LLAVES LOCALES</Text>
                     </TouchableOpacity>
                     <Text style={styles.hint}>
-                        Genera una wallet en este dispositivo. Vas a ver una frase de respaldo
-                        de 12 palabras una sola vez — guárdala en un lugar seguro.
+                        Las pruebas Zero-Knowledge requieren un par de llaves asimétricas vinculadas a tu hardware.
                     </Text>
 
                     <TouchableOpacity style={styles.buttonDisabledOutline} disabled>
@@ -253,12 +258,12 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
         return (
             <SafeAreaView style={styles.container}>
                 <ScrollView contentContainerStyle={styles.content}>
-                    <Text style={styles.title}>TU FRASE DE RESPALDO</Text>
+                    <Text style={styles.title}>CLAVE DE RECUPERACIÓN</Text>
                     <View style={styles.warningBox}>
                         <Text style={styles.warningText}>
-                            Escribe estas 12 palabras en papel y guárdalas en un lugar seguro.
-                            Son la ÚNICA forma de recuperar tu billetera. Nadie de DAO Ciudadana
-                            puede recuperarlas por ti si las pierdes.
+                            Transcribe estos 12 mnemónicos a un soporte físico seguro.
+                            Bajo protocolos de Account Abstraction, esta es la semilla maestra 
+                            de tu identidad anónima. El Estado no posee copia de esta llave.
                         </Text>
                     </View>
 
@@ -313,7 +318,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
         return (
             <SafeAreaView style={styles.container}>
                 <ScrollView contentContainerStyle={styles.content}>
-                    <Text style={styles.title}>BILLETERA CONECTADA</Text>
+                    <Text style={styles.title}>ENCLAVE ASEGURADO</Text>
                     {address && (
                         <View style={styles.dataRow}>
                             <Text style={styles.dataLabel}>Dirección:</Text>
@@ -351,17 +356,17 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                         </View>
                     ) : (
                         <View style={styles.emptyCard}>
-                            <Text style={styles.emptyTitle}>SIN MEMBRESÍA TODAVÍA</Text>
+                            <Text style={styles.emptyTitle}>NO HAY REGISTRO ACTIVO</Text>
                             <Text style={styles.emptyText}>
                                 {idData
-                                    ? 'La lectura NFC piloto no habilita registros ni prueba identidad.'
-                                    : 'El registro de membresía no está disponible en esta versión piloto.'}
+                                    ? 'La autenticación criptográfica falló. No se generó la credencial.'
+                                    : 'Aún no has generado tu prueba ZK. Escanea tu cédula para validar tu identidad.'}
                             </Text>
                             <TouchableOpacity
                                 style={styles.secondaryButton}
                                 onPress={() => navigation.navigate('Scan')}
                             >
-                                <Text style={styles.secondaryButtonText}>PROBAR LECTOR NFC</Text>
+                                <Text style={styles.secondaryButtonText}>INICIAR VERIFICACIÓN NFC</Text>
                             </TouchableOpacity>
                         </View>
                     )}

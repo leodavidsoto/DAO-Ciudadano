@@ -361,7 +361,8 @@ export async function deriveIdentityCommitment({ recipient, scope }) {
 export async function readMembershipDeployment(
     expectedChainId,
     identityRoot = null,
-    expectedRecipient = null
+    expectedRecipient = null,
+    eip1193Provider = null
 ) {
     if (!MEMBERSHIP_CONTRACT_ADDRESS) {
         throw new ZkNotProvisionedError(
@@ -369,9 +370,12 @@ export async function readMembershipDeployment(
             ['REACT_APP_MEMBERSHIP_CONTRACT_ADDRESS']
         );
     }
-    if (!globalThis.ethereum) {
+    if (
+        !eip1193Provider ||
+        typeof eip1193Provider.request !== 'function'
+    ) {
         throw new ZkProofError(
-            'No hay un proveedor EVM disponible para consultar el scope de membresía.'
+            'No hay un proveedor EIP-1193 fijado por la sesión para consultar el scope de membresía.'
         );
     }
 
@@ -386,7 +390,7 @@ export async function readMembershipDeployment(
     }
 
     try {
-        const provider = new BrowserProvider(globalThis.ethereum);
+        const provider = new BrowserProvider(eip1193Provider);
         const network = await provider.getNetwork();
         const connectedChainId = Number(network.chainId);
         if (!Number.isSafeInteger(connectedChainId) || connectedChainId <= 0) {

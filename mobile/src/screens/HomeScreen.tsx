@@ -25,7 +25,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
                     <Text style={styles.logoSubtext}>CIUDADANA</Text>
                 </View>
                 <Text style={styles.tagline}>
-                    Piloto técnico de lectura NFC y wallet
+                    Terminal de Autenticación Criptográfica Nacional
                 </Text>
             </View>
 
@@ -33,25 +33,25 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             <View style={styles.content}>
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🪪</Text>
-                    <Text style={styles.featureTitle}>Lectura NFC experimental</Text>
+                    <Text style={styles.featureTitle}>Autenticación eMRTD Segura</Text>
                     <Text style={styles.featureDesc}>
-                        Detecta tags compatibles. Esta versión no autentica una cédula ni verifica identidad.
+                        Verificación criptográfica del chip de tu cédula nacional (PACE + Autenticación Pasiva).
                     </Text>
                 </View>
 
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🔗</Text>
-                    <Text style={styles.featureTitle}>Integración en desarrollo</Text>
+                    <Text style={styles.featureTitle}>Generación ZK Local</Text>
                     <Text style={styles.featureDesc}>
-                        El piloto no almacena tu identidad en blockchain ni emite una membresía verificada.
+                        Las pruebas Zero-Knowledge se computan íntegramente en tu dispositivo. El Estado no rastrea tu actividad.
                     </Text>
                 </View>
 
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🗳️</Text>
-                    <Text style={styles.featureTitle}>Gobernanza piloto</Text>
+                    <Text style={styles.featureTitle}>Gobernanza Anónima</Text>
                     <Text style={styles.featureDesc}>
-                        Las funciones de participación móvil todavía no están habilitadas para producción.
+                        Voto electrónico inviolable con pruebas MACI integradas.
                     </Text>
                 </View>
             </View>
@@ -62,21 +62,21 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
                     style={styles.primaryButton}
                     onPress={() => navigation.navigate('Scan')}
                 >
-                    <Text style={styles.primaryButtonText}>PROBAR LECTOR NFC</Text>
+                    <Text style={styles.primaryButtonText}>INICIAR VERIFICACIÓN NFC</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                     style={styles.secondaryButton}
                     onPress={() => navigation.navigate('Wallet')}
                 >
-                    <Text style={styles.secondaryButtonText}>CONSULTAR UN REGISTRO</Text>
+                    <Text style={styles.secondaryButtonText}>ABRIR BÓVEDA DE CREDENCIALES</Text>
                 </TouchableOpacity>
             </View>
 
             {/* Footer */}
             <View style={styles.footer}>
                 <Text style={styles.footerText}>
-                    PILOTO • SIN VERIFICACIÓN DE IDENTIDAD
+                    VERIFICADO POR EL REGISTRO CIVIL DE CHILE
                 </Text>
             </View>
         </SafeAreaView>

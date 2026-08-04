@@ -558,6 +558,28 @@ body:has(.civic-app)::-webkit-scrollbar-thumb:hover {
     font-size: 13.5px;
 }
 
+.civic-loading-copy {
+    display: grid;
+    gap: 3px;
+    text-align: left;
+}
+
+.civic-loading-title {
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .015em;
+}
+
+.civic-loading-detail {
+    max-width: 460px;
+    color: var(--civic-suave);
+    font-family: var(--civic-cuerpo);
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
 .civic-spinner {
     width: 20px;
     height: 20px;

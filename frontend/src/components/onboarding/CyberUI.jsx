@@ -53,10 +53,25 @@ export const CyberPanel = ({ title, icon, description, children, className = "" 
 );
 
 // Indicador de carga
-export const CyberLoader = ({ text = "Procesando…" }) => (
-    <div className="flex items-center gap-3">
-        <Loader2 className="w-4 h-4 animate-spin" style={{ color: '#003897' }} />
-        <span className="civic-muted text-sm">{text}</span>
+export const CyberLoader = ({ text = "Procesando…", detail = "", className = "" }) => (
+    <div
+        className={`flex items-center gap-3 ${className}`.trim()}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-busy="true"
+    >
+        <Loader2
+            aria-hidden="true"
+            className="w-4 h-4 shrink-0 animate-spin"
+            style={{ color: '#003897' }}
+        />
+        <span className="civic-loading-copy">
+            <span className="civic-loading-title">{text}</span>
+            {detail && (
+                <span className="civic-loading-detail">{detail}</span>
+            )}
+        </span>
     </div>
 );
 
