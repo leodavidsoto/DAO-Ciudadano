@@ -209,6 +209,13 @@ def deployment_blockers() -> list[str]:
         )
     if not settings.SIGNED_BALLOTS_REQUIRED:
         blockers.append("SIGNED_BALLOTS_REQUIRED debe ser true en producción")
+    if settings.ENABLE_METRICS and not settings.METRICS_TOKEN.strip():
+        # Un /metrics abierto publica el inventario de rutas, el volumen de
+        # tráfico y las latencias de toda la API a quien lo pida.
+        blockers.append(
+            "ENABLE_METRICS=true exige METRICS_TOKEN en producción: /metrics "
+            "no puede quedar público"
+        )
     if not settings.session_cookie_secure:
         blockers.append(
             "SESSION_COOKIE_SECURE debe ser true en producción: sin él la "

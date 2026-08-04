@@ -1071,3 +1071,64 @@ saltarse en silencio** (perder eso pierde datos para siempre) y que reindexar
 cierra una rotación de pepper.
 
 385 tests (362 antes).
+
+---
+
+## Novena pasada (03-08-2026) — observabilidad y regresión en iOS
+
+### P-66 (alta, corregida): `identityVerified` sin comprobar la cadena, en iOS
+
+`mobile/ios/DAOCiudadanaApp/PassportReader.swift` — la implementación PACE de
+iOS (añadida sobre `NFCPassportReader` mientras se trabajaba en otra tarea)
+calculaba:
+
+```swift
+passport.verifyPassport(masterListURL: nil)
+let passed = passport.passportDataNotTampered && passport.passportCorrectlySigned
+```
+
+Es **P-63 otra vez**, en otra plataforma. Los dos booleanos que componen
+`passed` son comprobaciones de coherencia interna del documento: los hashes
+cuadran con su propio SOD y la firma verifica con su propio Document Signer.
+Un documento **falsificado** que traiga su propio DS y su propia CSCA cumple
+ambas. La única comprobación que lo detecta —`documentSigningCertificateVerified`—
+se calculaba dos líneas más abajo y no entraba en el veredicto.
+
+Verificado leyendo la librería (`NFCPassportModel.swift:286`): con
+`masterListURL: nil`, `verifyPassport` **ni siquiera intenta** validar la
+cadena, así que ese flag se queda en `false` por defecto. Es decir, en el
+estado en que se dejó, iOS habría devuelto `identityVerified: true` para
+cualquier documento internamente coherente, incluido uno fabricado.
+
+Corregido: `passed` exige las tres, igual que `PassportReaderModule.kt`, y la
+master list se busca empaquetada (`cscaMasterList.pem`), que es el equivalente
+iOS de `assets/csca/`. Mientras no exista, iOS devuelve `identityVerified:
+false` con el motivo explícito, igual que Android.
+
+El escenario está cubierto en Android por el test `un documento que trae su
+propia raiz no se valida a si mismo`. iOS **no tiene test equivalente**: no hay
+forma de ejecutar esa librería sin dispositivo, y eso sigue siendo una brecha
+de verificación declarada.
+
+### P-67 (media, corregida): `/metrics` público
+
+`backend/main.py` — `Instrumentator().instrument(app).expose(app)` publica
+`/metrics` **sin autenticación**. Comprobado con una petición real: 200 y el
+volcado completo. No contiene PII, pero sí el inventario de rutas (incluidas
+las no documentadas), el volumen de tráfico por endpoint, las latencias y el
+recuento de errores.
+
+Ahora la ruta la sirve `app/routers/metrics.py` detrás de `METRICS_TOKEN`
+(comparación con `compare_digest`). En producción, habilitar métricas sin token
+responde 503 **y** aparece como bloqueante en `/health/ready`; fuera de
+producción se sirve sin token con un aviso en los logs.
+
+### Sentry: dos ajustes
+
+- `send_default_pii=False` explícito. Es el valor por defecto del SDK, pero
+  esta API procesa RUT, email y nombres: que esté escrito obliga a que
+  activarlo sea una decisión revisable y no un descuido.
+- `traces_sample_rate` configurable, por defecto 0.1 en vez de 1.0. Enviar el
+  100% de las transacciones es caro y ruidoso.
+
+391 tests (385 antes).

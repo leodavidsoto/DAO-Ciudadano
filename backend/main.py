@@ -84,11 +84,22 @@ if settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.APP_ENV,
-        traces_sample_rate=1.0,
+        traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
+        # Explícito aunque sea el valor por defecto del SDK: esta API procesa
+        # RUT, email y nombres de ciudadanos chilenos. Con send_default_pii
+        # activo, Sentry adjunta cookies (incluida la de sesión), cabeceras e
+        # IP a cada evento y los saca del país. Que esté escrito aquí obliga a
+        # que activarlo sea una decisión deliberada y revisable.
+        send_default_pii=False,
     )
 
 if settings.ENABLE_METRICS:
-    Instrumentator().instrument(app).expose(app)
+    # `Instrumentator().expose(app)` publica /metrics SIN autenticación. Eso
+    # revela a cualquiera el inventario de rutas, el volumen de tráfico por
+    # endpoint, las latencias y el recuento de errores — un mapa del sistema
+    # gratis para quien lo pida. Se instrumenta, pero la ruta la sirve
+    # `app/routers/metrics.py` detrás de un token.
+    Instrumentator().instrument(app)
 
 
 # === Security Middleware Stack ===
@@ -210,6 +221,11 @@ app.include_router(governance_router, prefix="/api")
 app.include_router(elections_router, prefix="/api")
 app.include_router(maci_router, prefix="/api")
 app.include_router(erc4337_router, prefix="/api")
+# Sin prefijo /api: los scrapers de Prometheus esperan /metrics en la raíz.
+if settings.ENABLE_METRICS:
+    from app.routers.metrics import router as metrics_router
+
+    app.include_router(metrics_router)
 
 
 # Process liveness: no external dependency checks. Orchestrators can use this

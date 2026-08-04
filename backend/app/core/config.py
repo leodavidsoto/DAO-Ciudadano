@@ -244,7 +244,16 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
     # === Observabilidad (Fase 5.4) ===
     SENTRY_DSN: str = os.environ.get('SENTRY_DSN', '')
+    # 1.0 envía el 100% de las transacciones: caro y ruidoso en producción.
+    SENTRY_TRACES_SAMPLE_RATE: float = float(
+        os.environ.get('SENTRY_TRACES_SAMPLE_RATE', '0.1')
+    )
     ENABLE_METRICS: bool = os.environ.get('ENABLE_METRICS', 'false').lower() == 'true'
+    # Token para /metrics. Sin él, las métricas describen el sistema entero
+    # (rutas, tráfico, latencias, errores) a cualquiera que las pida. En
+    # producción, habilitar métricas sin token hace que el endpoint responda
+    # 503 en vez de publicarse abierto.
+    METRICS_TOKEN: str = os.environ.get('METRICS_TOKEN', '')
     
     model_config = SettingsConfigDict(
         env_file=".env",
