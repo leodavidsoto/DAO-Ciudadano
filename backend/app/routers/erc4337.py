@@ -34,7 +34,12 @@ from typing import List, Optional
 
 from ..core.config import settings
 from ..core.database import get_collection
-from ..services import chain_service, paymaster_service
+from ..services import (
+    chain_service,
+    membership_records,
+    paymaster_service,
+    safe_4337,
+)
 from .deps import current_address, ensure_acts_as_self
 
 logger = logging.getLogger(__name__)
@@ -587,6 +592,35 @@ async def submit_mint(
             status_code=422, detail="Falta la firma del owner de la Safe."
         )
 
+    # La firma se VERIFICA antes de retransmitir. Antes se enviaba tal cual:
+    # el EntryPoint la habría rechazado on-chain, pero el ciudadano recibía un
+    # error opaco del bundler tras un viaje de ida y vuelta, y el backend
+    # retransmitía una operación cuya autorización nadie había mirado.
+    #
+    # Verificar no es firmar: el servidor sigue sin ser propietario de la Safe.
+    try:
+        recovered = safe_4337.recover_owner(
+            signed,
+            paymaster_service.ENTRYPOINT_V07,
+            settings.SIWE_CHAIN_ID,
+            settings.SAFE_4337_MODULE_ADDRESS,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"La firma SafeOp no se pudo verificar: {exc}",
+        ) from exc
+
+    if recovered.lower() != record["owner_address"]:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "La firma SafeOp no corresponde al propietario de la Safe. "
+                "Se firmó una operación distinta de la preparada, o la firmó "
+                "otra wallet."
+            ),
+        )
+
     import asyncio
 
     try:
@@ -652,6 +686,18 @@ async def get_operation(user_operation_hash: str):
     token_id = await asyncio.to_thread(
         chain_service.membership_token_of, record["owner_address"]
     )
+
+    # Sin esto, el minteo patrocinado emitía el SBT on-chain y NO creaba la
+    # membresía: la persona tenía su credencial y quedaba fuera de la
+    # gobernanza, porque el gate consulta MongoDB. El camino del relayer sí lo
+    # hacía; este se había quedado atrás.
+    if token_id:
+        await membership_records.reconcile_onchain_membership(
+            wallet_address=record["owner_address"],
+            token_id=token_id,
+            tx_hash=tx_hash,
+            nullifier_hash=record.get("nullifier_hash"),
+        )
 
     await erc4337_operations_collection().update_one(
         {"user_operation_hash": user_operation_hash},

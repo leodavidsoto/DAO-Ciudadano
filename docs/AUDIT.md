@@ -1276,3 +1276,69 @@ loop) y hay un tope de 5000 papeletas por auditoría, declarado en `truncated`.
   bloqueante de `SIGNED_BALLOTS_REQUIRED`.
 
 414 tests (402 antes).
+
+---
+
+## Duodécima pasada (04-08-2026) — ERC-4337: lo que faltaba de verdad (D-1)
+
+Se reportó que el backend "no soporta la recepción ni retransmisión al
+Bundler". **Es inexacto**: `app/routers/erc4337.py` ya implementaba el flujo
+completo —`/config`, `/prepare-mint`, `/submit-mint`, `/operations/{hash}`—
+con validación de derivación CREATE2 de la Safe, binding del owner, decodifi-
+cación de las dos capas del callData, comprobación de que la prueba declarada
+es la ejecutada, rechazo si el Paymaster altera campos inmutables, idempotencia
+por nullifier y reconciliación del estado. El EntryPoint canónico v0.7
+(`0x0000000071727De22E5E9d8BAf0edAc6f37da032`) ya estaba fijado.
+
+Lo que realmente bloquea el flujo es **configuración**: `ERC4337_ENABLED=false`
+y sin `BUNDLER_RPC_URL`, todo falla cerrado con 503. Esa credencial la tiene
+que inyectar el operador; inventarla no es una opción.
+
+Auditando el camino aparecieron dos defectos reales.
+
+### P-70 (alta, corregida): el minteo patrocinado no creaba la membresía
+
+`app/routers/erc4337.py` — al confirmarse la operación se actualizaba el
+registro de `erc4337_operations` con el `token_id`, pero **`members` no se
+tocaba nunca**. El camino del relayer (`/membership/mint-zk`) sí llamaba a
+`_reconcile_member_record`; el de ERC-4337 se había quedado atrás.
+
+Consecuencia: el ciudadano recibía su SBT on-chain —el objetivo entero de D-1,
+onboarding sin gas— y **quedaba fuera de la gobernanza**, porque el gate de
+membresía consulta MongoDB (`MEMBERSHIP_SOURCE=mongo`). Credencial válida,
+imposible votar, y sin ningún error que lo explicara.
+
+La reconciliación se movió a `app/services/membership_records.py` para que los
+dos caminos compartan exactamente el mismo registro; tenerla duplicada en cada
+router fue precisamente lo que permitió que uno se quedara atrás.
+
+### P-71 (media, corregida): se retransmitía sin verificar la firma SafeOp
+
+`/submit-mint` comprobaba que solo el campo `signature` hubiera cambiado
+respecto a lo preparado, pero **no verificaba la firma**. El EntryPoint la
+habría rechazado on-chain, así que no era un agujero de autorización, pero:
+
+* el ciudadano recibía un error opaco del bundler tras un viaje de ida y vuelta,
+* y el backend retransmitía una operación cuya autorización nadie había mirado.
+
+El propio docstring de `paymaster_service.sign_user_operation` decía que
+`safe_op_digest` se conservaba "para VALIDAR que la firma recibida corresponde
+al owner declarado". La intención estaba escrita; el cableado no existía.
+
+Ahora `safe_4337.recover_owner()` recupera el firmante del digest EIP-712 y
+`/submit-mint` responde 422 sin retransmitir si no es el propietario. Se
+admiten las dos convenciones reales: `v` 27/28 (firma EIP-712 directa) y `v`
+31/32 (variante de Safe en que el digest va envuelto en el prefijo de
+`personal_sign`). Verificar no es firmar: el backend sigue sin ser propietario
+ni custodio de ninguna Safe.
+
+### Sobre Biconomy
+
+`PAYMASTER_SPONSOR_METHOD` es configurable y el parseo acepta la forma de
+respuesta de Pimlico/Alchemy. **No se ha probado contra Biconomy** y no se
+declara compatible: su API v2 usa parámetros propios (`mode`,
+`sponsorshipInfo`) que no se pueden implementar a ciegas. Añadir código
+específico sin credenciales para ejecutarlo sería exactamente la capacidad
+fingida que este repositorio no admite.
+
+420 tests (414 antes).

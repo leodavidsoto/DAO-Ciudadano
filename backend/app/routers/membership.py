@@ -14,13 +14,12 @@ from typing import List
 from datetime import datetime, timezone
 import asyncio
 import logging
-import uuid as _uuid
 
 from pymongo.errors import DuplicateKeyError
 
 from ..core.database import get_collection
 from ..models import MintSBTRequest, MintSBTResponse
-from ..services import chain_service
+from ..services import chain_service, membership_records
 from ..services.blockchain_service import MintingUnavailable, blockchain_service
 from ..services.membership_verifier import (
     invalidate_cached_membership,
@@ -33,6 +32,7 @@ from .deps import current_address, ensure_acts_as_self
 def mint_operations_collection():
     """Operaciones de minteo, para idempotencia y reconciliación."""
     return get_collection("mint_operations")
+
 
 logger = logging.getLogger(__name__)
 
@@ -260,46 +260,11 @@ async def mint_with_zk_proof(
     # Reconciliar `members`: sin esto, /membership/member/{wallet} y las
     # estadísticas no ven el SBT recién emitido, y el gate de gobernanza
     # rechazaría a un miembro que sí tiene su credencial on-chain.
-    await _reconcile_member_record(
+    await membership_records.reconcile_onchain_membership(
         wallet_address=request.wallet_address,
         token_id=token_id,
         tx_hash=tx_hash,
         nullifier_hash=request.nullifier_hash.lower(),
     )
-    invalidate_cached_membership(request.wallet_address)
 
     return MintSBTResponse(ok=True, token_id=token_id, tx_hash=tx_hash)
-
-
-async def _reconcile_member_record(
-    wallet_address: str, token_id, tx_hash: str, nullifier_hash: str = None
-):
-    """Refleja en `members` un SBT emitido por la vía ZK.
-
-    `identity_verified` va en True porque la prueba ZK ES la verificación: el
-    contrato solo acepta raíces que el emisor aprobó tras consumir un grant
-    civil. Es el único camino que puede ponerlo en True — el minteo demo nunca
-    lo hace.
-    """
-    from ..core.database import members_collection
-
-    await members_collection().update_one(
-        {"wallet_address": wallet_address.lower()},
-        {"$set": {
-            "wallet_address": wallet_address.lower(),
-            "token_id": token_id,
-            "tx_hash": tx_hash,
-            "nullifier_hash": nullifier_hash,
-            "status": "active",
-            "issuance_mode": "onchain",
-            "identity_verified": True,
-            # No hay doc_hash: el documento nunca llegó al servidor.
-            "assurance_level": "ZK_VERIFIED",
-            "updated_at": datetime.now(timezone.utc),
-        },
-         "$setOnInsert": {
-             "id": str(_uuid.uuid4()),
-             "created_at": datetime.now(timezone.utc),
-         }},
-        upsert=True,
-    )

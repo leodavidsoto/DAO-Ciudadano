@@ -196,6 +196,73 @@ def pack_signature(owner_signatures: bytes, validity: SafeOpValidity) -> str:
     ).hex()
 
 
+def split_packed_signature(signature) -> tuple[SafeOpValidity, bytes]:
+    """Separa `validAfter ‖ validUntil ‖ firma` tal como lo empaqueta el módulo.
+
+    Los 12 primeros bytes son la ventana de validez que el módulo lee del
+    propio campo `signature`; el resto es la firma ECDSA del propietario.
+    """
+    raw = _to_bytes(signature)
+    if len(raw) < 12 + 65:
+        raise ValueError(
+            "La firma SafeOp debe ser validAfter(6) + validUntil(6) + 65 bytes"
+        )
+    validity = SafeOpValidity(
+        valid_after=int.from_bytes(raw[:6], "big"),
+        valid_until=int.from_bytes(raw[6:12], "big"),
+    )
+    return validity, raw[12:]
+
+
+def recover_owner(
+    user_op: dict,
+    entrypoint: str,
+    chain_id: int,
+    module_address: str,
+) -> str:
+    """Dirección que firmó esta SafeOp. Lanza ValueError si no se puede recuperar.
+
+    Verificar no es firmar: el backend nunca es propietario de la Safe, pero
+    sí puede comprobar que la operación que va a retransmitir la autorizó
+    quien dice. Sin esto se pagaba el viaje al bundler para recibir un rechazo
+    opaco, y se retransmitía una operación cuya autorización nadie miró.
+
+    Se admiten las dos convenciones que producen las wallets reales:
+    `v` 27/28 para una firma EIP-712 directa y `v` 31/32 para la variante de
+    Safe en que el digest se firmó envuelto en el prefijo de `personal_sign`.
+    """
+    from eth_keys.datatypes import Signature
+
+    validity, owner_signature = split_packed_signature(user_op.get("signature"))
+    if len(owner_signature) != 65:
+        raise ValueError(
+            "Solo se admite una Safe de un propietario (firma de 65 bytes)"
+        )
+
+    digest = safe_op_digest(
+        {k: v for k, v in user_op.items() if k != "signature"},
+        entrypoint,
+        chain_id,
+        module_address,
+        validity,
+    )
+
+    v = owner_signature[64]
+    if v in (31, 32):
+        # Convención de Safe: el propietario firmó el digest envuelto en el
+        # prefijo de personal_sign. Hay que reproducir ese envoltorio o la
+        # dirección recuperada sería otra cualquiera.
+        digest = keccak(b"\x19Ethereum Signed Message:\n32" + digest)
+        v -= 4
+    if v in (27, 28):
+        v -= 27
+    if v not in (0, 1):
+        raise ValueError(f"Parámetro de recuperación inválido en la firma: {v}")
+
+    signature = Signature(owner_signature[:64] + bytes([v]))
+    return signature.recover_public_key_from_msg_hash(digest).to_checksum_address()
+
+
 def sign_user_operation(
     user_op: dict,
     private_key: str,

@@ -396,3 +396,191 @@ def test_an_already_deployed_safe_needs_no_derivation(monkeypatch):
     from app.routers.erc4337 import _assert_safe_address_is_derived
 
     _assert_safe_address_is_derived({}, VECTOR_SAFE)
+
+
+# === Verificación de la firma SafeOp antes de retransmitir (D-1) ===
+
+MODULE = "0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226"
+
+
+def _complete_user_op():
+    """UserOperation con todos los campos que el struct SafeOp exige."""
+    return {
+        "sender": "0x" + "11" * 20,
+        "nonce": "0x0",
+        "callData": "0xdeadbeef",
+        "callGasLimit": "0x1",
+        "verificationGasLimit": "0x2",
+        "preVerificationGas": "0x3",
+        "maxFeePerGas": "0x4",
+        "maxPriorityFeePerGas": "0x5",
+    }
+
+
+def _signed_user_op(account, prepared, chain_id=11155111, module=MODULE):
+    """Firma una SafeOp como lo haría la wallet del ciudadano."""
+    from app.services import safe_4337
+
+    return safe_4337.sign_user_operation(
+        {k: v for k, v in prepared.items() if k != "signature"},
+        account.key.hex(),
+        pm.ENTRYPOINT_V07,
+        chain_id,
+        module,
+    )
+
+
+def test_a_safe_op_signature_recovers_its_owner():
+    """Ida y vuelta: lo que firma la wallet es lo que el backend recupera."""
+    from app.services import safe_4337
+
+    owner = Account.from_key("0x" + "c1" * 32)
+    user_op = _complete_user_op()
+    signed = safe_4337.sign_user_operation(
+        user_op, owner.key.hex(), pm.ENTRYPOINT_V07, 11155111, MODULE
+    )
+
+    recovered = safe_4337.recover_owner(
+        signed, pm.ENTRYPOINT_V07, 11155111, MODULE
+    )
+
+    assert recovered.lower() == owner.address.lower()
+
+
+def test_a_signature_over_a_different_operation_does_not_verify():
+    """Firmar una cosa y enviar otra tiene que detectarse aquí, no on-chain."""
+    from app.services import safe_4337
+
+    owner = Account.from_key("0x" + "c1" * 32)
+    signed = safe_4337.sign_user_operation(
+        _complete_user_op(), owner.key.hex(), pm.ENTRYPOINT_V07, 11155111, MODULE,
+    )
+    # El callData cambia DESPUÉS de firmar.
+    tampered = {**signed, "callData": "0xfeedface"}
+
+    recovered = safe_4337.recover_owner(
+        tampered, pm.ENTRYPOINT_V07, 11155111, MODULE
+    )
+
+    assert recovered.lower() != owner.address.lower()
+
+
+def test_a_malformed_signature_is_rejected_with_a_reason():
+    from app.services import safe_4337
+
+    with pytest.raises(ValueError):
+        safe_4337.recover_owner(
+            {"sender": "0x" + "11" * 20, "signature": "0x1234"},
+            pm.ENTRYPOINT_V07, 11155111, MODULE,
+        )
+
+
+async def test_submit_rejects_a_signature_from_another_wallet(client, monkeypatch):
+    """El backend no retransmite una operación que no autorizó su dueño."""
+    from app.routers import erc4337 as erc4337_router
+
+    owner = Account.from_key("0x" + "d2" * 32)
+    impostor = Account.from_key("0x" + "e3" * 32)
+    headers = await _session(client, owner)
+    monkeypatch.setattr(settings, "SAFE_4337_MODULE_ADDRESS", MODULE)
+
+    prepared = {**_complete_user_op(), "signature": "0x"}
+    await erc4337_router.erc4337_operations_collection().insert_one({
+        "operation_id": "op_test_firma",
+        "nullifier_hash": "0x" + "aa" * 32,
+        "owner_address": owner.address.lower(),
+        "safe_address": prepared["sender"].lower(),
+        "prepared_user_operation": prepared,
+        "status": "prepared",
+    })
+
+    # La firma la produce OTRA wallet sobre la misma operación.
+    signed = _signed_user_op(impostor, prepared)
+
+    relayed = []
+    monkeypatch.setattr(
+        pm, "send_user_operation",
+        lambda op: relayed.append(op) or "0xhash",
+    )
+
+    response = await client.post("/api/erc4337/submit-mint", json={
+        "operation_id": "op_test_firma",
+        "owner_address": owner.address.lower(),
+        "safe_address": prepared["sender"].lower(),
+        "entry_point": pm.ENTRYPOINT_V07,
+        "user_operation": signed,
+    }, headers=headers)
+
+    assert response.status_code == 422
+    assert "no corresponde al propietario" in response.json()["detail"]
+    assert relayed == []  # y no se gastó el viaje al bundler
+
+
+async def test_submit_relays_a_correctly_signed_operation(client, monkeypatch):
+    from app.routers import erc4337 as erc4337_router
+
+    owner = Account.from_key("0x" + "d2" * 32)
+    headers = await _session(client, owner)
+    monkeypatch.setattr(settings, "SAFE_4337_MODULE_ADDRESS", MODULE)
+
+    prepared = {**_complete_user_op(), "signature": "0x"}
+    await erc4337_router.erc4337_operations_collection().insert_one({
+        "operation_id": "op_test_ok",
+        "nullifier_hash": "0x" + "bb" * 32,
+        "owner_address": owner.address.lower(),
+        "safe_address": prepared["sender"].lower(),
+        "prepared_user_operation": prepared,
+        "status": "prepared",
+    })
+    signed = _signed_user_op(owner, prepared)
+    monkeypatch.setattr(
+        pm, "send_user_operation", lambda op: "0x" + "fe" * 32
+    )
+
+    response = await client.post("/api/erc4337/submit-mint", json={
+        "operation_id": "op_test_ok",
+        "owner_address": owner.address.lower(),
+        "safe_address": prepared["sender"].lower(),
+        "entry_point": pm.ENTRYPOINT_V07,
+        "user_operation": signed,
+    }, headers=headers)
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["user_operation_hash"] == "0x" + "fe" * 32
+
+
+# === La membresía patrocinada llega a la gobernanza (P-70) ===
+
+async def test_a_sponsored_mint_creates_the_membership(client, monkeypatch):
+    """Sin esto, el ciudadano obtenía el SBT y no podía votar."""
+    from app.core.database import members_collection
+    from app.routers import erc4337 as erc4337_router
+    from app.services import chain_service
+
+    owner = Account.from_key("0x" + "d2" * 32)
+    op_hash = "0x" + "cc" * 32
+    await erc4337_router.erc4337_operations_collection().insert_one({
+        "operation_id": "op_confirmada",
+        "nullifier_hash": "0x" + "dd" * 32,
+        "owner_address": owner.address.lower(),
+        "safe_address": "0x" + "11" * 20,
+        "user_operation_hash": op_hash,
+        "status": "submitted",
+    })
+    monkeypatch.setattr(
+        pm, "get_user_operation_receipt",
+        lambda h: {"success": True, "receipt": {"transactionHash": "0xtx"}},
+    )
+    monkeypatch.setattr(chain_service, "membership_token_of", lambda addr: 77)
+
+    body = (await client.get(f"/api/erc4337/operations/{op_hash}")).json()
+
+    assert body["status"] == "confirmed"
+    assert body["token_id"] == 77
+    member = await members_collection().find_one(
+        {"wallet_address": owner.address.lower()}
+    )
+    assert member is not None, "el minteo patrocinado no creó la membresía"
+    assert member["issuance_mode"] == "onchain"
+    assert member["identity_verified"] is True
+    assert member["token_id"] == 77

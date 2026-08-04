@@ -15,9 +15,11 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from app.core.database import members_collection
-from app.routers.membership import (
-    _reconcile_member_record,
-    mint_operations_collection,
+from app.routers.membership import mint_operations_collection
+# La reconciliación se movió a services/ para que la compartan el relayer y el
+# camino ERC-4337, que antes no la ejecutaba (ver AUDIT P-70).
+from app.services.membership_records import (
+    reconcile_onchain_membership as _reconcile_member_record,
 )
 
 CITIZEN = Account.from_key("0x" + "f6" * 32)
