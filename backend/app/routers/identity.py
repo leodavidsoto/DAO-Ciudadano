@@ -16,6 +16,7 @@ Lo que sí exige, y falla cerrado si falta:
   - emisor configurado (IDENTITY_ISSUER_PRIVATE_KEY);
   - contrato accesible para leer el scope y aprobar la raíz.
 """
+
 import logging
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException

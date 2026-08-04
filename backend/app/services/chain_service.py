@@ -12,6 +12,7 @@ DEFAULT_ADMIN_ROLE). La selección se hace explícitamente con `MINT_MODE`;
 una configuración incompleta o inválida falla y nunca degrada a demo ni
 fabrica un `tx_hash`.
 """
+
 import logging
 import threading
 import time
@@ -311,7 +312,9 @@ def mint_sbt_onchain(
     from web3 import Web3
 
     if not is_configured():
-        raise ChainMintError("Minteo on-chain no está configurado (SEPOLIA_RPC_URL/SBT_CONTRACT_ADDRESS/MINTER_PRIVATE_KEY).")
+        raise ChainMintError(
+            "Minteo on-chain no está configurado (SEPOLIA_RPC_URL/SBT_CONTRACT_ADDRESS/MINTER_PRIVATE_KEY)."
+        )
 
     operational = runtime_status()
     if not operational.get("ready"):
@@ -326,7 +329,9 @@ def mint_sbt_onchain(
         to = Web3.to_checksum_address(wallet_address)
         identity_hash_bytes = bytes.fromhex(identity_hash_hex.removeprefix("0x"))
         if len(identity_hash_bytes) != 32:
-            raise ChainMintError(f"identityHash debe ser bytes32 (32 bytes), recibido {len(identity_hash_bytes)}.")
+            raise ChainMintError(
+                f"identityHash debe ser bytes32 (32 bytes), recibido {len(identity_hash_bytes)}."
+            )
 
         # Serialize nonce allocation/submission within this process. A real
         # production release still needs a distributed nonce manager or
@@ -335,18 +340,22 @@ def mint_sbt_onchain(
             nonce = w3.eth.get_transaction_count(account.address, "pending")
             tx = contract.functions.mintMembership(
                 to, identity_hash_bytes, assurance_level, token_uri
-            ).build_transaction({
-                "from": account.address,
-                "nonce": nonce,
-                "chainId": SEPOLIA_CHAIN_ID,
-            })
+            ).build_transaction(
+                {
+                    "from": account.address,
+                    "nonce": nonce,
+                    "chainId": SEPOLIA_CHAIN_ID,
+                }
+            )
 
             signed = account.sign_transaction(tx)
             tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
 
         if receipt.status != 1:
-            raise ChainMintError(f"La transacción se revirtió on-chain (tx {tx_hash.hex()}).")
+            raise ChainMintError(
+                f"La transacción se revirtió on-chain (tx {tx_hash.hex()})."
+            )
 
         token_id = None
         try:
@@ -388,7 +397,9 @@ def mint_sbt_onchain(
             wallet_address,
             type(e).__name__,
         )
-        raise ChainMintError("Fallo interno al enviar o confirmar la transacción") from e
+        raise ChainMintError(
+            "Fallo interno al enviar o confirmar la transacción"
+        ) from e
 
 
 # === Modelo ZK (ADR-001, D-2) ===================================================
@@ -447,11 +458,15 @@ def approve_identity_root(identity_root: int) -> Optional[str]:
         w3, contract, account = _client()
         with _nonce_lock:
             nonce = w3.eth.get_transaction_count(account.address, "pending")
-            tx = contract.functions.approveIdentityRoot(identity_root).build_transaction({
-                "from": account.address,
-                "nonce": nonce,
-                "chainId": SEPOLIA_CHAIN_ID,
-            })
+            tx = contract.functions.approveIdentityRoot(
+                identity_root
+            ).build_transaction(
+                {
+                    "from": account.address,
+                    "nonce": nonce,
+                    "chainId": SEPOLIA_CHAIN_ID,
+                }
+            )
             signed = account.sign_transaction(tx)
             tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
@@ -506,17 +521,21 @@ def mint_with_proof(
                 [int(v) for v in proof_c],
                 nullifier_bytes,
                 int(identity_root),
-            ).build_transaction({
-                "from": account.address,
-                "nonce": nonce,
-                "chainId": SEPOLIA_CHAIN_ID,
-            })
+            ).build_transaction(
+                {
+                    "from": account.address,
+                    "nonce": nonce,
+                    "chainId": SEPOLIA_CHAIN_ID,
+                }
+            )
             signed = account.sign_transaction(tx)
             tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
 
         if receipt.status != 1:
-            raise ChainMintError(f"El minteo se revirtió on-chain (tx {tx_hash.hex()}).")
+            raise ChainMintError(
+                f"El minteo se revirtió on-chain (tx {tx_hash.hex()})."
+            )
 
         token_id = None
         try:
@@ -524,7 +543,9 @@ def mint_with_proof(
             if events:
                 token_id = int(events[0]["args"]["tokenId"])
         except Exception as e:
-            logger.warning("No se pudo leer el tokenId del recibo (%s)", type(e).__name__)
+            logger.warning(
+                "No se pudo leer el tokenId del recibo (%s)", type(e).__name__
+            )
 
         if token_id is None:
             try:
@@ -546,7 +567,9 @@ def mint_with_proof(
         raise
     except Exception as e:
         logger.error("Error minteando con prueba ZK (%s)", type(e).__name__)
-        raise ChainMintError("Fallo interno al enviar o confirmar la transacción") from e
+        raise ChainMintError(
+            "Fallo interno al enviar o confirmar la transacción"
+        ) from e
 
 
 def has_membership(wallet_address: str) -> bool:
@@ -575,9 +598,7 @@ def has_membership(wallet_address: str) -> bool:
         # Sin exc_info y sin el texto del error: la URL del RPC puede llevar
         # una API key y acaba en los logs del proveedor.
         logger.error("No se pudo leer hasMembership() (%s)", type(exc).__name__)
-        raise ChainReadError(
-            "No se pudo consultar la membresía on-chain."
-        ) from exc
+        raise ChainReadError("No se pudo consultar la membresía on-chain.") from exc
 
 
 def membership_token_of(wallet_address: str) -> Optional[int]:
@@ -606,12 +627,20 @@ def membership_token_of(wallet_address: str) -> Optional[int]:
 # === MACICoordinator ==========================================================
 
 _MACI_ABI = [
-    {"inputs": [], "name": "coordinatorPubKeyX",
-     "outputs": [{"name": "", "type": "uint256"}],
-     "stateMutability": "view", "type": "function"},
-    {"inputs": [], "name": "coordinatorPubKeyY",
-     "outputs": [{"name": "", "type": "uint256"}],
-     "stateMutability": "view", "type": "function"},
+    {
+        "inputs": [],
+        "name": "coordinatorPubKeyX",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "coordinatorPubKeyY",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 

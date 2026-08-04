@@ -2,6 +2,7 @@
 Authentication Router
 Handles ClaveÚnica, NFC, and Liveness detection endpoints
 """
+
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
 from typing import Optional
 import logging
@@ -13,9 +14,15 @@ import io
 from PIL import Image
 
 from ..models import (
-    ClaveUnicaRequest, ClaveUnicaResponse,
-    NFCRequest, NFCResponse, LivenessResponse,
-    User, UserRegisterRequest, UserLoginRequest, UserResponse,
+    ClaveUnicaRequest,
+    ClaveUnicaResponse,
+    NFCRequest,
+    NFCResponse,
+    LivenessResponse,
+    User,
+    UserRegisterRequest,
+    UserLoginRequest,
+    UserResponse,
 )
 from ..core import readiness
 from ..core.config import settings
@@ -102,13 +109,9 @@ async def authenticate_nfc(request: Optional[NFCRequest] = None):
         else:
             chip_serial = f"DEMO-NFC-RANDOM-{uuid.uuid4().hex[:8].upper()}"
         doc_hash = f"0x{generate_short_hash('nfc_doc_' + chip_serial)}"
-        
-        return NFCResponse(
-            ok=True,
-            chip_serial=chip_serial,
-            doc_hash=doc_hash
-        )
-        
+
+        return NFCResponse(ok=True, chip_serial=chip_serial, doc_hash=doc_hash)
+
     except Exception as e:
         logger.error(f"Error in NFC auth: {e}")
         return NFCResponse(ok=False, error="No se pudo completar la lectura NFC.")
@@ -124,23 +127,23 @@ async def analyze_liveness(file: UploadFile = File(...)):
     evidence and is never persisted as one.
     """
     try:
-        if not file.content_type or not file.content_type.startswith('image/'):
+        if not file.content_type or not file.content_type.startswith("image/"):
             return LivenessResponse(ok=False, error="El archivo debe ser una imagen")
-        
+
         # Read and validate image
         contents = await file.read()
         if len(contents) > 10 * 1024 * 1024:  # 10MB limit
             return LivenessResponse(ok=False, error="Imagen muy grande (máximo 10MB)")
-        
+
         try:
             image = Image.open(io.BytesIO(contents))
             image.verify()
         except Exception:
             return LivenessResponse(ok=False, error="Imagen inválida")
-        
+
         # Convert to base64 for LLM
-        base64_image = base64.b64encode(contents).decode('utf-8')
-        
+        base64_image = base64.b64encode(contents).decode("utf-8")
+
         # Check for API key
         api_key = settings.EMERGENT_LLM_KEY
         if not api_key:
@@ -157,8 +160,12 @@ async def analyze_liveness(file: UploadFile = File(...)):
         else:
             # Real LLM analysis
             try:
-                from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
-                
+                from emergentintegrations.llm.chat import (
+                    LlmChat,
+                    UserMessage,
+                    ImageContent,
+                )
+
                 chat = LlmChat(
                     api_key=api_key,
                     session_id=f"liveness_{uuid.uuid4()}",
@@ -168,35 +175,41 @@ async def analyze_liveness(file: UploadFile = File(...)):
                     verificados. El score representa únicamente qué tan
                     consistente parece la imagen con un selfie normal.
 
-                    Formato: "SCORE: 0.85 | ANÁLISIS: [tu análisis detallado]" """
+                    Formato: "SCORE: 0.85 | ANÁLISIS: [tu análisis detallado]" """,
                 ).with_model("openai", "gpt-4o")
-                
+
                 image_content = ImageContent(image_base64=base64_image)
                 user_message = UserMessage(
                     text=(
                         "Describe indicios visuales de un selfie sin afirmar que "
                         "la presencia en vivo está verificada."
                     ),
-                    file_contents=[image_content]
+                    file_contents=[image_content],
                 )
-                
+
                 response = await chat.send_message(user_message)
-                
+
                 # Parse response
                 score = 0.5
                 analysis = response
-                
+
                 if "SCORE:" in response:
                     try:
                         score_part = response.split("SCORE:")[1].split("|")[0].strip()
                         score = float(score_part)
                         if "|" in response:
-                            analysis = response.split("|", 1)[1].replace("ANÁLISIS:", "").strip()
+                            analysis = (
+                                response.split("|", 1)[1]
+                                .replace("ANÁLISIS:", "")
+                                .strip()
+                            )
                     except (ValueError, IndexError):
                         pass
-                        
+
             except ImportError:
-                logger.warning("emergentintegrations not available; liveness returns no score")
+                logger.warning(
+                    "emergentintegrations not available; liveness returns no score"
+                )
                 score = None
                 analysis = (
                     "DEMO: la biblioteca de análisis no está disponible, así "
@@ -218,13 +231,9 @@ async def analyze_liveness(file: UploadFile = File(...)):
                 "DEMO: heurística sobre una sola imagen; no constituye una "
                 f"verificación de presencia en vivo. {analysis}"
             )
-        
-        return LivenessResponse(
-            ok=True,
-            score=score,
-            analysis=analysis
-        )
-        
+
+        return LivenessResponse(ok=True, score=score, analysis=analysis)
+
     except Exception as e:
         logger.error(f"Error in liveness detection: {e}")
         return LivenessResponse(ok=False, error="No se pudo procesar la imagen.")
@@ -237,14 +246,14 @@ def validate_rut(rut: str) -> bool:
     """Validate Chilean RUT format and check digit"""
     # Clean RUT
     rut = rut.replace(".", "").replace("-", "").upper()
-    
+
     if len(rut) < 8 or len(rut) > 12:
         return False
-    
+
     # Separate number and check digit
     body = rut[:-1]
     check = rut[-1]
-    
+
     try:
         # Calculate check digit
         sum_val = 0
@@ -252,7 +261,7 @@ def validate_rut(rut: str) -> bool:
         for digit in reversed(body):
             sum_val += int(digit) * multiplier
             multiplier = multiplier + 1 if multiplier < 7 else 2
-        
+
         remainder = 11 - (sum_val % 11)
         if remainder == 11:
             expected = "0"
@@ -260,7 +269,7 @@ def validate_rut(rut: str) -> bool:
             expected = "K"
         else:
             expected = str(remainder)
-        
+
         return check == expected
     except ValueError:
         return False
@@ -271,14 +280,14 @@ def format_rut(rut: str) -> str:
     rut = rut.replace(".", "").replace("-", "").upper()
     body = rut[:-1]
     check = rut[-1]
-    
+
     # Format with dots
     formatted = ""
     for i, char in enumerate(reversed(body)):
         if i > 0 and i % 3 == 0:
             formatted = "." + formatted
         formatted = char + formatted
-    
+
     return f"{formatted}-{check}"
 
 
@@ -300,13 +309,15 @@ async def register_user(request: UserRegisterRequest):
 
         # Validate RUT
         if not validate_rut(request.rut):
-            return UserResponse(ok=False, error="RUT inválido. Verifica el formato (ej: 12345678-9)")
+            return UserResponse(
+                ok=False, error="RUT inválido. Verifica el formato (ej: 12345678-9)"
+            )
 
         # Format RUT
         formatted_rut = format_rut(request.rut)
 
         # Validate email
-        email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        email_regex = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
         if not re.match(email_regex, request.email):
             return UserResponse(ok=False, error="Email inválido")
 
@@ -328,7 +339,11 @@ async def register_user(request: UserRegisterRequest):
             return UserResponse(ok=False, error="Este RUT ya está registrado")
 
         existing_email = await users_collection().find_one(
-            {"email_key": {"$in": lookup_key_candidates(normalized_email, domain="email")}}
+            {
+                "email_key": {
+                    "$in": lookup_key_candidates(normalized_email, domain="email")
+                }
+            }
         )
         if existing_email:
             return UserResponse(ok=False, error="Este email ya está registrado")
@@ -361,7 +376,9 @@ async def register_user(request: UserRegisterRequest):
         raise
     except Exception as e:
         logger.error(f"Error in registration: {e}")
-        return UserResponse(ok=False, error="No se pudo completar el registro. Intenta de nuevo.")
+        return UserResponse(
+            ok=False, error="No se pudo completar el registro. Intenta de nuevo."
+        )
 
 
 @router.post("/login", response_model=UserResponse)
@@ -385,10 +402,14 @@ async def login_user(request: UserLoginRequest):
         # rotación, un usuario aún no reindexado tiene que poder entrar. Fuera
         # de una rotación la lista tiene un solo elemento y la consulta es la
         # misma de siempre.
-        user_doc = await users_collection().find_one({
-            "rut_key": {"$in": lookup_key_candidates(formatted_rut, domain="rut")},
-            "email_key": {"$in": lookup_key_candidates(normalized_email, domain="email")},
-        })
+        user_doc = await users_collection().find_one(
+            {
+                "rut_key": {"$in": lookup_key_candidates(formatted_rut, domain="rut")},
+                "email_key": {
+                    "$in": lookup_key_candidates(normalized_email, domain="email")
+                },
+            }
+        )
 
         if not user_doc:
             return UserResponse(ok=False, error="RUT o email incorrectos")
@@ -419,4 +440,6 @@ async def login_user(request: UserLoginRequest):
         raise
     except Exception as e:
         logger.error(f"Error in login: {e}")
-        return UserResponse(ok=False, error="No se pudo iniciar sesión. Intenta de nuevo.")
+        return UserResponse(
+            ok=False, error="No se pudo iniciar sesión. Intenta de nuevo."
+        )

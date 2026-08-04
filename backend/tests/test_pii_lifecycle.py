@@ -10,6 +10,7 @@ Lo que se comprueba aquí es lo que hace que una filtración sea recuperable:
 * y la política de retención no borra por accidente lo que protege contra
   repetición.
 """
+
 import pytest
 from cryptography.fernet import Fernet
 from pymongo.errors import DuplicateKeyError
@@ -36,6 +37,7 @@ def keys(monkeypatch):
 
 
 # === 1.3 — rotación de la llave de cifrado ===
+
 
 def test_a_new_key_does_not_orphan_existing_data(keys):
     """El fallo que hace irrecuperable una filtración: reemplazar la llave."""
@@ -107,14 +109,21 @@ def test_legacy_single_key_setting_still_works(monkeypatch):
 
 # === 1.3 — rotación del pepper ===
 
+
 def test_rotating_the_pepper_keeps_existing_records_findable(monkeypatch):
-    monkeypatch.setattr(settings, "IDENTITY_PEPPER", "pepper-viejo-de-32-caracteres-xxxx")
+    monkeypatch.setattr(
+        settings, "IDENTITY_PEPPER", "pepper-viejo-de-32-caracteres-xxxx"
+    )
     monkeypatch.setattr(settings, "IDENTITY_PEPPER_PREVIOUS", "")
     stored = lookup_key("12.345.678-9", domain="rut")
 
     # Rotación: nuevo vigente, viejo declarado como anterior.
-    monkeypatch.setattr(settings, "IDENTITY_PEPPER", "pepper-nuevo-de-32-caracteres-yyyy")
-    monkeypatch.setattr(settings, "IDENTITY_PEPPER_PREVIOUS", "pepper-viejo-de-32-caracteres-xxxx")
+    monkeypatch.setattr(
+        settings, "IDENTITY_PEPPER", "pepper-nuevo-de-32-caracteres-yyyy"
+    )
+    monkeypatch.setattr(
+        settings, "IDENTITY_PEPPER_PREVIOUS", "pepper-viejo-de-32-caracteres-xxxx"
+    )
 
     candidates = lookup_key_candidates("12.345.678-9", domain="rut")
 
@@ -126,7 +135,9 @@ def test_rotating_the_pepper_keeps_existing_records_findable(monkeypatch):
 
 
 def test_without_rotation_the_lookup_is_a_single_key(monkeypatch):
-    monkeypatch.setattr(settings, "IDENTITY_PEPPER", "pepper-unico-de-32-caracteres-zzz")
+    monkeypatch.setattr(
+        settings, "IDENTITY_PEPPER", "pepper-unico-de-32-caracteres-zzz"
+    )
     monkeypatch.setattr(settings, "IDENTITY_PEPPER_PREVIOUS", "")
 
     assert len(lookup_key_candidates("12.345.678-9", domain="rut")) == 1
@@ -139,22 +150,28 @@ async def test_login_works_during_a_pepper_rotation(client, monkeypatch):
     monkeypatch.setattr(settings, "IDENTITY_PEPPER", old_pepper)
     monkeypatch.setattr(settings, "IDENTITY_PEPPER_PREVIOUS", "")
 
-    registration = await client.post("/api/auth/register", json={
-        "rut": "12.345.678-5",
-        "email": "rotacion@example.com",
-        "nombre": "Ana",
-        "apellido": "Pérez",
-    })
+    registration = await client.post(
+        "/api/auth/register",
+        json={
+            "rut": "12.345.678-5",
+            "email": "rotacion@example.com",
+            "nombre": "Ana",
+            "apellido": "Pérez",
+        },
+    )
     assert registration.json()["ok"] is True, registration.json()
 
     # El pepper rota mientras el usuario ya existe indexado con el viejo.
     monkeypatch.setattr(settings, "IDENTITY_PEPPER", new_pepper)
     monkeypatch.setattr(settings, "IDENTITY_PEPPER_PREVIOUS", old_pepper)
 
-    login = await client.post("/api/auth/login", json={
-        "rut": "12.345.678-5",
-        "email": "rotacion@example.com",
-    })
+    login = await client.post(
+        "/api/auth/login",
+        json={
+            "rut": "12.345.678-5",
+            "email": "rotacion@example.com",
+        },
+    )
 
     assert login.json()["ok"] is True, login.json()
 
@@ -172,7 +189,9 @@ async def test_registration_during_rotation_does_not_duplicate(client, monkeypat
     }
     assert (await client.post("/api/auth/register", json=payload)).json()["ok"] is True
 
-    monkeypatch.setattr(settings, "IDENTITY_PEPPER", "pepper-nuevo-de-32-caracteres-yyyy")
+    monkeypatch.setattr(
+        settings, "IDENTITY_PEPPER", "pepper-nuevo-de-32-caracteres-yyyy"
+    )
     monkeypatch.setattr(settings, "IDENTITY_PEPPER_PREVIOUS", old_pepper)
 
     repeat = await client.post("/api/auth/register", json=payload)
@@ -183,39 +202,53 @@ async def test_registration_during_rotation_does_not_duplicate(client, monkeypat
 
 # === 1.11 — unicidad por persona ===
 
+
 async def test_two_memberships_for_the_same_person_are_impossible(client):
     """El nullifier identifica a la persona: no puede repetirse."""
-    await members_collection().insert_one({
-        "wallet_address": "0x" + "a1" * 20,
-        "token_id": 501,
-        "nullifier_hash": "0x" + "ff" * 32,
-        "status": "active",
-    })
+    await members_collection().insert_one(
+        {
+            "wallet_address": "0x" + "a1" * 20,
+            "token_id": 501,
+            "nullifier_hash": "0x" + "ff" * 32,
+            "status": "active",
+        }
+    )
 
     with pytest.raises(DuplicateKeyError):
         # Otra wallet, misma persona: es justo lo que el índice de
         # wallet_address NO podía impedir.
-        await members_collection().insert_one({
-            "wallet_address": "0x" + "b2" * 20,
-            "token_id": 502,
-            "nullifier_hash": "0x" + "ff" * 32,
-            "status": "active",
-        })
+        await members_collection().insert_one(
+            {
+                "wallet_address": "0x" + "b2" * 20,
+                "token_id": 502,
+                "nullifier_hash": "0x" + "ff" * 32,
+                "status": "active",
+            }
+        )
 
 
 async def test_demo_rows_without_nullifier_do_not_collide(client):
     """El índice es parcial: varias filas legacy con None deben convivir."""
-    await members_collection().insert_one({
-        "wallet_address": "0x" + "c3" * 20, "token_id": 601, "nullifier_hash": None,
-    })
-    await members_collection().insert_one({
-        "wallet_address": "0x" + "d4" * 20, "token_id": 602, "nullifier_hash": None,
-    })
+    await members_collection().insert_one(
+        {
+            "wallet_address": "0x" + "c3" * 20,
+            "token_id": 601,
+            "nullifier_hash": None,
+        }
+    )
+    await members_collection().insert_one(
+        {
+            "wallet_address": "0x" + "d4" * 20,
+            "token_id": 602,
+            "nullifier_hash": None,
+        }
+    )
 
     assert await members_collection().count_documents({"nullifier_hash": None}) == 2
 
 
 # === 1.4 — política de retención ===
+
 
 def test_replay_protection_is_never_purged_by_age():
     keep_forever = {
@@ -268,6 +301,7 @@ async def test_health_reports_key_custody_honestly(client):
 
 # === La herramienta de migración (services/pii_maintenance.py) ===
 
+
 async def _seed_user(rut="12.345.678-9", email="ana@example.com", **overrides):
     doc = {
         "id": f"user-{rut}",
@@ -319,8 +353,12 @@ async def test_legacy_plaintext_pii_gets_encrypted(client, keys):
     """Migración 1.4: filas antiguas guardadas en claro."""
     from app.services import pii_maintenance as service
 
-    await _seed_user(rut="11.111.111-1", email="legacy@example.com",
-                     nombre="EnClaro", apellido="SinCifrar")
+    await _seed_user(
+        rut="11.111.111-1",
+        email="legacy@example.com",
+        nombre="EnClaro",
+        apellido="SinCifrar",
+    )
     assert (await service.scan("users"))["plaintext"] == 1
 
     await service.rotate_encrypted_fields("users", apply=True)

@@ -13,6 +13,7 @@ hexadecimal) y el backend recupera el firmante y lo compara contra
 voter_address. El schema se sirve desde /governance/ballot-schema para
 que frontend/móvil nunca mantengan una copia manual desincronizada.
 """
+
 import logging
 from typing import Optional
 
@@ -105,7 +106,9 @@ def recover_signer(
     return Account.recover_message(encoded, signature=signature)
 
 
-async def verify(proposal_id: str, voter_address: str, choice: str, nonce: str, signature: str) -> None:
+async def verify(
+    proposal_id: str, voter_address: str, choice: str, nonce: str, signature: str
+) -> None:
     """Lanza HTTPException 401/409 si la firma es inválida o el nonce ya se usó."""
     if not nonce:
         raise HTTPException(status_code=422, detail="Falta el nonce de la papeleta.")
@@ -130,18 +133,22 @@ async def verify(proposal_id: str, voter_address: str, choice: str, nonce: str, 
     # su papeleta ya se usó lo haría firmar una nueva que fallaría igual, y
     # dejaría un voto legítimo sin registrar bajo una explicación falsa.
     try:
-        await ballot_nonces_collection().insert_one({
-            "voter_address": voter_address.lower(),
-            "nonce": nonce,
-            "proposal_id": proposal_id,
-        })
+        await ballot_nonces_collection().insert_one(
+            {
+                "voter_address": voter_address.lower(),
+                "nonce": nonce,
+                "proposal_id": proposal_id,
+            }
+        )
     except DuplicateKeyError:
         raise HTTPException(
             status_code=409,
             detail="Esta papeleta ya fue usada (nonce repetido). Genera una nueva.",
         )
     except PyMongoError as exc:
-        logger.error("No se pudo registrar el nonce de la papeleta: %s", type(exc).__name__)
+        logger.error(
+            "No se pudo registrar el nonce de la papeleta: %s", type(exc).__name__
+        )
         raise HTTPException(
             status_code=503,
             detail=(
@@ -183,9 +190,7 @@ def recover_election_signer(
     chain_id: Optional[int] = None,
 ) -> str:
     encoded = encode_typed_data(
-        full_message=election_typed_data(
-            election_id, voter, candidate, nonce, chain_id
-        )
+        full_message=election_typed_data(election_id, voter, candidate, nonce, chain_id)
     )
     return Account.recover_message(encoded, signature=signature)
 
@@ -225,12 +230,14 @@ async def verify_election_ballot(
     # replay. Un fallo de almacenamiento que se reportara como "ya usada"
     # dejaría un voto legítimo sin registrar bajo una explicación falsa.
     try:
-        await ballot_nonces_collection().insert_one({
-            "voter_address": voter_address.lower(),
-            "nonce": nonce,
-            "scope": "election",
-            "election_id": election_id,
-        })
+        await ballot_nonces_collection().insert_one(
+            {
+                "voter_address": voter_address.lower(),
+                "nonce": nonce,
+                "scope": "election",
+                "election_id": election_id,
+            }
+        )
     except DuplicateKeyError:
         raise HTTPException(
             status_code=409,

@@ -17,6 +17,7 @@ El JWT se entrega por dos vías (tarea 1.13):
 - campo `token` del body, salvo que el cliente pida `session_transport:
   "cookie"`. La app móvil no tiene cookies de navegador y lo sigue usando.
 """
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from eth_utils import is_address
 from pydantic import BaseModel
@@ -77,7 +78,9 @@ async def verify(request: VerifyRequest, response: Response):
     """Verifica la firma del desafío, emite el JWT y fija la cookie de sesión."""
     readiness.require("SECRET_KEY", "iniciar sesión con tu wallet")
     readiness.require_siwe_configuration()
-    address = await siwe_service.verify(request.address, request.nonce, request.signature)
+    address = await siwe_service.verify(
+        request.address, request.nonce, request.signature
+    )
     token = siwe_service.issue_token(address)
     csrf_token = session.attach_session(response, token)
     return VerifyResponse(
@@ -97,9 +100,7 @@ async def read_session(request: Request, authenticated: str = Depends(current_ad
     Devuelve también el token CSRF por si la cookie no fuera legible (otro
     subdominio, un navegador que la bloquee).
     """
-    token, _ = session.token_from_request(
-        request, request.headers.get("authorization")
-    )
+    token, _ = session.token_from_request(request, request.headers.get("authorization"))
     return SessionResponse(
         address=authenticated,
         csrf_token=session.csrf_token_for(token) if token else "",

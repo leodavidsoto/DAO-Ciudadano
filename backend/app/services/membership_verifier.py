@@ -21,6 +21,7 @@ on-chain lanza `MembershipVerificationUnavailable` y el llamador responde 503.
 "No pude verificar" y "no es miembro" son respuestas distintas y solo una de
 ellas justifica un 403.
 """
+
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from typing import Iterable, Optional
@@ -69,11 +70,13 @@ def _active_member_query() -> dict:
         # Legacy documents have neither field and are therefore quarantined
         # automatically. Demo rows also remain ineligible even if the same
         # MongoDB database is promoted to production.
-        query.update({
-            "issuance_mode": "onchain",
-            "identity_verified": True,
-            "tx_hash": {"$type": "string", "$ne": ""},
-        })
+        query.update(
+            {
+                "issuance_mode": "onchain",
+                "identity_verified": True,
+                "tx_hash": {"$type": "string", "$ne": ""},
+            }
+        )
     return query
 
 
@@ -119,10 +122,7 @@ def membership_is_valid(member: dict) -> bool:
         return False
     if not settings.is_production:
         return True
-    return (
-        membership_is_onchain(member)
-        and member.get("identity_verified") is True
-    )
+    return membership_is_onchain(member) and member.get("identity_verified") is True
 
 
 class _MembershipCache:

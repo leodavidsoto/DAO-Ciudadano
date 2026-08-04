@@ -1,6 +1,7 @@
 """
 Auth endpoints: RUT validation, registration, login, ClaveÚnica and NFC demos.
 """
+
 import base64
 
 from app.core.config import settings
@@ -19,11 +20,18 @@ async def _identity_event_count():
     return await Database.get_db()["identity_events"].count_documents({})
 
 
-async def _register(client, rut=VALID_RUT, email="ana@example.com",
-                    nombre="Ana", apellido="Rojas"):
-    return await client.post("/api/auth/register", json={
-        "rut": rut, "email": email, "nombre": nombre, "apellido": apellido,
-    })
+async def _register(
+    client, rut=VALID_RUT, email="ana@example.com", nombre="Ana", apellido="Rojas"
+):
+    return await client.post(
+        "/api/auth/register",
+        json={
+            "rut": rut,
+            "email": email,
+            "nombre": nombre,
+            "apellido": apellido,
+        },
+    )
 
 
 async def test_register_valid_demo_user(client, monkeypatch):
@@ -61,9 +69,13 @@ async def test_register_rejects_duplicate_rut(client):
 
 async def test_login_with_registered_user(client):
     registration = await _register(client)
-    response = await client.post("/api/auth/login", json={
-        "rut": VALID_RUT, "email": "ana@example.com",
-    })
+    response = await client.post(
+        "/api/auth/login",
+        json={
+            "rut": VALID_RUT,
+            "email": "ana@example.com",
+        },
+    )
     data = response.json()
     assert data["ok"] is True
     assert data["rut"] == "11.111.111-1"
@@ -73,9 +85,13 @@ async def test_login_with_registered_user(client):
 
 
 async def test_login_unknown_user_fails(client):
-    response = await client.post("/api/auth/login", json={
-        "rut": VALID_RUT, "email": "nadie@example.com",
-    })
+    response = await client.post(
+        "/api/auth/login",
+        json={
+            "rut": VALID_RUT,
+            "email": "nadie@example.com",
+        },
+    )
     assert response.json()["ok"] is False
 
 
@@ -146,10 +162,13 @@ async def test_production_blocks_every_unverified_identity_flow(client, monkeypa
             files={"file": ("selfie.png", TINY_PNG, "image/png")},
         ),
         await _register(client),
-        await client.post("/api/auth/login", json={
-            "rut": VALID_RUT,
-            "email": "ana@example.com",
-        }),
+        await client.post(
+            "/api/auth/login",
+            json={
+                "rut": VALID_RUT,
+                "email": "ana@example.com",
+            },
+        ),
     ]
 
     for response in responses:

@@ -22,6 +22,7 @@ Design decisions (documented here on purpose):
   be revoked after delegating, so this is enforced at vote time, not at
   delegation time.
 """
+
 import calendar
 from datetime import datetime, timezone
 import logging
@@ -134,10 +135,12 @@ class GovernanceService:
         if not delegators:
             return 1, []
 
-        cursor = collection().find({
-            contest_field: contest_id,
-            "voter_address": {"$in": delegators},
-        })
+        cursor = collection().find(
+            {
+                contest_field: contest_id,
+                "voter_address": {"$in": delegators},
+            }
+        )
         already_voted = {
             v["voter_address"] for v in await cursor.to_list(length=len(delegators))
         }
@@ -158,10 +161,12 @@ class GovernanceService:
         Al revocar se borra el vínculo, así que la única evidencia que queda de
         que ese peso ya se gastó es la propia papeleta del delegado.
         """
-        ballot = await collection().find_one({
-            contest_field: contest_id,
-            "delegators": address.lower(),
-        })
+        ballot = await collection().find_one(
+            {
+                contest_field: contest_id,
+                "delegators": address.lower(),
+            }
+        )
         return ballot["voter_address"] if ballot else None
 
     @staticmethod
@@ -203,47 +208,57 @@ class GovernanceService:
         return (await cls.delegation_block_reason(delegator, delegate)) is not None
 
     @classmethod
-    async def compute_proposals_tallies(cls, proposal_ids: list[str], votes_collection) -> dict[str, dict[str, int]]:
+    async def compute_proposals_tallies(
+        cls, proposal_ids: list[str], votes_collection
+    ) -> dict[str, dict[str, int]]:
         """Dynamically compute vote tallies for a list of proposals.
-        
+
         This prevents divergence between individual ballots and the total tally
         if a crash occurs between inserting the vote and updating the proposal (ROADMAP 3.10).
         """
         if not proposal_ids:
             return {}
-            
+
         pipeline = [
             {"$match": {"proposal_id": {"$in": proposal_ids}}},
-            {"$group": {
-                "_id": {
-                    "proposal_id": "$proposal_id",
-                    "vote": "$vote"
-                },
-                "total_weight": {"$sum": "$weight"}
-            }}
+            {
+                "$group": {
+                    "_id": {"proposal_id": "$proposal_id", "vote": "$vote"},
+                    "total_weight": {"$sum": "$weight"},
+                }
+            },
         ]
-        
-        results = await votes_collection().aggregate(pipeline).to_list(length=len(proposal_ids) * 3)
-        
+
+        results = (
+            await votes_collection()
+            .aggregate(pipeline)
+            .to_list(length=len(proposal_ids) * 3)
+        )
+
         tallies = {
-            pid: {"votes_for": 0, "votes_against": 0, "votes_abstain": 0, "total_votes": 0}
+            pid: {
+                "votes_for": 0,
+                "votes_against": 0,
+                "votes_abstain": 0,
+                "total_votes": 0,
+            }
             for pid in proposal_ids
         }
-        
+
         for r in results:
             pid = r["_id"]["proposal_id"]
             vote_type = r["_id"]["vote"]
             weight = r["total_weight"]
-            
+
             if vote_type == "for":
                 tallies[pid]["votes_for"] += weight
             elif vote_type == "against":
                 tallies[pid]["votes_against"] += weight
             elif vote_type == "abstain":
                 tallies[pid]["votes_abstain"] += weight
-                
+
             tallies[pid]["total_votes"] += weight
-            
+
         return tallies
 
     # === Elections ===
@@ -278,8 +293,7 @@ class GovernanceService:
         derived = cls.derive_election_status(election)
         if derived != election.get("status"):
             await elections_collection().update_one(
-                {"id": election["id"]},
-                {"$set": {"status": derived}}
+                {"id": election["id"]}, {"$set": {"status": derived}}
             )
             election["status"] = derived
 
@@ -298,20 +312,26 @@ class GovernanceService:
     @classmethod
     async def compute_results(cls, election_id: str) -> list[dict]:
         """Per-candidate weighted totals, ordered by the documented criterion."""
-        candidacies = await candidacies_collection().find(
-            {"election_id": election_id}
-        ).to_list(length=1000)
+        candidacies = (
+            await candidacies_collection()
+            .find({"election_id": election_id})
+            .to_list(length=1000)
+        )
 
         totals_pipeline = [
             {"$match": {"election_id": election_id}},
-            {"$group": {
-                "_id": "$candidate_address",
-                "votes": {"$sum": "$weight"},
-            }},
+            {
+                "$group": {
+                    "_id": "$candidate_address",
+                    "votes": {"$sum": "$weight"},
+                }
+            },
         ]
-        totals_raw = await election_votes_collection().aggregate(
-            totals_pipeline
-        ).to_list(length=1000)
+        totals_raw = (
+            await election_votes_collection()
+            .aggregate(totals_pipeline)
+            .to_list(length=1000)
+        )
         totals = {t["_id"]: t["votes"] for t in totals_raw}
 
         results = [
@@ -324,11 +344,13 @@ class GovernanceService:
             for c in candidacies
         ]
         # Order: votes desc, earlier candidacy first (tie-break), address last
-        results.sort(key=lambda r: (
-            -r["votes"],
-            r["candidacy_created_at"],
-            r["candidate_address"],
-        ))
+        results.sort(
+            key=lambda r: (
+                -r["votes"],
+                r["candidacy_created_at"],
+                r["candidate_address"],
+            )
+        )
         return results
 
     @classmethod
@@ -367,23 +389,27 @@ class GovernanceService:
             # duplicar escaños.
             await representatives_collection().update_one(
                 {"election_id": election["id"], "address": address},
-                {"$set": {
-                    "election_id": election["id"],
-                    "address": address,
-                    "votes": winner["votes"],
-                    "term_start": term_start,
-                    "term_end": term_end,
-                }},
+                {
+                    "$set": {
+                        "election_id": election["id"],
+                        "address": address,
+                        "votes": winner["votes"],
+                        "term_start": term_start,
+                        "term_end": term_end,
+                    }
+                },
                 upsert=True,
             )
 
         # Cualquier representante que ya no salga elegido sobra: puede venir de
         # una finalización previa interrumpida o de un recuento que cambió al
         # anularse una papeleta. El estado publicado debe ser el derivado.
-        removed = await representatives_collection().delete_many({
-            "election_id": election["id"],
-            "address": {"$nin": elected},
-        })
+        removed = await representatives_collection().delete_many(
+            {
+                "election_id": election["id"],
+                "address": {"$nin": elected},
+            }
+        )
 
         # ÚLTIMA escritura, y por eso es la que vale: si el proceso muere en
         # cualquier punto anterior, la marca no está y la siguiente lectura

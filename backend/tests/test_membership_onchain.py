@@ -10,6 +10,7 @@ miembro" (503, nunca 403).
 No se toca la red: `chain_service.has_membership` y el contrato de solo
 lectura se sustituyen por dobles.
 """
+
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -65,16 +66,20 @@ async def _sign_in(client, account):
     signed = Account.sign_message(
         encode_defunct(text=body["message"]), private_key=account.key
     )
-    verify = await client.post("/api/wallet/verify", json={
-        "address": account.address,
-        "nonce": body["nonce"],
-        "signature": signed.signature.hex(),
-    })
+    verify = await client.post(
+        "/api/wallet/verify",
+        json={
+            "address": account.address,
+            "nonce": body["nonce"],
+            "signature": signed.signature.hex(),
+        },
+    )
     verify.raise_for_status()
     return {"Authorization": f"Bearer {verify.json()['token']}"}
 
 
 # === chain_service.has_membership ===
+
 
 def test_has_membership_requires_rpc_and_contract(monkeypatch):
     monkeypatch.setattr(settings, "SEPOLIA_RPC_URL", "")
@@ -123,6 +128,7 @@ def test_has_membership_never_turns_an_rpc_failure_into_false(monkeypatch):
 
 
 # === OnChainMembershipVerifier + caché ===
+
 
 async def test_onchain_verifier_answers_from_the_contract(onchain):
     verifier = get_membership_verifier()
@@ -186,9 +192,7 @@ async def test_cache_entry_expires(onchain, monkeypatch):
     from app.services import membership_verifier as module
 
     real_monotonic = module.time.monotonic
-    monkeypatch.setattr(
-        module.time, "monotonic", lambda: real_monotonic() + 31
-    )
+    monkeypatch.setattr(module.time, "monotonic", lambda: real_monotonic() + 31)
 
     assert await verifier.is_member(MEMBER) is True
     assert onchain["calls"] == [MEMBER, MEMBER]
@@ -214,22 +218,31 @@ async def test_unreachable_chain_raises_instead_of_denying(monkeypatch):
 
 # === Gate de gobernanza extremo a extremo ===
 
+
 async def test_vote_without_sbt_is_rejected_with_403(client, onchain):
     headers = await _sign_in(client, MEMBER_ACCOUNT)
-    proposal = await client.post("/api/governance/proposals", json={
-        "title": "Propuesta con membresía on-chain",
-        "description": "Una descripción suficientemente larga para validar.",
-        "creator_address": MEMBER,
-        "duration_days": 7,
-    }, headers=headers)
+    proposal = await client.post(
+        "/api/governance/proposals",
+        json={
+            "title": "Propuesta con membresía on-chain",
+            "description": "Una descripción suficientemente larga para validar.",
+            "creator_address": MEMBER,
+            "duration_days": 7,
+        },
+        headers=headers,
+    )
     assert proposal.status_code == 200, proposal.json()
 
     outsider_headers = await _sign_in(client, OUTSIDER_ACCOUNT)
-    response = await client.post("/api/governance/vote", json={
-        "proposal_id": proposal.json()["id"],
-        "voter_address": OUTSIDER,
-        "vote": "for",
-    }, headers=outsider_headers)
+    response = await client.post(
+        "/api/governance/vote",
+        json={
+            "proposal_id": proposal.json()["id"],
+            "voter_address": OUTSIDER,
+            "vote": "for",
+        },
+        headers=outsider_headers,
+    )
 
     assert response.status_code == 403
     assert "membresía activa" in response.json()["detail"]
@@ -238,18 +251,23 @@ async def test_vote_without_sbt_is_rejected_with_403(client, onchain):
 async def test_proposal_without_sbt_is_rejected_with_403(client, onchain):
     headers = await _sign_in(client, OUTSIDER_ACCOUNT)
 
-    response = await client.post("/api/governance/proposals", json={
-        "title": "Propuesta de alguien sin SBT",
-        "description": "Una descripción suficientemente larga para validar.",
-        "creator_address": OUTSIDER,
-        "duration_days": 7,
-    }, headers=headers)
+    response = await client.post(
+        "/api/governance/proposals",
+        json={
+            "title": "Propuesta de alguien sin SBT",
+            "description": "Una descripción suficientemente larga para validar.",
+            "creator_address": OUTSIDER,
+            "duration_days": 7,
+        },
+        headers=headers,
+    )
 
     assert response.status_code == 403
 
 
 async def test_unreachable_chain_answers_503_not_403(client, monkeypatch):
     """Un RPC caído es un fallo del servicio, no una negación de membresía."""
+
     def unavailable(wallet_address):
         raise chain_service.ChainReadError("RPC caído")
 
@@ -257,12 +275,16 @@ async def test_unreachable_chain_answers_503_not_403(client, monkeypatch):
     monkeypatch.setattr(chain_service, "has_membership", unavailable)
     headers = await _sign_in(client, MEMBER_ACCOUNT)
 
-    response = await client.post("/api/governance/proposals", json={
-        "title": "Propuesta con el RPC caído",
-        "description": "Una descripción suficientemente larga para validar.",
-        "creator_address": MEMBER,
-        "duration_days": 7,
-    }, headers=headers)
+    response = await client.post(
+        "/api/governance/proposals",
+        json={
+            "title": "Propuesta con el RPC caído",
+            "description": "Una descripción suficientemente larga para validar.",
+            "creator_address": MEMBER,
+            "duration_days": 7,
+        },
+        headers=headers,
+    )
 
     assert response.status_code == 503
     assert "problema del servicio" in response.json()["detail"]
@@ -270,15 +292,18 @@ async def test_unreachable_chain_answers_503_not_403(client, monkeypatch):
 
 # === filter_members: el peso por delegación usa la misma definición ===
 
+
 async def test_mongo_filter_members_matches_the_single_address_gate(client):
     from app.core.database import members_collection
 
     # token_id explícito: la colección tiene índice único y dos documentos
     # sin él chocarían por `null`.
-    await members_collection().insert_many([
-        {"wallet_address": MEMBER, "status": "active", "token_id": 1},
-        {"wallet_address": OUTSIDER, "status": "revoked", "token_id": 2},
-    ])
+    await members_collection().insert_many(
+        [
+            {"wallet_address": MEMBER, "status": "active", "token_id": 1},
+            {"wallet_address": OUTSIDER, "status": "revoked", "token_id": 2},
+        ]
+    )
     verifier = MongoMembershipVerifier()
 
     assert await verifier.filter_members([MEMBER, OUTSIDER]) == {MEMBER}
@@ -307,18 +332,26 @@ async def test_chain_failure_while_weighing_delegations_is_also_503(
     headers = await _sign_in(client, MEMBER_ACCOUNT)
     outsider_headers = await _sign_in(client, OUTSIDER_ACCOUNT)
 
-    proposal = await client.post("/api/governance/proposals", json={
-        "title": "Propuesta antes de la caída",
-        "description": "Una descripción suficientemente larga para validar.",
-        "creator_address": MEMBER,
-        "duration_days": 7,
-    }, headers=headers)
+    proposal = await client.post(
+        "/api/governance/proposals",
+        json={
+            "title": "Propuesta antes de la caída",
+            "description": "Una descripción suficientemente larga para validar.",
+            "creator_address": MEMBER,
+            "duration_days": 7,
+        },
+        headers=headers,
+    )
     assert proposal.status_code == 200
 
-    delegation = await client.post("/api/governance/delegate", json={
-        "delegator_address": OUTSIDER,
-        "delegate_address": MEMBER,
-    }, headers=outsider_headers)
+    delegation = await client.post(
+        "/api/governance/delegate",
+        json={
+            "delegator_address": OUTSIDER,
+            "delegate_address": MEMBER,
+        },
+        headers=outsider_headers,
+    )
     assert delegation.json()["ok"] is True, delegation.json()
 
     def unavailable(wallet_address):
@@ -329,11 +362,15 @@ async def test_chain_failure_while_weighing_delegations_is_also_503(
     # único punto que toca la cadena es el cálculo del peso.
     invalidate_cached_membership(OUTSIDER)
 
-    response = await client.post("/api/governance/vote", json={
-        "proposal_id": proposal.json()["id"],
-        "voter_address": MEMBER,
-        "vote": "for",
-    }, headers=headers)
+    response = await client.post(
+        "/api/governance/vote",
+        json={
+            "proposal_id": proposal.json()["id"],
+            "voter_address": MEMBER,
+            "vote": "for",
+        },
+        headers=headers,
+    )
 
     assert response.status_code == 503
     assert "problema del servicio" in response.json()["detail"]

@@ -9,6 +9,7 @@ Lo que estos tests fijan como contrato para el frontend:
 * `Authorization: Bearer` sigue funcionando sin CSRF (app móvil).
 * `/wallet/logout` borra ambas cookies.
 """
+
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
@@ -34,23 +35,30 @@ async def _verify(client, **extra):
     signed = Account.sign_message(
         encode_defunct(text=body["message"]), private_key=ACCOUNT.key
     )
-    return await client.post("/api/wallet/verify", json={
-        "address": ACCOUNT.address,
-        "nonce": body["nonce"],
-        "signature": signed.signature.hex(),
-        **extra,
-    })
+    return await client.post(
+        "/api/wallet/verify",
+        json={
+            "address": ACCOUNT.address,
+            "nonce": body["nonce"],
+            "signature": signed.signature.hex(),
+            **extra,
+        },
+    )
 
 
 async def _become_member(client):
     """Mintea con la sesión ya establecida en el cliente (cookie + CSRF)."""
     response = await _verify(client)
     csrf = response.json()["csrf_token"]
-    mint = await client.post("/api/membership/mint", json={
-        "wallet_address": ADDRESS,
-        "assurance_level": "AL2",
-        "doc_hash": "0xdoc-cookie-session",
-    }, headers={session.CSRF_HEADER: csrf})
+    mint = await client.post(
+        "/api/membership/mint",
+        json={
+            "wallet_address": ADDRESS,
+            "assurance_level": "AL2",
+            "doc_hash": "0xdoc-cookie-session",
+        },
+        headers={session.CSRF_HEADER: csrf},
+    )
     assert mint.json()["ok"] is True, mint.json()
     return csrf
 
@@ -139,11 +147,15 @@ async def test_bearer_header_still_works_without_csrf(client):
     token = response.json()["token"]
     client.cookies.clear()
 
-    mint = await client.post("/api/membership/mint", json={
-        "wallet_address": ADDRESS,
-        "assurance_level": "AL2",
-        "doc_hash": "0xdoc-bearer",
-    }, headers={"Authorization": f"Bearer {token}"})
+    mint = await client.post(
+        "/api/membership/mint",
+        json={
+            "wallet_address": ADDRESS,
+            "assurance_level": "AL2",
+            "doc_hash": "0xdoc-bearer",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
 
     assert mint.json()["ok"] is True
 

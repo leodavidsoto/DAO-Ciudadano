@@ -10,6 +10,7 @@ en el hash y el empaquetado final. Lo que NO se puede probar sin una Safe
 desplegada y un bundler es que el módulo acepte la firma — y eso queda dicho
 en el módulo y en `paymaster_service.status()`.
 """
+
 import pytest
 from eth_account import Account
 from eth_utils import keccak
@@ -38,7 +39,9 @@ def test_safe_op_typehash_matches_the_literal():
     """El typehash debe salir del literal, no ser una constante opaca."""
     assert safe_4337.SAFE_OP_TYPEHASH == keccak(text=safe_4337.SAFE_OP_TYPE_STRING)
     # El orden de los campos es parte del contrato con el módulo.
-    assert safe_4337.SAFE_OP_TYPE_STRING.startswith("SafeOp(address safe,uint256 nonce,")
+    assert safe_4337.SAFE_OP_TYPE_STRING.startswith(
+        "SafeOp(address safe,uint256 nonce,"
+    )
     assert safe_4337.SAFE_OP_TYPE_STRING.endswith("address entryPoint)")
 
 
@@ -77,12 +80,14 @@ def test_digest_changes_with_every_signed_field():
 
 def test_paymaster_fields_are_packed_in_entrypoint_order():
     """v0.7 desglosa el paymaster; el módulo lo firma concatenado."""
-    packed = safe_4337._paymaster_and_data({
-        "paymaster": "0x" + "33" * 20,
-        "paymasterVerificationGasLimit": "0x1",
-        "paymasterPostOpGasLimit": "0x2",
-        "paymasterData": "0xabcd",
-    })
+    packed = safe_4337._paymaster_and_data(
+        {
+            "paymaster": "0x" + "33" * 20,
+            "paymasterVerificationGasLimit": "0x1",
+            "paymasterPostOpGasLimit": "0x2",
+            "paymasterData": "0xabcd",
+        }
+    )
     # 20 bytes de dirección + 16 + 16 de límites + los datos.
     assert len(packed) == 20 + 16 + 16 + 2
     assert packed[:20].hex() == "33" * 20
@@ -121,9 +126,7 @@ def test_signing_recovers_the_owner_from_the_safeop_digest():
 
     raw = bytes.fromhex(signed["signature"][2:])
     owner_signature = raw[12:]
-    digest = safe_4337.safe_op_digest(
-        BASE_OP, ENTRYPOINT, CHAIN_ID, MODULE, validity
-    )
+    digest = safe_4337.safe_op_digest(BASE_OP, ENTRYPOINT, CHAIN_ID, MODULE, validity)
 
     recovered = Account._recover_hash(digest, signature=owner_signature)
     assert recovered == OWNER.address
@@ -132,8 +135,11 @@ def test_signing_recovers_the_owner_from_the_safeop_digest():
 def test_signing_requires_a_key():
     with pytest.raises(safe_4337.SafeSigningError):
         safe_4337.sign_user_operation(
-            BASE_OP, private_key="", entrypoint=ENTRYPOINT,
-            chain_id=CHAIN_ID, module_address=MODULE,
+            BASE_OP,
+            private_key="",
+            entrypoint=ENTRYPOINT,
+            chain_id=CHAIN_ID,
+            module_address=MODULE,
         )
 
 

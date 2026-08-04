@@ -2,6 +2,7 @@
 DAO Ciudadana API - Main Server Entry Point
 Professional modular FastAPI application with security hardening
 """
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -17,7 +18,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 # Load environment variables
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / ".env")
 
 # Import app modules
 from app.core.config import settings
@@ -27,7 +28,7 @@ from app.core.security_middleware import (
     RateLimitMiddleware,
     RequestBodyLimitMiddleware,
     SecurityHeadersMiddleware,
-    RequestValidationMiddleware
+    RequestValidationMiddleware,
 )
 from app.routers.deps import MEMBERSHIP_UNAVAILABLE_DETAIL
 from app.services.membership_verifier import MembershipVerificationUnavailable
@@ -42,8 +43,7 @@ from app.routers.clave_unica import router as clave_unica_router
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -53,17 +53,19 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     # Startup
     logger.info(f"🚀 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
-    logger.info("🔒 Security middleware enabled: Rate Limiting, Security Headers, Request Validation")
-    
+    logger.info(
+        "🔒 Security middleware enabled: Rate Limiting, Security Headers, Request Validation"
+    )
+
     # Connect to database
-    mongo_url = os.environ.get('MONGO_URL', settings.MONGO_URL)
-    db_name = os.environ.get('DB_NAME', settings.DB_NAME)
+    mongo_url = os.environ.get("MONGO_URL", settings.MONGO_URL)
+    db_name = os.environ.get("DB_NAME", settings.DB_NAME)
     Database.connect(mongo_url, db_name)
     await Database.ensure_indexes()
     readiness.report_at_startup()
 
     yield
-    
+
     # Shutdown
     logger.info("Shutting down application")
     Database.close()
@@ -183,6 +185,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     # Log the full detail server-side (with a correlation id), but never leak
     # internal error strings (paths, drivers, queries) to the client.
     import uuid
+
     error_id = uuid.uuid4().hex[:12]
     logger.error(f"Unhandled exception [{error_id}]: {exc}", exc_info=True)
     body = {"detail": "Internal server error", "error_id": error_id}
@@ -289,9 +292,7 @@ async def health_check():
     status_label = (
         "healthy"
         if healthy and configuration["production_ready"]
-        else "operational"
-        if healthy
-        else "degraded"
+        else "operational" if healthy else "degraded"
     )
     body = {
         "status": status_label,
@@ -308,9 +309,5 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True
-    )
+
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

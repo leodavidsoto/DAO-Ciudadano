@@ -10,6 +10,7 @@ que un atacante intentaría: confusión de algoritmos, `alg: none`, emisor o
 audiencia ajenos, nonce de otra sesión, reutilización del `state` y RUN con
 dígito verificador falso.
 """
+
 import base64
 import hashlib
 import json
@@ -36,10 +37,14 @@ _PRIVATE_PEM = _KEY.private_bytes(
     format=serialization.PrivateFormat.PKCS8,
     encryption_algorithm=serialization.NoEncryption(),
 ).decode()
-_PUBLIC_PEM = _KEY.public_key().public_bytes(
-    encoding=serialization.Encoding.PEM,
-    format=serialization.PublicFormat.SubjectPublicKeyInfo,
-).decode()
+_PUBLIC_PEM = (
+    _KEY.public_key()
+    .public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    .decode()
+)
 
 
 @pytest.fixture
@@ -105,6 +110,7 @@ async def _stored_session(state):
 
 # === Sin configuración no hay flujo ===
 
+
 async def test_unconfigured_deployment_refuses_in_every_environment(client):
     """No hay modo demo: un simulador de identidad civil es lo que se elimina."""
     authorize = await client.post("/api/auth/clave-unica/authorize")
@@ -134,6 +140,7 @@ def test_production_requires_an_https_redirect(monkeypatch):
 
 # === PKCE ===
 
+
 def test_code_challenge_matches_rfc7636():
     """Vector del propio RFC 7636 (apéndice B)."""
     verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
@@ -160,14 +167,19 @@ async def test_the_verifier_never_leaves_the_server(client, configured):
 
 # === Camino feliz ===
 
+
 async def test_a_valid_login_yields_a_single_use_grant(client, configured):
     body = await _authorize(client)
     session = await _stored_session(body["state"])
     _stub_token_endpoint(configured, _id_token(session["nonce"]))
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo-del-estado", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo-del-estado",
+            "state": body["state"],
+        },
+    )
     data = response.json()
 
     assert response.status_code == 200, data
@@ -179,9 +191,10 @@ async def test_a_valid_login_yields_a_single_use_grant(client, configured):
     binding = clave_unica.hash_browser_binding(
         client.cookies[settings.CLAVE_UNICA_BINDING_COOKIE_NAME]
     )
-    assert await identity_grant.consume(
-        data["identity_grant"], browser_binding=binding
-    ) == expected_subject
+    assert (
+        await identity_grant.consume(data["identity_grant"], browser_binding=binding)
+        == expected_subject
+    )
     with pytest.raises(identity_grant.IdentityGrantError):
         await identity_grant.consume(data["identity_grant"], browser_binding=binding)
 
@@ -192,9 +205,13 @@ async def test_the_run_is_never_persisted(client, configured):
     session = await _stored_session(body["state"])
     _stub_token_endpoint(configured, _id_token(session["nonce"]))
 
-    await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     grant_doc = await get_collection("identity_grants").find_one({})
     dumped = json.dumps(grant_doc, default=str)
@@ -220,14 +237,19 @@ async def test_the_run_can_come_from_userinfo(client, configured):
         },
     )
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code == 200, response.json()
 
 
 # === Ataques contra la validación del id_token ===
+
 
 def _forge_hs256_with_public_key(claims: dict) -> str:
     """Token HS256 firmado con la clave PÚBLICA como secreto.
@@ -257,16 +279,26 @@ async def test_algorithm_confusion_is_rejected(client, configured):
     body = await _authorize(client)
     session = await _stored_session(body["state"])
     now = int(time.time())
-    forged = _forge_hs256_with_public_key({
-        "iss": ISSUER, "aud": CLIENT_ID, "sub": "atacante",
-        "exp": now + 300, "iat": now, "nonce": session["nonce"],
-        "RolUnico": {"numero": RUN_NUMBER, "DV": RUN_DV},
-    })
+    forged = _forge_hs256_with_public_key(
+        {
+            "iss": ISSUER,
+            "aud": CLIENT_ID,
+            "sub": "atacante",
+            "exp": now + 300,
+            "iat": now,
+            "nonce": session["nonce"],
+            "RolUnico": {"numero": RUN_NUMBER, "DV": RUN_DV},
+        }
+    )
     _stub_token_endpoint(configured, forged)
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code == 401
 
@@ -276,18 +308,25 @@ async def test_an_unsigned_token_is_rejected(client, configured):
     session = await _stored_session(body["state"])
     _stub_token_endpoint(configured, _id_token(session["nonce"], alg="none"))
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code == 401
 
 
-@pytest.mark.parametrize("claim,value", [
-    ("iss", "https://otro-emisor.example/openid"),
-    ("aud", "otro-cliente"),
-    ("exp", int(time.time()) - 3600),
-])
+@pytest.mark.parametrize(
+    "claim,value",
+    [
+        ("iss", "https://otro-emisor.example/openid"),
+        ("aud", "otro-cliente"),
+        ("exp", int(time.time()) - 3600),
+    ],
+)
 async def test_tokens_from_elsewhere_or_expired_are_rejected(
     client, configured, claim, value
 ):
@@ -295,9 +334,13 @@ async def test_tokens_from_elsewhere_or_expired_are_rejected(
     session = await _stored_session(body["state"])
     _stub_token_endpoint(configured, _id_token(session["nonce"], **{claim: value}))
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code == 401
 
@@ -307,9 +350,13 @@ async def test_a_token_from_another_login_is_rejected(client, configured):
     body = await _authorize(client)
     _stub_token_endpoint(configured, _id_token("nonce-de-otra-sesion"))
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code == 401
     assert "nonce" in response.json()["detail"]
@@ -320,14 +367,19 @@ async def test_a_token_issued_for_another_client_is_rejected(client, configured)
     session = await _stored_session(body["state"])
     _stub_token_endpoint(configured, _id_token(session["nonce"], azp="otro-cliente"))
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code == 401
 
 
 # === Ataques contra el flujo ===
+
 
 async def test_repeating_the_callback_returns_the_same_grant(client, configured):
     """Requisito 3: una respuesta HTTP perdida no puede dejar sin credencial.
@@ -338,14 +390,22 @@ async def test_repeating_the_callback_returns_the_same_grant(client, configured)
     body = await _authorize(client)
     session = await _stored_session(body["state"])
     _stub_token_endpoint(configured, _id_token(session["nonce"]))
-    first = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    first = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
     assert first.status_code == 200
 
-    replay = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    replay = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert replay.status_code == 200
     assert replay.json()["identity_grant"] == first.json()["identity_grant"]
@@ -358,9 +418,13 @@ async def test_a_consumed_grant_is_not_replayed(client, configured):
     body = await _authorize(client)
     session = await _stored_session(body["state"])
     _stub_token_endpoint(configured, _id_token(session["nonce"]))
-    first = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    first = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
     binding = clave_unica.hash_browser_binding(
         client.cookies[settings.CLAVE_UNICA_BINDING_COOKIE_NAME]
     )
@@ -368,18 +432,26 @@ async def test_a_consumed_grant_is_not_replayed(client, configured):
         first.json()["identity_grant"], browser_binding=binding
     )
 
-    replay = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    replay = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert replay.status_code == 401
     assert "ya se emitió" in replay.json()["detail"]
 
 
 async def test_an_unknown_state_is_rejected(client, configured):
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": "state-que-nadie-emitio",
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": "state-que-nadie-emitio",
+        },
+    )
 
     assert response.status_code == 401
 
@@ -391,14 +463,19 @@ async def test_an_expired_login_attempt_is_rejected(client, configured):
         {"$set": {"expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)}},
     )
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code == 401
 
 
 # === RUN ===
+
 
 def test_a_run_with_a_wrong_check_digit_is_rejected():
     """Un RUN cuyo DV no cuadra no es un RUN, lo firme quien lo firme."""
@@ -431,9 +508,13 @@ async def test_a_userinfo_for_another_subject_is_rejected(client, configured):
         },
     )
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code == 401
     assert "no coincide" in response.json()["detail"]
@@ -450,6 +531,7 @@ def test_subject_key_is_a_blind_index():
 
 
 # === El bloqueo de los demos sigue en pie ===
+
 
 async def test_the_demo_identity_flows_stay_blocked_in_production(client, monkeypatch):
     """Implementar ClaveÚnica no vuelve reales el NFC demo ni el liveness."""
@@ -479,29 +561,31 @@ def test_the_challenge_is_always_32_bytes():
 
 def test_the_challenge_is_the_sha256_of_the_verifier():
     verifier = "verificador-de-prueba"
-    expected = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode()).digest()
-    ).decode().rstrip("=")
+    expected = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .decode()
+        .rstrip("=")
+    )
 
     assert clave_unica.code_challenge_for(verifier) == expected
 
 
 # === Binding de navegador (TAREA 6) ===
 
+
 def _second_browser(client):
     """Otro cliente HTTP: mismas rutas, cookie jar distinto."""
     import httpx
 
-    return httpx.AsyncClient(
-        transport=client._transport, base_url="http://testserver"
-    )
+    return httpx.AsyncClient(transport=client._transport, base_url="http://testserver")
 
 
 async def test_authorize_sets_an_httponly_binding_cookie(client, configured):
     response = await client.post("/api/auth/clave-unica/authorize")
 
     raw = [
-        h for h in response.headers.get_list("set-cookie")
+        h
+        for h in response.headers.get_list("set-cookie")
         if h.startswith(settings.CLAVE_UNICA_BINDING_COOKIE_NAME + "=")
     ]
     assert raw, "no se fijó la cookie de binding"
@@ -525,9 +609,13 @@ async def test_a_second_browser_with_the_same_code_gets_nothing(client, configur
     _stub_token_endpoint(configured, _id_token(session["nonce"]))
 
     async with _second_browser(client) as attacker:
-        stolen = await attacker.post("/api/auth/clave-unica/callback", json={
-            "code": "codigo-robado", "state": body["state"],
-        })
+        stolen = await attacker.post(
+            "/api/auth/clave-unica/callback",
+            json={
+                "code": "codigo-robado",
+                "state": body["state"],
+            },
+        )
 
     assert stolen.status_code == 401
     assert "otro navegador" in stolen.json()["detail"]
@@ -535,9 +623,13 @@ async def test_a_second_browser_with_the_same_code_gets_nothing(client, configur
 
     # Y el navegador legítimo sigue pudiendo completar su flujo: el intento del
     # atacante no le quemó el state.
-    legit = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    legit = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
     assert legit.status_code == 200
 
 
@@ -545,13 +637,15 @@ async def test_a_forged_binding_cookie_is_rejected(client, configured):
     body = await _authorize(client)
     session = await _stored_session(body["state"])
     _stub_token_endpoint(configured, _id_token(session["nonce"]))
-    client.cookies.set(
-        settings.CLAVE_UNICA_BINDING_COOKIE_NAME, "binding-inventado"
-    )
+    client.cookies.set(settings.CLAVE_UNICA_BINDING_COOKIE_NAME, "binding-inventado")
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code == 401
 
@@ -563,14 +657,19 @@ async def test_the_binding_is_checked_before_talking_to_the_provider(
     body = await _authorize(client)
     calls = []
     configured.setattr(
-        clave_unica, "_exchange_code",
+        clave_unica,
+        "_exchange_code",
         lambda code, verifier: calls.append(code) or {"id_token": "x"},
     )
     client.cookies.clear()
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code == 401
     assert calls == [], "se llamó al proveedor pese a faltar el binding"
@@ -581,9 +680,15 @@ async def test_the_grant_cannot_be_redeemed_from_another_browser(client, configu
     body = await _authorize(client)
     session = await _stored_session(body["state"])
     _stub_token_endpoint(configured, _id_token(session["nonce"]))
-    grant = (await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })).json()["identity_grant"]
+    grant = (
+        await client.post(
+            "/api/auth/clave-unica/callback",
+            json={
+                "code": "codigo",
+                "state": body["state"],
+            },
+        )
+    ).json()["identity_grant"]
 
     otro_binding = clave_unica.hash_browser_binding("cookie-de-otro-navegador")
     with pytest.raises(identity_grant.IdentityGrantError):
@@ -608,6 +713,7 @@ async def test_legacy_grants_without_binding_still_work(client):
 
 
 # === Telemetría (TAREA 6, punto 3) ===
+
 
 async def test_status_returns_the_exact_contract(client, configured):
     response = await client.get("/api/auth/clave-unica/status")
@@ -647,6 +753,7 @@ async def test_status_is_public_and_leaks_nothing(client, configured):
 
 # === Robustez del proveedor (TAREA 6, punto 7) ===
 
+
 async def test_a_provider_timeout_is_not_a_successful_login(client, configured):
     body = await _authorize(client)
 
@@ -655,9 +762,13 @@ async def test_a_provider_timeout_is_not_a_successful_login(client, configured):
 
     configured.setattr(clave_unica, "_exchange_code", _timeout)
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code >= 400
     assert await get_collection("identity_grants").count_documents({}) == 0
@@ -666,19 +777,25 @@ async def test_a_provider_timeout_is_not_a_successful_login(client, configured):
 async def test_an_invalid_json_body_from_the_provider_is_rejected(client, configured):
     body = await _authorize(client)
     configured.setattr(
-        clave_unica, "_exchange_code",
+        clave_unica,
+        "_exchange_code",
         lambda code, verifier: {"no_hay": "id_token"},
     )
 
-    response = await client.post("/api/auth/clave-unica/callback", json={
-        "code": "codigo", "state": body["state"],
-    })
+    response = await client.post(
+        "/api/auth/clave-unica/callback",
+        json={
+            "code": "codigo",
+            "state": body["state"],
+        },
+    )
 
     assert response.status_code >= 400
     assert await get_collection("identity_grants").count_documents({}) == 0
 
 
 # === Readiness de producción (TAREA 6, punto 5) ===
+
 
 def test_production_blocks_a_provider_that_is_not_clave_unica(monkeypatch):
     """Un nombre de sandbox olvidado en producción emitiría grants sin verificar."""
@@ -704,11 +821,14 @@ def test_production_blocks_clave_unica_with_incomplete_configuration(monkeypatch
     assert any("configuración" in b and "ClaveÚnica" in b for b in blockers)
 
 
-@pytest.mark.parametrize("key", [
-    "CLAVE_UNICA_ISSUER",
-    "CLAVE_UNICA_TOKEN_ENDPOINT",
-    "CLAVE_UNICA_JWKS_URI",
-])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "CLAVE_UNICA_ISSUER",
+        "CLAVE_UNICA_TOKEN_ENDPOINT",
+        "CLAVE_UNICA_JWKS_URI",
+    ],
+)
 def test_plain_http_endpoints_are_a_configuration_error(monkeypatch, key):
     """En claro viajarían el código de autorización y el client_secret."""
     monkeypatch.setattr(settings, key, "http://accounts.example.gob.cl/openid")

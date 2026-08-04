@@ -6,6 +6,7 @@ Handles Web3 operations, wallet connections, and SBT minting
 onchain. There is no automatic fallback from onchain to demo. Production is
 blocked until a one-time identity verification grant is bound to the wallet.
 """
+
 from typing import Optional, Tuple
 import asyncio
 import logging
@@ -32,9 +33,7 @@ class BlockchainService:
 
     @staticmethod
     async def mint_sbt(
-        wallet_address: str,
-        assurance_level: str,
-        doc_hash: str
+        wallet_address: str, assurance_level: str, doc_hash: str
     ) -> Tuple[bool, Optional[int], Optional[str], Optional[str]]:
         """
         Register a membership using the explicitly selected MINT_MODE.
@@ -56,7 +55,9 @@ class BlockchainService:
             )
 
         if settings.MINT_MODE == "disabled":
-            raise MintingUnavailable("La creación de membresías está deshabilitada en este entorno.")
+            raise MintingUnavailable(
+                "La creación de membresías está deshabilitada en este entorno."
+            )
 
         if settings.MINT_MODE == "onchain" and not chain_service.is_configured():
             raise MintingUnavailable(
@@ -69,13 +70,42 @@ class BlockchainService:
 
             existing = await members_collection().find_one({"wallet_address": address})
             if existing:
-                return (
-                    False, None, None,
-                    f"Ya existe un SBT para esta wallet (Token #{existing.get('token_id')})"
-                )
+                status = existing.get("status", "active")
+                if status == "pending":
+                    return (
+                        False,
+                        None,
+                        None,
+                        "Hay una transacción pendiente para esta wallet. Espera unos momentos.",
+                    )
+                elif status == "failed":
+                    # Clean up failed previous attempt
+                    await members_collection().delete_one({"wallet_address": address})
+                else:
+                    return (
+                        False,
+                        None,
+                        None,
+                        f"Ya existe un SBT para esta wallet (Token #{existing.get('token_id')})",
+                    )
 
-            tx_hash: Optional[str] = None
-            onchain_token_id: Optional[int] = None
+            # Insert "pending" record BEFORE interacting with the blockchain (P-23)
+            member = Member(
+                wallet_address=address,
+                token_id=None,
+                doc_hash=doc_hash,
+                assurance_level=assurance_level,
+                issuance_mode=(
+                    "onchain" if settings.MINT_MODE == "onchain" else "demo"
+                ),
+                status="pending",
+                identity_verified=False,
+            )
+
+            try:
+                await members_collection().insert_one(member.model_dump())
+            except DuplicateKeyError:
+                return (False, None, None, "Ya existe un SBT para esta wallet")
 
             if settings.MINT_MODE == "onchain":
                 try:
@@ -86,59 +116,55 @@ class BlockchainService:
                         identity_hash_hex=identity_hash_hex,
                         assurance_level=assurance_level,
                     )
-                except chain_service.ChainMintError as e:
+                    if onchain_token_id is None:
+                        raise MintingUnavailable(
+                            "El minteo on-chain no devolvió un tokenId verificable."
+                        )
+
+                    token_id = onchain_token_id
+                    await members_collection().update_one(
+                        {"wallet_address": address},
+                        {
+                            "$set": {
+                                "status": "active",
+                                "token_id": token_id,
+                                "tx_hash": tx_hash,
+                            }
+                        },
+                    )
+                    logger.info(
+                        f"Membership minted on-chain: Token #{token_id} for {address} (tx {tx_hash})"
+                    )
+                    return (True, token_id, tx_hash, None)
+
+                except Exception as e:
                     logger.error(f"On-chain mint failed for {address}: {e}")
+                    await members_collection().update_one(
+                        {"wallet_address": address}, {"$set": {"status": "failed"}}
+                    )
+                    if isinstance(e, MintingUnavailable):
+                        raise
                     return (
                         False,
                         None,
                         None,
                         "No se pudo confirmar el minteo on-chain. Intenta más tarde.",
                     )
-
-            if settings.MINT_MODE == "onchain":
-                if onchain_token_id is None:
-                    raise MintingUnavailable(
-                        "El minteo on-chain no devolvió un tokenId verificable."
-                    )
-                token_id = onchain_token_id
             else:
-                # Sequential id over the highest existing one: survives
-                # revocations without colliding (count+1 does not). Only the
-                # demo path needs it — on-chain uses the real tokenId.
-                last = await members_collection().find_one(sort=[("token_id", -1)])
+                # Demo mode
+                last = await members_collection().find_one(
+                    {"token_id": {"$ne": None}}, sort=[("token_id", -1)]
+                )
                 token_id = (last["token_id"] + 1) if last else 1
 
-            member = Member(
-                wallet_address=address,
-                token_id=token_id,
-                doc_hash=doc_hash,
-                assurance_level=assurance_level,
-                issuance_mode=(
-                    "onchain" if settings.MINT_MODE == "onchain" else "demo"
-                ),
-                # Wallet ownership and caller-supplied identity inputs do not
-                # constitute verified civil identity. Keep every current path
-                # explicitly unverified until the one-time grant exists.
-                identity_verified=False,
-            )
-
-            member_dict = member.model_dump()
-            if tx_hash:
-                member_dict["tx_hash"] = tx_hash
-
-            try:
-                await members_collection().insert_one(member_dict)
-            except DuplicateKeyError:
-                # Unique index on wallet_address closed the race between the
-                # duplicate check above and this insert.
-                return (False, None, None, "Ya existe un SBT para esta wallet")
-
-            if tx_hash:
-                logger.info(f"Membership minted on-chain: Token #{token_id} for {address} (tx {tx_hash})")
-            else:
-                logger.info(f"Membership registered (off-chain demo): Token #{token_id} for {address}")
-
-            return (True, token_id, tx_hash, None)
+                await members_collection().update_one(
+                    {"wallet_address": address},
+                    {"$set": {"status": "active", "token_id": token_id}},
+                )
+                logger.info(
+                    f"Membership registered (off-chain demo): Token #{token_id} for {address}"
+                )
+                return (True, token_id, None, None)
 
         except MintingUnavailable:
             # Reaches the router as a 503 with its specific reason instead of
@@ -147,21 +173,21 @@ class BlockchainService:
         except Exception as e:
             logger.error(f"SBT minting error: {e}")
             return (False, None, None, "No se pudo crear la membresía.")
-    
+
     @staticmethod
     async def get_member_by_wallet(wallet_address: str) -> Optional[Member]:
         """Get member by wallet address"""
         try:
-            result = await members_collection().find_one({
-                "wallet_address": wallet_address.lower()
-            })
+            result = await members_collection().find_one(
+                {"wallet_address": wallet_address.lower()}
+            )
             if result:
                 return Member(**result)
             return None
         except Exception as e:
             logger.error(f"Error getting member: {e}")
             return None
-    
+
     @staticmethod
     async def get_member_by_token(token_id: int) -> Optional[Member]:
         """Get member by token ID"""
@@ -173,7 +199,7 @@ class BlockchainService:
         except Exception as e:
             logger.error(f"Error getting member by token: {e}")
             return None
-    
+
     @staticmethod
     async def get_total_members() -> int:
         """Get total number of members"""
@@ -181,19 +207,20 @@ class BlockchainService:
             return await members_collection().count_documents({})
         except Exception:
             return 0
-    
+
     @staticmethod
     async def get_recent_members(days: int = 7) -> int:
         """Get number of members registered in the last N days"""
         try:
             from datetime import timedelta
+
             cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-            return await members_collection().count_documents({
-                "created_at": {"$gte": cutoff}
-            })
+            return await members_collection().count_documents(
+                {"created_at": {"$gte": cutoff}}
+            )
         except Exception:
             return 0
-    
+
     @staticmethod
     async def revoke_membership(token_id: int) -> Tuple[bool, Optional[str]]:
         """
@@ -203,7 +230,12 @@ class BlockchainService:
         try:
             result = await members_collection().update_one(
                 {"token_id": token_id},
-                {"$set": {"status": "revoked", "updated_at": datetime.now(timezone.utc)}}
+                {
+                    "$set": {
+                        "status": "revoked",
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                },
             )
 
             # matched_count, not modified_count: revoking an already-revoked

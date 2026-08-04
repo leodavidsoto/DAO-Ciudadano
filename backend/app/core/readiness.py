@@ -8,6 +8,7 @@ qué variables necesita cada funcionalidad, las reporta al arrancar, las
 refleja en /health, y da un mensaje accionable por endpoint en vez de un
 error opaco.
 """
+
 import logging
 from dataclasses import dataclass
 from typing import List
@@ -174,9 +175,7 @@ def deployment_blockers() -> list[str]:
         settings.session_cookie_samesite == "none"
         and not settings.session_cookie_secure
     ):
-        blockers.append(
-            "SESSION_COOKIE_SAMESITE=none exige SESSION_COOKIE_SECURE=true"
-        )
+        blockers.append("SESSION_COOKIE_SAMESITE=none exige SESSION_COOKIE_SECURE=true")
 
     if not settings.is_production:
         return blockers
@@ -342,8 +341,7 @@ def feature_status() -> dict:
             # Solo comprueba configuración: no se golpea el RPC en cada
             # health check. La sonda real vive en `minting.onchain.runtime`.
             "available": (
-                settings.MEMBERSHIP_SOURCE == "mongo"
-                or chain_service.can_read_chain()
+                settings.MEMBERSHIP_SOURCE == "mongo" or chain_service.can_read_chain()
             ),
             "cache_ttl_seconds": settings.MEMBERSHIP_CACHE_TTL_SECONDS,
         },
@@ -437,7 +435,9 @@ def report_at_startup() -> None:
     for req in missing:
         logger.warning(
             "readiness: falta o es inválida %s -> %s no va a funcionar (%s)",
-            req.key, req.feature, req.why,
+            req.key,
+            req.feature,
+            req.why,
         )
     for blocker in minting["blockers"]:
         logger.warning("readiness: minteo bloqueado -> %s", blocker)
@@ -453,9 +453,7 @@ def onchain_minting_status(runtime: dict | None = None) -> dict:
 
     errors = chain_service.configuration_errors()
     missing_keys = [key for key, reason in errors.items() if reason == "falta"]
-    invalid = {
-        key: reason for key, reason in errors.items() if reason != "falta"
-    }
+    invalid = {key: reason for key, reason in errors.items() if reason != "falta"}
     return {
         "configured": not errors,
         "missing": missing_keys,
@@ -488,9 +486,10 @@ def minting_status(onchain_runtime: dict | None = None) -> dict:
         elif not onchain_runtime:
             blockers.append("validación operativa on-chain pendiente")
         elif not onchain_runtime.get("ready"):
-            blockers.extend(onchain_runtime.get("errors") or [
-                "la validación operativa on-chain falló"
-            ])
+            blockers.extend(
+                onchain_runtime.get("errors")
+                or ["la validación operativa on-chain falló"]
+            )
 
     if settings.is_production:
         blockers.append(

@@ -31,6 +31,7 @@ Algoritmo (espejo de circomlibjs/src/poseidon_reference.js):
 Las rondas completas son las 4 primeras y las 4 últimas; las del medio son
 parciales. Es la construcción HADES estándar.
 """
+
 from .poseidon_constants import CONSTANTS, FIELD, N_ROUNDS_F, N_ROUNDS_P
 
 
@@ -85,10 +86,7 @@ def poseidon(inputs: list[int]) -> int:
             state[0] = pow(state[0], 5, FIELD)
 
         # MIX: producto por la matriz MDS
-        state = [
-            sum(mds[i][j] * state[j] for j in range(t)) % FIELD
-            for i in range(t)
-        ]
+        state = [sum(mds[i][j] * state[j] for j in range(t)) % FIELD for i in range(t)]
 
     return state[0]
 

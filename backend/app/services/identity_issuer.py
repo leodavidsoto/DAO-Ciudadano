@@ -23,6 +23,7 @@ El mensaje firmado es un contrato literal con el frontend
 (`REQUEST_TO_CLAUDE.md`). Cualquier cambio —incluido el orden de las líneas o
 las mayúsculas de la dirección— invalida todas las credenciales emitidas.
 """
+
 import logging
 from dataclasses import dataclass
 from typing import Optional
@@ -126,7 +127,9 @@ async def issue_credential(
     # 2. Grant civil de un solo uso. Si ya se canjeó, puede ser un reintento
     #    legítimo: se recupera el sujeto y la ruta ya emitida.
     try:
-        subject_key = await identity_grant.consume(grant, browser_binding=browser_binding)
+        subject_key = await identity_grant.consume(
+            grant, browser_binding=browser_binding
+        )
     except identity_grant.IdentityGrantError:
         subject_key = await identity_grant.peek_subject(grant)
         if not subject_key:
@@ -149,7 +152,9 @@ async def issue_credential(
 
     # 3. Inserción idempotente por sujeto.
     try:
-        witness = await identity_tree.insert_commitment(identity_commitment, subject_key)
+        witness = await identity_tree.insert_commitment(
+            identity_commitment, subject_key
+        )
     except identity_tree.IdentityTreeError as exc:
         raise IdentityIssuanceError(str(exc)) from exc
 

@@ -39,6 +39,7 @@ deterministas (typehash, dominio, empaquetado), pero no se ha ejecutado ni un
 solo envío. Por eso el transporte sigue apagado por configuración: el relayer
 EOA, que sí está probado, continúa siendo el camino activo.
 """
+
 import logging
 from dataclasses import dataclass
 from typing import Optional
@@ -117,10 +118,7 @@ def is_configured() -> bool:
 
 def is_enabled() -> bool:
     """¿Se debe usar ERC-4337 en vez del envío directo desde la EOA?"""
-    return (
-        str(settings.ERC4337_ENABLED).strip().lower() == "true"
-        and is_configured()
-    )
+    return str(settings.ERC4337_ENABLED).strip().lower() == "true" and is_configured()
 
 
 def config() -> BundlerConfig:
@@ -157,8 +155,13 @@ def runtime_status() -> dict:
     if _runtime_cache and now - _runtime_cache[0] < _RUNTIME_CACHE_SECONDS:
         return dict(_runtime_cache[1])
 
-    result = {"checked": True, "reachable": False, "chain_id": None,
-              "entrypoint_supported": False, "errors": []}
+    result = {
+        "checked": True,
+        "reachable": False,
+        "chain_id": None,
+        "entrypoint_supported": False,
+        "errors": [],
+    }
     if not is_configured():
         result["errors"] = sorted(configuration_errors())
         _runtime_cache = (now, result)
@@ -178,9 +181,7 @@ def runtime_status() -> dict:
         cfg = config()
         result["entrypoint_supported"] = cfg.entrypoint.lower() in entrypoints
         if not result["entrypoint_supported"]:
-            result["errors"].append(
-                "el bundler no soporta el EntryPoint configurado"
-            )
+            result["errors"].append("el bundler no soporta el EntryPoint configurado")
     except UserOperationError as exc:
         result["errors"].append(str(exc))
     except Exception:
@@ -365,23 +366,29 @@ def entrypoint_nonce(account_address: str, key: int = 0) -> int:
     from web3 import Web3
 
     cfg = config()
-    w3 = Web3(Web3.HTTPProvider(settings.SEPOLIA_RPC_URL, request_kwargs={"timeout": 10}))
+    w3 = Web3(
+        Web3.HTTPProvider(settings.SEPOLIA_RPC_URL, request_kwargs={"timeout": 10})
+    )
     entrypoint = w3.eth.contract(
         address=Web3.to_checksum_address(cfg.entrypoint),
-        abi=[{
-            "inputs": [
-                {"name": "sender", "type": "address"},
-                {"name": "key", "type": "uint192"},
-            ],
-            "name": "getNonce",
-            "outputs": [{"name": "nonce", "type": "uint256"}],
-            "stateMutability": "view",
-            "type": "function",
-        }],
+        abi=[
+            {
+                "inputs": [
+                    {"name": "sender", "type": "address"},
+                    {"name": "key", "type": "uint192"},
+                ],
+                "name": "getNonce",
+                "outputs": [{"name": "nonce", "type": "uint256"}],
+                "stateMutability": "view",
+                "type": "function",
+            }
+        ],
     )
-    return int(entrypoint.functions.getNonce(
-        Web3.to_checksum_address(account_address), key
-    ).call())
+    return int(
+        entrypoint.functions.getNonce(
+            Web3.to_checksum_address(account_address), key
+        ).call()
+    )
 
 
 def estimate_user_operation_gas(user_op: dict) -> dict:

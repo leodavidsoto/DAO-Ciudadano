@@ -21,6 +21,7 @@ El JWT puede llegar como `Authorization: Bearer` (app móvil) o en la cookie
 HttpOnly de sesión (web, tarea 1.13). Por cookie se exige además el doble
 envío CSRF en los métodos con efectos; ver core/session.py.
 """
+
 from fastapi import HTTPException, Header, Request
 from typing import Optional
 
@@ -105,7 +106,9 @@ async def current_address(
     return address
 
 
-def ensure_acts_as_self(claimed_address: str, authenticated_address: str, action: str) -> None:
+def ensure_acts_as_self(
+    claimed_address: str, authenticated_address: str, action: str
+) -> None:
     """403 si `claimed_address` (el que viene en el body) no es quien firmó la sesión.
 
     Evita que Alice actúe "como" Bob solo por escribir su dirección en el

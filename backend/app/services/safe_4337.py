@@ -34,6 +34,7 @@ de firmantes). NO se ha ejecutado contra un bundler ni una Safe desplegada:
 este entorno no tiene credenciales ni cuenta. Hasta que eso ocurra, el
 transporte permanece apagado por configuración.
 """
+
 import logging
 from dataclasses import dataclass
 
@@ -103,7 +104,9 @@ def domain_separator(chain_id: int, module_address: str) -> bytes:
     )
 
 
-def safe_op_struct_hash(user_op: dict, entrypoint: str, validity: SafeOpValidity) -> bytes:
+def safe_op_struct_hash(
+    user_op: dict, entrypoint: str, validity: SafeOpValidity
+) -> bytes:
     """Hash de la estructura SafeOp.
 
     `initCode`, `callData` y `paymasterAndData` entran como keccak de sus
@@ -114,10 +117,20 @@ def safe_op_struct_hash(user_op: dict, entrypoint: str, validity: SafeOpValidity
     return keccak(
         abi_encode(
             [
-                "bytes32", "address", "uint256", "bytes32", "bytes32",
-                "uint128", "uint128", "uint256",
-                "uint128", "uint128", "bytes32",
-                "uint48", "uint48", "address",
+                "bytes32",
+                "address",
+                "uint256",
+                "bytes32",
+                "bytes32",
+                "uint128",
+                "uint128",
+                "uint256",
+                "uint128",
+                "uint128",
+                "bytes32",
+                "uint48",
+                "uint48",
+                "address",
             ],
             [
                 SAFE_OP_TYPEHASH,
@@ -162,8 +175,13 @@ def _paymaster_and_data(user_op: dict) -> bytes:
 
     return (
         _to_bytes(paymaster)
-        + _to_int(user_op.get("paymasterVerificationGasLimit", 0), "paymasterVerificationGasLimit").to_bytes(16, "big")
-        + _to_int(user_op.get("paymasterPostOpGasLimit", 0), "paymasterPostOpGasLimit").to_bytes(16, "big")
+        + _to_int(
+            user_op.get("paymasterVerificationGasLimit", 0),
+            "paymasterVerificationGasLimit",
+        ).to_bytes(16, "big")
+        + _to_int(
+            user_op.get("paymasterPostOpGasLimit", 0), "paymasterPostOpGasLimit"
+        ).to_bytes(16, "big")
         + _to_bytes(user_op.get("paymasterData"))
     )
 
@@ -189,11 +207,14 @@ def pack_signature(owner_signatures: bytes, validity: SafeOpValidity) -> str:
     El módulo lee los 12 bytes de validez del propio campo `signature`, así
     que van dentro pero fuera de lo firmado por ECDSA.
     """
-    return "0x" + (
-        validity.valid_after.to_bytes(6, "big")
-        + validity.valid_until.to_bytes(6, "big")
-        + owner_signatures
-    ).hex()
+    return (
+        "0x"
+        + (
+            validity.valid_after.to_bytes(6, "big")
+            + validity.valid_until.to_bytes(6, "big")
+            + owner_signatures
+        ).hex()
+    )
 
 
 def split_packed_signature(signature) -> tuple[SafeOpValidity, bytes]:
@@ -291,9 +312,7 @@ def sign_user_operation(
     # módulo recuperaría otro firmante.
     signed = Account._sign_hash(digest, private_key=private_key)
     owner_signature = (
-        signed.r.to_bytes(32, "big")
-        + signed.s.to_bytes(32, "big")
-        + bytes([signed.v])
+        signed.r.to_bytes(32, "big") + signed.s.to_bytes(32, "big") + bytes([signed.v])
     )
 
     return {**user_op, "signature": pack_signature(owner_signature, validity)}

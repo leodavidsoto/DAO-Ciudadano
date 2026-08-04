@@ -24,6 +24,7 @@ Qué valida `prepare-mint` antes de gastar el patrocinio, y por qué:
   4. La raíz está aprobada, el nullifier no se gastó y la wallet no tiene ya
      membresía — antes de pedir gas, no después.
 """
+
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -216,8 +217,10 @@ def _decode_inner_mint_call(inner_data) -> dict:
 
     w3 = Web3()
     contract = w3.eth.contract(abi=chain_service._MINT_ABI)
-    payload = inner_data if isinstance(inner_data, (bytes, bytearray)) else bytes.fromhex(
-        str(inner_data).removeprefix("0x")
+    payload = (
+        inner_data
+        if isinstance(inner_data, (bytes, bytearray))
+        else bytes.fromhex(str(inner_data).removeprefix("0x"))
     )
     try:
         function, args = contract.decode_function_input(payload)
@@ -289,9 +292,15 @@ def _proxy_creation_code(factory: str) -> bytes:
     w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 10}))
     contract = w3.eth.contract(
         address=Web3.to_checksum_address(factory),
-        abi=[{"inputs": [], "name": "proxyCreationCode",
-              "outputs": [{"name": "", "type": "bytes"}],
-              "stateMutability": "pure", "type": "function"}],
+        abi=[
+            {
+                "inputs": [],
+                "name": "proxyCreationCode",
+                "outputs": [{"name": "", "type": "bytes"}],
+                "stateMutability": "pure",
+                "type": "function",
+            }
+        ],
     )
     try:
         code = contract.functions.proxyCreationCode().call()
@@ -348,9 +357,15 @@ def _assert_safe_address_is_derived(user_op: dict, safe_address: str) -> None:
     init_code_hash = keccak(
         _proxy_creation_code(factory) + abi_encode(["address"], [singleton])
     )
-    derived = "0x" + keccak(
-        b"\xff" + bytes.fromhex(str(factory).removeprefix("0x")) + salt + init_code_hash
-    )[12:].hex()
+    derived = (
+        "0x"
+        + keccak(
+            b"\xff"
+            + bytes.fromhex(str(factory).removeprefix("0x"))
+            + salt
+            + init_code_hash
+        )[12:].hex()
+    )
 
     if Web3.to_checksum_address(derived) != Web3.to_checksum_address(safe_address):
         raise HTTPException(
@@ -391,6 +406,7 @@ def _assert_proof_matches(inner: dict, declared: MintPayload) -> None:
     Sin esto, el `mint` del request sería decorativo: se validaría una prueba
     y se ejecutaría otra con el gas de la DAO.
     """
+
     def norm(values):
         return [str(int(v)) for v in values]
 
@@ -491,13 +507,9 @@ async def prepare_mint(
         {"nullifier_hash": nullifier}
     )
     if existing and existing.get("status") == "confirmed":
-        raise HTTPException(
-            status_code=409, detail="Esta credencial ya fue minteada."
-        )
+        raise HTTPException(status_code=409, detail="Esta credencial ya fue minteada.")
 
-    operation_id = (
-        existing["operation_id"] if existing else f"op_{uuid.uuid4().hex}"
-    )
+    operation_id = existing["operation_id"] if existing else f"op_{uuid.uuid4().hex}"
 
     # Estimación y patrocinio. Pimlico no debe alterar sender, nonce, factory
     # ni callData: si lo hiciera, la firma del usuario dejaría de corresponder.
@@ -525,16 +537,18 @@ async def prepare_mint(
 
     await erc4337_operations_collection().update_one(
         {"nullifier_hash": nullifier},
-        {"$set": {
-            "operation_id": operation_id,
-            "nullifier_hash": nullifier,
-            "owner_address": request.owner_address.lower(),
-            "safe_address": request.safe_address.lower(),
-            "identity_root": request.mint.identity_root,
-            "prepared_user_operation": sponsored,
-            "status": "prepared",
-            "updated_at": datetime.now(timezone.utc),
-        }},
+        {
+            "$set": {
+                "operation_id": operation_id,
+                "nullifier_hash": nullifier,
+                "owner_address": request.owner_address.lower(),
+                "safe_address": request.safe_address.lower(),
+                "identity_root": request.mint.identity_root,
+                "prepared_user_operation": sponsored,
+                "status": "prepared",
+                "updated_at": datetime.now(timezone.utc),
+            }
+        },
         upsert=True,
     )
 
@@ -557,9 +571,7 @@ async def submit_mint(
     if not record:
         raise HTTPException(status_code=404, detail="Operación desconocida.")
 
-    ensure_acts_as_self(
-        record["owner_address"], authenticated, "enviar este minteo"
-    )
+    ensure_acts_as_self(record["owner_address"], authenticated, "enviar este minteo")
     # Lo declarado en el submit debe ser lo mismo que se preparó: si no, se
     # estaría enviando una operación distinta de la validada.
     if request.owner_address.lower() != record["owner_address"]:
@@ -632,11 +644,13 @@ async def submit_mint(
 
     await erc4337_operations_collection().update_one(
         {"operation_id": request.operation_id},
-        {"$set": {
-            "status": "submitted",
-            "user_operation_hash": user_op_hash,
-            "submitted_at": datetime.now(timezone.utc),
-        }},
+        {
+            "$set": {
+                "status": "submitted",
+                "user_operation_hash": user_op_hash,
+                "submitted_at": datetime.now(timezone.utc),
+            }
+        },
     )
 
     return {"ok": True, "user_operation_hash": user_op_hash}
@@ -701,12 +715,14 @@ async def get_operation(user_operation_hash: str):
 
     await erc4337_operations_collection().update_one(
         {"user_operation_hash": user_operation_hash},
-        {"$set": {
-            "status": "confirmed",
-            "tx_hash": tx_hash,
-            "token_id": token_id,
-            "confirmed_at": datetime.now(timezone.utc),
-        }},
+        {
+            "$set": {
+                "status": "confirmed",
+                "tx_hash": tx_hash,
+                "token_id": token_id,
+                "confirmed_at": datetime.now(timezone.utc),
+            }
+        },
     )
 
     return {

@@ -16,6 +16,7 @@ El camino Redis se prueba con `fakeredis[lua]`, que ejecuta el mismo script
 Lua que se enviará a un Redis real. No sustituye a una prueba contra un
 servidor de verdad, pero verifica la lógica de la ventana en vez de asumirla.
 """
+
 import fakeredis.aioredis
 import pytest
 
@@ -34,6 +35,7 @@ def redis_client():
 
 
 # === Ventana deslizante ===
+
 
 @pytest.mark.parametrize("store_factory", ["memory", "redis"])
 async def test_allows_up_to_the_limit_and_then_refuses(store_factory, redis_client):
@@ -89,6 +91,7 @@ async def test_redis_counts_requests_in_the_same_instant(redis_client):
 
 # === La razón de la migración ===
 
+
 async def test_redis_limit_is_shared_between_workers(redis_client):
     """Dos procesos contra el mismo Redis comparten la cuota.
 
@@ -115,6 +118,7 @@ async def test_memory_limit_is_not_shared(redis_client):
 
 
 # === Degradación visible ===
+
 
 class _BrokenRedis:
     backend = "redis"
@@ -150,6 +154,7 @@ async def test_the_degradation_is_visible_not_silent():
 
 # === Selección del almacén ===
 
+
 def test_without_redis_url_uses_memory_without_pretending_to_be_degraded():
     """Un despliegue de un proceso no debe parecer roto por no usar Redis."""
     store = build_store("")
@@ -170,6 +175,7 @@ def test_with_redis_url_builds_a_fallback_store():
 
 
 # === Memoria acotada ===
+
 
 async def test_memory_store_forgets_silent_clients():
     """La contabilidad no puede crecer una entrada por IP para siempre."""

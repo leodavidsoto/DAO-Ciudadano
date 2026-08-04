@@ -10,6 +10,7 @@ Los vectores no están inventados: salen de
 `circuits/test/fixtures/membership-proof.json`, que Codex generó con
 circomlibjs y cuya prueba verifica contra el verificador desplegado.
 """
+
 import json
 from pathlib import Path
 

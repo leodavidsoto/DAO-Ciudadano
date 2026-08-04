@@ -13,6 +13,7 @@ Cubren las tres heurísticas que quedaron activas:
 * profundidad máxima de cadena, que es lo único que aportaba en exclusiva la
   copia en memoria eliminada en 3.8.
 """
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -50,11 +51,15 @@ async def _members(client, *addresses):
 async def _member_e(client):
     """Alta de la quinta wallet; devuelve sus headers de sesión."""
     headers = await _sign_in(client, ACCOUNT_E)
-    response = await client.post("/api/membership/mint", json={
-        "wallet_address": ADDR_E,
-        "assurance_level": "AL2",
-        "doc_hash": f"0xdoc{ADDR_E[-8:]}",
-    }, headers=headers)
+    response = await client.post(
+        "/api/membership/mint",
+        json={
+            "wallet_address": ADDR_E,
+            "assurance_level": "AL2",
+            "doc_hash": f"0xdoc{ADDR_E[-8:]}",
+        },
+        headers=headers,
+    )
     assert response.json()["ok"] is True, response.json()
     return headers
 
@@ -68,6 +73,7 @@ async def _deep_chain(client):
 
 
 # === Voto rápido ===
+
 
 async def test_rapid_voting_is_blocked_at_the_documented_threshold(client):
     """El umbral es MAX_VOTES_PER_WINDOW; el voto siguiente recibe 429."""
@@ -133,15 +139,19 @@ async def test_election_votes_share_the_same_heuristic(client):
         ).json()["id"]
         await _vote(client, ADDR_A, proposal_id, "for", headers=headers)
 
-    election = await client.post("/api/governance/elections", json={
-        "title": "Elección con la cuota agotada",
-        "description": "Elegimos representantes para el próximo período.",
-        "seats": 1,
-        "nominations_days": 7,
-        "voting_days": 7,
-        "term_months": 12,
-        "creator_address": ADDR_A,
-    }, headers=headers)
+    election = await client.post(
+        "/api/governance/elections",
+        json={
+            "title": "Elección con la cuota agotada",
+            "description": "Elegimos representantes para el próximo período.",
+            "seats": 1,
+            "nominations_days": 7,
+            "voting_days": 7,
+            "term_months": 12,
+            "creator_address": ADDR_A,
+        },
+        headers=headers,
+    )
     election_id = election.json()["id"]
     await client.post(
         f"/api/governance/elections/{election_id}/candidacies",
@@ -153,7 +163,11 @@ async def test_election_votes_share_the_same_heuristic(client):
     )
     await elections_collection().update_one(
         {"id": election_id},
-        {"$set": {"nominations_end_at": datetime.now(timezone.utc) - timedelta(hours=1)}},
+        {
+            "$set": {
+                "nominations_end_at": datetime.now(timezone.utc) - timedelta(hours=1)
+            }
+        },
     )
 
     response = await client.post(
@@ -178,6 +192,7 @@ async def test_detector_without_store_fails_closed(client, monkeypatch):
 
 
 # === Grafo de delegaciones ===
+
 
 async def test_delegation_cycle_is_rejected_over_the_stored_graph(client):
     """a->b->c y luego c->a: el ciclo solo se ve recorriendo la base."""

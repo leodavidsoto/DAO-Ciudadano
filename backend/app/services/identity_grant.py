@@ -21,6 +21,7 @@ Reglas que impone este módulo:
 Falla cerrado: sin `IDENTITY_PROVIDER` configurado, `issue` se niega a crear
 grants en producción en vez de emitir uno que no respalda ninguna verificación.
 """
+
 import hashlib
 import logging
 import secrets
@@ -71,17 +72,19 @@ async def issue(
 
     grant = secrets.token_urlsafe(GRANT_BYTES)
     now = datetime.now(timezone.utc)
-    await identity_grants_collection().insert_one({
-        "digest": digest(grant),
-        "subject_key": subject_key,
-        "provider": provider,
-        # Hash del binding de navegador que autorizó este grant. Copiar el
-        # grant a otro navegador no sirve: el canje lo vuelve a exigir.
-        "browser_binding": browser_binding,
-        "created_at": now,
-        "expires_at": now + timedelta(seconds=settings.IDENTITY_GRANT_TTL_SECONDS),
-        "consumed": False,
-    })
+    await identity_grants_collection().insert_one(
+        {
+            "digest": digest(grant),
+            "subject_key": subject_key,
+            "provider": provider,
+            # Hash del binding de navegador que autorizó este grant. Copiar el
+            # grant a otro navegador no sirve: el canje lo vuelve a exigir.
+            "browser_binding": browser_binding,
+            "created_at": now,
+            "expires_at": now + timedelta(seconds=settings.IDENTITY_GRANT_TTL_SECONDS),
+            "consumed": False,
+        }
+    )
     # Nunca se registra el valor del grant ni el sujeto completo.
     logger.info("Identity grant issued by %s", provider)
     return grant

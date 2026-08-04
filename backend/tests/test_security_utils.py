@@ -2,6 +2,7 @@
 Unit tests for security helpers: address/nonce validation, vote hashing,
 RUT validation and the fraud detector.
 """
+
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.routers.auth import format_rut, validate_rut  # noqa: E402
 
 # === Ethereum address validation ===
 
+
 def test_verify_eth_address_accepts_valid():
     assert verify_eth_address("0x" + "ab" * 20) is True
 
@@ -31,6 +33,7 @@ def test_verify_eth_address_rejects_bad_input():
 
 
 # === Nonces ===
+
 
 def test_generate_nonce_is_valid_and_unique():
     first, second = generate_nonce(), generate_nonce()
@@ -46,6 +49,7 @@ def test_verify_nonce_rejects_bad_format():
 
 # === Vote hashing ===
 
+
 def test_hash_vote_data_is_deterministic_and_case_insensitive():
     args = ("prop-1", "0x" + "AB" * 20, "for", "0" * 64)
     lower = ("prop-1", "0x" + "ab" * 20, "for", "0" * 64)
@@ -54,6 +58,7 @@ def test_hash_vote_data_is_deterministic_and_case_insensitive():
 
 
 # === Chilean RUT validation ===
+
 
 def test_validate_rut_accepts_valid_check_digits():
     assert validate_rut("11111111-1") is True
@@ -74,6 +79,7 @@ def test_format_rut():
 
 
 # === Fraud detector ===
+
 
 async def test_fraud_detector_flags_rapid_voting():
     """El historial de votos vive en el almacén compartido (ROADMAP 3.8)."""

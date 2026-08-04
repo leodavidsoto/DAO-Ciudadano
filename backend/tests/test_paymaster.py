@@ -7,6 +7,7 @@ lo peor que podría hacer este módulo es aparentar que funciona: el EntryPoint
 rechazaría las operaciones con `AA24 signature error` después de haber
 consumido gas patrocinado.
 """
+
 import pytest
 
 from app.core.config import settings

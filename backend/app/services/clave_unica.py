@@ -31,6 +31,7 @@ Decisiones de seguridad que conviene no revertir
   demo": si falta cualquier valor, se responde 503 en TODOS los entornos.
   Un simulador de identidad civil es justo lo que esta tarea elimina.
 """
+
 import base64
 import hashlib
 import logging
@@ -212,26 +213,31 @@ async def start_login() -> dict:
     binding_value, binding_hash = new_browser_binding()
     now = datetime.now(timezone.utc)
 
-    await login_sessions_collection().insert_one({
-        "state": state,
-        "nonce": nonce,
-        "code_verifier": verifier,
-        "browser_binding": binding_hash,
-        "created_at": now,
-        "expires_at": now + timedelta(seconds=settings.CLAVE_UNICA_LOGIN_TTL_SECONDS),
-        "consumed": False,
-    })
+    await login_sessions_collection().insert_one(
+        {
+            "state": state,
+            "nonce": nonce,
+            "code_verifier": verifier,
+            "browser_binding": binding_hash,
+            "created_at": now,
+            "expires_at": now
+            + timedelta(seconds=settings.CLAVE_UNICA_LOGIN_TTL_SECONDS),
+            "consumed": False,
+        }
+    )
 
-    query = urlencode({
-        "response_type": "code",
-        "client_id": settings.CLAVE_UNICA_CLIENT_ID.strip(),
-        "redirect_uri": settings.CLAVE_UNICA_REDIRECT_URI.strip(),
-        "scope": settings.CLAVE_UNICA_SCOPES.strip() or "openid run",
-        "state": state,
-        "nonce": nonce,
-        "code_challenge": code_challenge_for(verifier),
-        "code_challenge_method": "S256",
-    })
+    query = urlencode(
+        {
+            "response_type": "code",
+            "client_id": settings.CLAVE_UNICA_CLIENT_ID.strip(),
+            "redirect_uri": settings.CLAVE_UNICA_REDIRECT_URI.strip(),
+            "scope": settings.CLAVE_UNICA_SCOPES.strip() or "openid run",
+            "state": state,
+            "nonce": nonce,
+            "code_challenge": code_challenge_for(verifier),
+            "code_challenge_method": "S256",
+        }
+    )
     separator = "&" if "?" in settings.CLAVE_UNICA_AUTHORIZATION_ENDPOINT else "?"
     url = settings.CLAVE_UNICA_AUTHORIZATION_ENDPOINT.strip() + separator + query
 
@@ -370,7 +376,9 @@ def validate_id_token(token: str, nonce: str) -> dict:
         )
     except jwt.PyJWTError as exc:
         logger.warning("id_token de ClaveÚnica rechazado (%s)", type(exc).__name__)
-        raise ClaveUnicaError(f"El id_token no es válido: {type(exc).__name__}") from exc
+        raise ClaveUnicaError(
+            f"El id_token no es válido: {type(exc).__name__}"
+        ) from exc
 
     # El nonce ata este token al intento de login que lo pidió. Sin esto, un
     # id_token capturado de otra sesión se podría reinyectar aquí.
@@ -502,11 +510,13 @@ async def remember_issued_grant(state: str, grant: str, name: str) -> None:
 
     await login_sessions_collection().update_one(
         {"state": state},
-        {"$set": {
-            "issued_grant": encrypt(grant),
-            "issued_name": name,
-            "completed_at": datetime.now(timezone.utc),
-        }},
+        {
+            "$set": {
+                "issued_grant": encrypt(grant),
+                "issued_name": name,
+                "completed_at": datetime.now(timezone.utc),
+            }
+        },
     )
 
 
@@ -534,8 +544,10 @@ async def _replay_issued_grant(session: dict) -> None:
         {"digest": identity_grant.digest(grant)}
     )
     grant_expires_at = _as_utc(record.get("expires_at")) if record else None
-    if not record or record.get("consumed") or (
-        grant_expires_at and grant_expires_at <= datetime.now(timezone.utc)
+    if (
+        not record
+        or record.get("consumed")
+        or (grant_expires_at and grant_expires_at <= datetime.now(timezone.utc))
     ):
         # El grant ya se canjeó o caducó. Devolverlo otra vez sería entregar
         # algo que no sirve; emitir uno nuevo sin volver a autenticar sería
@@ -576,9 +588,7 @@ async def complete_login(code: str, state: str, binding: Optional[str]) -> dict:
     session = claimed
 
     try:
-        tokens = await asyncio.to_thread(
-            _exchange_code, code, session["code_verifier"]
-        )
+        tokens = await asyncio.to_thread(_exchange_code, code, session["code_verifier"])
     except ClaveUnicaError:
         raise
     except Exception as exc:

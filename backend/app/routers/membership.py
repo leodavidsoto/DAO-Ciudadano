@@ -8,6 +8,7 @@ Wallet auth (cierra C-1): mintear una membresía requiere sesión de wallet
 (SIWE) para la MISMA dirección que se registra — antes cualquiera podía
 mintear "para" otra wallet con solo ponerla en el body.
 """
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from typing import List
@@ -40,7 +41,9 @@ router = APIRouter(prefix="/membership", tags=["Membership"])
 
 
 @router.post("/mint", response_model=MintSBTResponse)
-async def mint_sbt(request: MintSBTRequest, authenticated: str = Depends(current_address)):
+async def mint_sbt(
+    request: MintSBTRequest, authenticated: str = Depends(current_address)
+):
     """
     Register a DAO membership using the explicit MINT_MODE. On-chain mode
     never falls back to Mongo-only demo behavior. Production remains blocked
@@ -124,6 +127,7 @@ async def get_member_by_wallet(wallet_address: str):
 
 # === Minteo con prueba ZK (ADR-001, D-1/D-2) ===================================
 
+
 class ZkMintRequest(BaseModel):
     """Todo lo que el relayer necesita. Nada más.
 
@@ -158,7 +162,9 @@ class ZkMintRequest(BaseModel):
     def validate_nullifier(cls, v):
         raw = v.strip()
         if not raw.startswith("0x") or len(raw) != 66:
-            raise ValueError("nullifier_hash debe ser bytes32 en hexadecimal (0x + 64).")
+            raise ValueError(
+                "nullifier_hash debe ser bytes32 en hexadecimal (0x + 64)."
+            )
         int(raw, 16)  # lanza si no es hex
         return raw
 
@@ -201,8 +207,10 @@ async def mint_with_zk_proof(
     if existing and existing.get("status") == "failed":
         claimed = await mint_operations_collection().update_one(
             {"nullifier_hash": request.nullifier_hash.lower(), "status": "failed"},
-            {"$set": {"status": "pending", "retried_at": datetime.now(timezone.utc)},
-             "$inc": {"attempts": 1}},
+            {
+                "$set": {"status": "pending", "retried_at": datetime.now(timezone.utc)},
+                "$inc": {"attempts": 1},
+            },
         )
         if claimed.modified_count == 0:
             raise HTTPException(
@@ -211,13 +219,15 @@ async def mint_with_zk_proof(
             )
     else:
         try:
-            await mint_operations_collection().insert_one({
-                "nullifier_hash": request.nullifier_hash.lower(),
-                "wallet_address": request.wallet_address.lower(),
-                "status": "pending",
-                "attempts": 1,
-                "created_at": datetime.now(timezone.utc),
-            })
+            await mint_operations_collection().insert_one(
+                {
+                    "nullifier_hash": request.nullifier_hash.lower(),
+                    "wallet_address": request.wallet_address.lower(),
+                    "status": "pending",
+                    "attempts": 1,
+                    "created_at": datetime.now(timezone.utc),
+                }
+            )
         except DuplicateKeyError:
             raise HTTPException(
                 status_code=409,
@@ -249,12 +259,14 @@ async def mint_with_zk_proof(
 
     await mint_operations_collection().update_one(
         {"nullifier_hash": request.nullifier_hash.lower()},
-        {"$set": {
-            "status": "confirmed",
-            "tx_hash": tx_hash,
-            "token_id": token_id,
-            "confirmed_at": datetime.now(timezone.utc),
-        }},
+        {
+            "$set": {
+                "status": "confirmed",
+                "tx_hash": tx_hash,
+                "token_id": token_id,
+                "confirmed_at": datetime.now(timezone.utc),
+            }
+        },
     )
 
     # Reconciliar `members`: sin esto, /membership/member/{wallet} y las

@@ -12,6 +12,7 @@ descubrir que rota mal es antes de tocar la base de producción, no durante.
 Todas las funciones aceptan `apply=False` y en ese modo NO escriben nada:
 devuelven lo que harían. El script hereda ese comportamiento por defecto.
 """
+
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
@@ -98,7 +99,9 @@ async def scan(collection: str) -> dict:
     return result
 
 
-async def rotate_encrypted_fields(collection: str, apply: bool = False) -> MaintenanceReport:
+async def rotate_encrypted_fields(
+    collection: str, apply: bool = False
+) -> MaintenanceReport:
     """Re-cifra con la llave primaria y cifra la PII legacy que esté en claro.
 
     Nunca escribe un valor en texto plano: `rotate()` descifra y vuelve a
@@ -140,7 +143,9 @@ async def rotate_encrypted_fields(collection: str, apply: bool = False) -> Maint
     return report
 
 
-async def reindex_lookup_keys(collection: str, apply: bool = False) -> MaintenanceReport:
+async def reindex_lookup_keys(
+    collection: str, apply: bool = False
+) -> MaintenanceReport:
     """Recalcula los índices ciegos con el pepper VIGENTE.
 
     Es lo que cierra una rotación de pepper: mientras queden documentos

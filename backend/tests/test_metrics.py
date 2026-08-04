@@ -9,6 +9,7 @@ para cualquiera que las pida.
 El router no se monta cuando `ENABLE_METRICS` es false, así que estos tests
 construyen una app mínima con el router para poder ejercitar el guardia.
 """
+
 import httpx
 import pytest
 from fastapi import FastAPI

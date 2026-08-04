@@ -12,6 +12,7 @@ quedara atrás. De hecho el de ERC-4337 nunca llegó a escribir en `members`:
 la persona obtenía su SBT on-chain y quedaba fuera de la gobernanza, porque
 el gate de membresía consulta MongoDB (MEMBERSHIP_SOURCE=mongo).
 """
+
 from datetime import datetime, timezone
 from typing import Optional
 import uuid

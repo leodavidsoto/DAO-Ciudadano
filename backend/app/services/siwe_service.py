@@ -11,6 +11,7 @@ Ahora: el cliente pide un desafío (nonce de un solo uso), lo firma con
 realmente firmó y, si coincide con la reclamada, emite un JWT corto que
 autentica esa dirección para las siguientes acciones.
 """
+
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,7 @@ STATEMENT = "Firma este mensaje para iniciar sesión en DAO Ciudadana. Esto no a
 def _checksum(address: str) -> str:
     try:
         from eth_utils import to_checksum_address
+
         return to_checksum_address(address)
     except Exception:
         return address
@@ -71,15 +73,17 @@ async def create_challenge(address: str) -> dict:
     issued_at = now.isoformat()
     expires_at = now + timedelta(seconds=settings.SIWE_CHALLENGE_EXPIRE_SECONDS)
     expiration_time = expires_at.isoformat()
-    await siwe_nonces_collection().insert_one({
-        "nonce": nonce,
-        "address": address,
-        "issued_at": issued_at,
-        "expiration_time": expiration_time,
-        "expires_at": expires_at,
-        "created_at": now,
-        "consumed": False,
-    })
+    await siwe_nonces_collection().insert_one(
+        {
+            "nonce": nonce,
+            "address": address,
+            "issued_at": issued_at,
+            "expiration_time": expiration_time,
+            "expires_at": expires_at,
+            "created_at": now,
+            "consumed": False,
+        }
+    )
     return {
         "message": build_message(address, nonce, issued_at, expiration_time),
         "nonce": nonce,

@@ -74,6 +74,8 @@ async def test_readiness_rejects_insecure_or_malformed_secrets(
 ):
     monkeypatch.setattr(settings, "DEBUG", False)
     monkeypatch.setattr(settings, key, value)
+    if key == "PII_ENCRYPTION_KEY":
+        monkeypatch.setattr(settings, "PII_ENCRYPTION_KEYS", "")
 
     response = await client.get("/health/ready")
     data = response.json()
@@ -236,6 +238,7 @@ async def test_onchain_membership_source_with_rpc_is_not_blocked(monkeypatch):
 
 # === Servicios añadidos después de la primera pasada ===
 
+
 def _production(monkeypatch, **overrides):
     """Producción con lo mínimo bien configurado, salvo lo que se sobreescriba."""
     monkeypatch.setattr(settings, "APP_ENV", "production")
@@ -246,7 +249,9 @@ def _production(monkeypatch, **overrides):
     monkeypatch.setattr(settings, "SIWE_URI", "https://estamosdao.cl")
     monkeypatch.setattr(settings, "CORS_ORIGINS", "https://estamosdao.cl")
     monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", True)
-    monkeypatch.setattr(settings, "MONGO_URL", "mongodb+srv://user:pw@cluster.example/db")
+    monkeypatch.setattr(
+        settings, "MONGO_URL", "mongodb+srv://user:pw@cluster.example/db"
+    )
     for key, value in overrides.items():
         monkeypatch.setattr(settings, key, value)
 
@@ -305,6 +310,7 @@ def test_production_blocks_without_the_membership_contract(monkeypatch):
 
 
 # === Qué puede hacer realmente el despliegue ===
+
 
 def test_feature_status_reflects_configuration_not_intention(monkeypatch):
     """Un booleano `ready` no dice QUÉ funciona; esto sí."""

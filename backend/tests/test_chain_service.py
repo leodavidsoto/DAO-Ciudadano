@@ -6,6 +6,7 @@ ser False. `MINT_MODE=onchain` falla cerrado en ese estado; el modo demo solo
 se usa cuando fue seleccionado explícitamente. Este archivo cubre la
 configuración y el probe de `chain_service.py` de forma aislada.
 """
+
 from app.core.config import settings
 from app.services import chain_service
 
@@ -117,6 +118,7 @@ def test_runtime_status_checks_chain_contract_role_and_balance(monkeypatch):
 
 def test_mint_raises_when_not_configured(monkeypatch):
     import pytest
+
     monkeypatch.setattr(settings, "SEPOLIA_RPC_URL", "")
     monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "")
     monkeypatch.setattr(settings, "MINTER_PRIVATE_KEY", "")
@@ -150,6 +152,7 @@ def test_mint_never_uses_client_when_runtime_precondition_fails(monkeypatch):
 
 
 # === Lecturas sin llave privada ===
+
 
 def test_reading_the_chain_does_not_require_a_minter_key(monkeypatch):
     """Las lecturas no necesitan llave privada.

@@ -10,12 +10,14 @@ Dos defectos que Codex señaló y que estos tests fijan:
    emitido — y el gate de gobernanza rechazaba a alguien que sí tenía su
    credencial on-chain.
 """
+
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from app.core.database import members_collection
 from app.routers.membership import mint_operations_collection
+
 # La reconciliación se movió a services/ para que la compartan el relayer y el
 # camino ERC-4337, que antes no la ejecutaba (ver AUDIT P-70).
 from app.services.membership_records import (
@@ -36,7 +38,11 @@ async def _session(client, account):
     ).signature.hex()
     verify = await client.post(
         "/api/wallet/verify",
-        json={"address": account.address, "nonce": data["nonce"], "signature": signature},
+        json={
+            "address": account.address,
+            "nonce": data["nonce"],
+            "signature": signature,
+        },
     )
     return {"Authorization": f"Bearer {verify.json()['token']}"}
 
@@ -55,12 +61,14 @@ def _body(account):
 async def test_a_failed_operation_can_be_retried(client):
     """Un `failed` debe poder reintentarse, no quedar en 409 permanente."""
     headers = await _session(client, CITIZEN)
-    await mint_operations_collection().insert_one({
-        "nullifier_hash": NULLIFIER,
-        "wallet_address": CITIZEN.address.lower(),
-        "status": "failed",
-        "attempts": 1,
-    })
+    await mint_operations_collection().insert_one(
+        {
+            "nullifier_hash": NULLIFIER,
+            "wallet_address": CITIZEN.address.lower(),
+            "status": "failed",
+            "attempts": 1,
+        }
+    )
 
     response = await client.post(
         "/api/membership/mint-zk", json=_body(CITIZEN), headers=headers
@@ -76,11 +84,13 @@ async def test_a_failed_operation_can_be_retried(client):
 async def test_a_pending_operation_still_blocks_a_duplicate(client):
     """Reintentar mientras hay una en vuelo sí debe rechazarse."""
     headers = await _session(client, CITIZEN)
-    await mint_operations_collection().insert_one({
-        "nullifier_hash": NULLIFIER,
-        "wallet_address": CITIZEN.address.lower(),
-        "status": "pending",
-    })
+    await mint_operations_collection().insert_one(
+        {
+            "nullifier_hash": NULLIFIER,
+            "wallet_address": CITIZEN.address.lower(),
+            "status": "pending",
+        }
+    )
 
     response = await client.post(
         "/api/membership/mint-zk", json=_body(CITIZEN), headers=headers
@@ -91,17 +101,21 @@ async def test_a_pending_operation_still_blocks_a_duplicate(client):
 
 async def test_a_confirmed_operation_is_returned_without_resending(client):
     headers = await _session(client, CITIZEN)
-    await mint_operations_collection().insert_one({
-        "nullifier_hash": NULLIFIER,
-        "wallet_address": CITIZEN.address.lower(),
-        "status": "confirmed",
-        "token_id": 7,
-        "tx_hash": "0xdead",
-    })
+    await mint_operations_collection().insert_one(
+        {
+            "nullifier_hash": NULLIFIER,
+            "wallet_address": CITIZEN.address.lower(),
+            "status": "confirmed",
+            "token_id": 7,
+            "tx_hash": "0xdead",
+        }
+    )
 
-    body = (await client.post(
-        "/api/membership/mint-zk", json=_body(CITIZEN), headers=headers
-    )).json()
+    body = (
+        await client.post(
+            "/api/membership/mint-zk", json=_body(CITIZEN), headers=headers
+        )
+    ).json()
 
     assert body["ok"] is True
     assert body["token_id"] == 7
@@ -109,9 +123,10 @@ async def test_a_confirmed_operation_is_returned_without_resending(client):
 
 async def test_reconciliation_makes_the_sbt_visible_to_the_api(client):
     """Sin esto, un SBT emitido por la vía ZK era invisible para la API."""
-    assert await members_collection().find_one(
-        {"wallet_address": CITIZEN.address.lower()}
-    ) is None
+    assert (
+        await members_collection().find_one({"wallet_address": CITIZEN.address.lower()})
+        is None
+    )
 
     await _reconcile_member_record(CITIZEN.address, token_id=42, tx_hash="0xfeed")
 
@@ -131,6 +146,9 @@ async def test_reconciliation_is_idempotent(client):
     await _reconcile_member_record(CITIZEN.address, token_id=42, tx_hash="0xfeed")
     await _reconcile_member_record(CITIZEN.address, token_id=42, tx_hash="0xfeed")
 
-    assert await members_collection().count_documents(
-        {"wallet_address": CITIZEN.address.lower()}
-    ) == 1
+    assert (
+        await members_collection().count_documents(
+            {"wallet_address": CITIZEN.address.lower()}
+        )
+        == 1
+    )

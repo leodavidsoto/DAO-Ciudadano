@@ -1,6 +1,7 @@
 """
 Dashboard endpoints: real counts only (no inflated figures).
 """
+
 from datetime import datetime, timezone
 
 from eth_account import Account
@@ -15,26 +16,37 @@ VALID_ADDRESS = _ACCOUNT.address.lower()
 
 
 async def _sign_in(client, account):
-    challenge = await client.post("/api/wallet/challenge", json={"address": account.address})
+    challenge = await client.post(
+        "/api/wallet/challenge", json={"address": account.address}
+    )
     challenge.raise_for_status()
     body = challenge.json()
-    signed = Account.sign_message(encode_defunct(text=body["message"]), private_key=account.key)
-    verify = await client.post("/api/wallet/verify", json={
-        "address": account.address,
-        "nonce": body["nonce"],
-        "signature": signed.signature.hex(),
-    })
+    signed = Account.sign_message(
+        encode_defunct(text=body["message"]), private_key=account.key
+    )
+    verify = await client.post(
+        "/api/wallet/verify",
+        json={
+            "address": account.address,
+            "nonce": body["nonce"],
+            "signature": signed.signature.hex(),
+        },
+    )
     verify.raise_for_status()
     return {"Authorization": f"Bearer {verify.json()['token']}"}
 
 
 async def _mint(client):
     headers = await _sign_in(client, _ACCOUNT)
-    return await client.post("/api/membership/mint", json={
-        "wallet_address": VALID_ADDRESS,
-        "assurance_level": "AL2",
-        "doc_hash": "0xdeadbeef",
-    }, headers=headers)
+    return await client.post(
+        "/api/membership/mint",
+        json={
+            "wallet_address": VALID_ADDRESS,
+            "assurance_level": "AL2",
+            "doc_hash": "0xdeadbeef",
+        },
+        headers=headers,
+    )
 
 
 async def test_stats_are_zero_with_empty_db(client):
@@ -72,31 +84,33 @@ async def test_removed_public_status_write_endpoint_is_not_exposed(client):
 
 async def test_production_metrics_quarantine_demo_and_legacy_rows(client, monkeypatch):
     now = datetime.now(timezone.utc)
-    await members_collection().insert_many([
-        {
-            "wallet_address": "0x" + "11" * 20,
-            "token_id": 10,
-            "status": "active",
-            "issuance_mode": "demo",
-            "identity_verified": False,
-            "created_at": now,
-        },
-        {
-            "wallet_address": "0x" + "22" * 20,
-            "token_id": 11,
-            "status": "active",
-            "created_at": now,
-        },
-        {
-            "wallet_address": "0x" + "33" * 20,
-            "token_id": 12,
-            "status": "active",
-            "issuance_mode": "onchain",
-            "identity_verified": True,
-            "tx_hash": "0x" + "ab" * 32,
-            "created_at": now,
-        },
-    ])
+    await members_collection().insert_many(
+        [
+            {
+                "wallet_address": "0x" + "11" * 20,
+                "token_id": 10,
+                "status": "active",
+                "issuance_mode": "demo",
+                "identity_verified": False,
+                "created_at": now,
+            },
+            {
+                "wallet_address": "0x" + "22" * 20,
+                "token_id": 11,
+                "status": "active",
+                "created_at": now,
+            },
+            {
+                "wallet_address": "0x" + "33" * 20,
+                "token_id": 12,
+                "status": "active",
+                "issuance_mode": "onchain",
+                "identity_verified": True,
+                "tx_hash": "0x" + "ab" * 32,
+                "created_at": now,
+            },
+        ]
+    )
     monkeypatch.setattr(settings, "APP_ENV", "production")
 
     stats = (await client.get("/api/dashboard/stats")).json()

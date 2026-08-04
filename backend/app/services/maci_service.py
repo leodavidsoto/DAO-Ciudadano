@@ -29,6 +29,7 @@ coordinador puede revertirlo), no hay coordinador desplegado y no existe el
 circuito de tally. Encola mensajes y conserva su orden, que es todo lo que un
 servidor puede hacer sin poder leerlos. Ver docs/ROADMAP.md fase 3.
 """
+
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -219,13 +220,15 @@ async def register_public_key(wallet_address: str, x, y) -> MaciKeyRecord:
         },
         upsert=True,
     )
-    await maci_key_history_collection().insert_one({
-        "wallet_address": address,
-        "x": str(parsed_x),
-        "y": str(parsed_y),
-        "version": version,
-        "registered_at": now,
-    })
+    await maci_key_history_collection().insert_one(
+        {
+            "wallet_address": address,
+            "x": str(parsed_x),
+            "y": str(parsed_y),
+            "version": version,
+            "registered_at": now,
+        }
+    )
 
     logger.info("MACI key registered for %s (version %s)", address[:10], version)
     return MaciKeyRecord(
@@ -331,25 +334,27 @@ async def publish_message(
 
     import uuid as _uuid
 
-    await maci_messages_collection().insert_one({
-        "poll_id": poll_id,
-        # Se guarda la wallet para exigir membresía e inscripción, no para
-        # vincularla con el contenido: el mensaje es ilegible sin la llave del
-        # coordinador, y el emisor de un voto y el de una anulación son
-        # indistinguibles.
-        "wallet_address": address,
-        # Clave propia para que el índice único de idempotencia tenga siempre
-        # valor. Un índice compuesto `sparse` NO omite el documento cuando solo
-        # falta uno de sus campos, así que dejarla nula hacía colisionar dos
-        # mensajes autenticados cualesquiera.
-        "idempotency_key": _uuid.uuid4().hex,
-        "index": index,
-        "ephemeral_x": str(eph_x),
-        "ephemeral_y": str(eph_y),
-        "ciphertext": [str(v) for v in parsed],
-        "message_chain": chain,
-        "published_at": datetime.now(timezone.utc),
-    })
+    await maci_messages_collection().insert_one(
+        {
+            "poll_id": poll_id,
+            # Se guarda la wallet para exigir membresía e inscripción, no para
+            # vincularla con el contenido: el mensaje es ilegible sin la llave del
+            # coordinador, y el emisor de un voto y el de una anulación son
+            # indistinguibles.
+            "wallet_address": address,
+            # Clave propia para que el índice único de idempotencia tenga siempre
+            # valor. Un índice compuesto `sparse` NO omite el documento cuando solo
+            # falta uno de sus campos, así que dejarla nula hacía colisionar dos
+            # mensajes autenticados cualesquiera.
+            "idempotency_key": _uuid.uuid4().hex,
+            "index": index,
+            "ephemeral_x": str(eph_x),
+            "ephemeral_y": str(eph_y),
+            "ciphertext": [str(v) for v in parsed],
+            "message_chain": chain,
+            "published_at": datetime.now(timezone.utc),
+        }
+    )
     await maci_polls_collection().update_one(
         {"poll_id": poll_id},
         {"$set": {"message_chain": chain, "message_count": index + 1}},
@@ -411,13 +416,15 @@ async def assign_state_index(poll_id: str, wallet_address: str) -> int:
         {"poll_id": poll_id}
     )
     state_index = FIRST_STATE_INDEX + assigned
-    await maci_poll_registry_collection().insert_one({
-        "poll_id": poll_id,
-        "wallet_address": address,
-        "state_index": state_index,
-        "nonce": 0,
-        "assigned_at": datetime.now(timezone.utc),
-    })
+    await maci_poll_registry_collection().insert_one(
+        {
+            "poll_id": poll_id,
+            "wallet_address": address,
+            "state_index": state_index,
+            "nonce": 0,
+            "assigned_at": datetime.now(timezone.utc),
+        }
+    )
     return state_index
 
 
@@ -523,17 +530,19 @@ async def publish_anonymous_message(
     chain = next_message_chain(previous_chain, eph_x, eph_y, parsed)
 
     try:
-        await maci_messages_collection().insert_one({
-            "poll_id": poll_id,
-            # Sin wallet_address: es la diferencia con el transporte autenticado.
-            "index": index,
-            "ephemeral_x": str(eph_x),
-            "ephemeral_y": str(eph_y),
-            "ciphertext": [str(v) for v in parsed],
-            "message_chain": chain,
-            "idempotency_key": idempotency_key,
-            "published_at": datetime.now(timezone.utc),
-        })
+        await maci_messages_collection().insert_one(
+            {
+                "poll_id": poll_id,
+                # Sin wallet_address: es la diferencia con el transporte autenticado.
+                "index": index,
+                "ephemeral_x": str(eph_x),
+                "ephemeral_y": str(eph_y),
+                "ciphertext": [str(v) for v in parsed],
+                "message_chain": chain,
+                "idempotency_key": idempotency_key,
+                "published_at": datetime.now(timezone.utc),
+            }
+        )
     except DuplicateKeyError:
         # Dos reintentos simultáneos con la misma idempotency_key: el índice
         # único es lo que decide. El que pierde devuelve el recibo del que
@@ -576,12 +585,14 @@ async def poll_id_for_proposal(proposal_id: str) -> str:
 
     assigned = await maci_poll_registry_collection().count_documents({"kind": "poll"})
     poll_id = str(assigned + 1)
-    await maci_poll_registry_collection().insert_one({
-        "kind": "poll",
-        "proposal_id": proposal_id,
-        "poll_id": poll_id,
-        "created_at": datetime.now(timezone.utc),
-    })
+    await maci_poll_registry_collection().insert_one(
+        {
+            "kind": "poll",
+            "proposal_id": proposal_id,
+            "poll_id": poll_id,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
     return poll_id
 
 

@@ -11,6 +11,7 @@ Lo que estos tests protegen, por orden de importancia:
    dirección emitiría algo que su dueño legítimo no puede usar.
 3. Que falle cerrado sin proveedor civil, sin emisor y sin contrato.
 """
+
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -98,6 +99,7 @@ def production_siwe(monkeypatch):
 
 # === El punto crítico: no heredar el bloqueo de los demos ===
 
+
 async def test_endpoint_is_not_blocked_by_the_demo_gate(
     client, issuer_configured, production_siwe
 ):
@@ -114,9 +116,9 @@ async def test_endpoint_is_not_blocked_by_the_demo_gate(
         headers=headers,
     )
 
-    assert response.status_code != 503, (
-        "El endpoint heredó el bloqueo de los simuladores de identidad"
-    )
+    assert (
+        response.status_code != 503
+    ), "El endpoint heredó el bloqueo de los simuladores de identidad"
     assert response.status_code == 403
     assert "grant" in response.json()["detail"].lower()
 
@@ -130,6 +132,7 @@ async def test_demo_routes_stay_blocked_in_production(client, monkeypatch):
 
 # === Autenticación ===
 
+
 async def test_requires_a_wallet_session(client, issuer_configured):
     response = await client.post(
         "/api/auth/identity-credential",
@@ -138,7 +141,9 @@ async def test_requires_a_wallet_session(client, issuer_configured):
     assert response.status_code == 401
 
 
-async def test_cannot_request_a_credential_for_another_wallet(client, issuer_configured):
+async def test_cannot_request_a_credential_for_another_wallet(
+    client, issuer_configured
+):
     """La credencial queda ligada a la wallet dentro de la hoja del árbol."""
     headers = await _session(client, CITIZEN)
 
@@ -152,6 +157,7 @@ async def test_cannot_request_a_credential_for_another_wallet(client, issuer_con
 
 
 # === Fallar cerrado ===
+
 
 async def test_without_civil_provider_production_refuses(
     client, monkeypatch, production_siwe
@@ -169,7 +175,9 @@ async def test_without_civil_provider_production_refuses(
     assert "proveedor" in response.json()["detail"].lower()
 
 
-async def test_rejects_a_contract_that_is_not_the_configured_one(client, issuer_configured):
+async def test_rejects_a_contract_that_is_not_the_configured_one(
+    client, issuer_configured
+):
     headers = await _session(client, CITIZEN)
 
     response = await client.post(
@@ -207,6 +215,7 @@ async def test_rejects_commitments_outside_the_field(client, issuer_configured):
 
 # === Grants ===
 
+
 async def test_grant_is_single_use(client):
     grant = await identity_grant.issue("sujeto-1", provider="clave-unica-sandbox")
 
@@ -228,6 +237,7 @@ async def test_grant_value_is_never_stored(client):
 
 
 # === Firma EIP-191 ===
+
 
 def test_credential_message_is_the_exact_agreed_format():
     """El mensaje es contrato literal con el frontend (REQUEST_TO_CLAUDE.md).
@@ -275,6 +285,7 @@ async def test_issuer_endpoint_reports_unconfigured_honestly(client, monkeypatch
 
 # === Camino completo ===
 
+
 async def test_issues_a_credential_and_publishes_the_root(client, issuer_configured):
     """Camino feliz: canjea el grant, inserta la hoja, aprueba la raíz y firma."""
     approvals = issuer_configured
@@ -313,9 +324,13 @@ async def test_issues_a_credential_and_publishes_the_root(client, issuer_configu
     assert recovered == ISSUER.address
 
 
-async def test_a_spent_grant_cannot_produce_a_second_identity(client, issuer_configured):
+async def test_a_spent_grant_cannot_produce_a_second_identity(
+    client, issuer_configured
+):
     """Reintentar con el mismo grant devuelve la MISMA hoja, no otra."""
-    grant = await identity_grant.issue("sujeto-reintento", provider="clave-unica-sandbox")
+    grant = await identity_grant.issue(
+        "sujeto-reintento", provider="clave-unica-sandbox"
+    )
     headers = await _session(client, CITIZEN)
 
     first = await client.post(

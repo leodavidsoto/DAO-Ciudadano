@@ -11,6 +11,7 @@ Lo que se protege aquí:
    coacción. Impedirlo rompería la garantía central del protocolo.
 3. Que el endpoint de estado no dé a entender que ya se puede votar en privado.
 """
+
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -69,6 +70,7 @@ def _key(x=BASE_X, y=BASE_Y):
 
 # === Validación de curva ===
 
+
 def test_generator_is_recognised_as_on_curve():
     """Contraste contra el generador publicado: si esto falla, la ecuación está mal."""
     assert maci_service.is_on_babyjub_curve(BASE_X, BASE_Y) is True
@@ -98,6 +100,7 @@ def test_coordinates_outside_the_field_are_rejected():
 
 
 # === Endpoint ===
+
 
 async def test_member_can_register_a_key(client):
     headers = await _mint_member(client, VOTER)
@@ -162,6 +165,7 @@ async def test_off_curve_key_is_rejected_by_the_endpoint(client):
 
 # === Cambio de llave: el anti-coerción de MACI ===
 
+
 async def test_changing_the_key_bumps_the_version_and_keeps_history(client):
     """Cambiar de llave es cómo se anula en secreto un voto coaccionado."""
     headers = await _mint_member(client, VOTER)
@@ -187,9 +191,11 @@ async def test_changing_the_key_bumps_the_version_and_keeps_history(client):
     assert (current.x, current.y) == (DOUBLE_X, DOUBLE_Y)
 
     # El coordinador necesita el orden de los cambios para procesar mensajes.
-    history = await maci_service.maci_key_history_collection().find(
-        {"wallet_address": VOTER.address.lower()}
-    ).to_list(length=10)
+    history = (
+        await maci_service.maci_key_history_collection()
+        .find({"wallet_address": VOTER.address.lower()})
+        .to_list(length=10)
+    )
     assert sorted(int(h["version"]) for h in history) == [1, 2]
 
 
@@ -212,6 +218,7 @@ async def test_resending_the_same_key_is_not_a_key_change(client):
 
 
 # === Honestidad del estado ===
+
 
 async def test_lookup_reports_unregistered_wallets_honestly(client):
     body = (await client.get(f"/api/maci/keys/{OUTSIDER.address}")).json()
@@ -318,9 +325,11 @@ async def test_a_vote_and_a_key_change_are_indistinguishable(client):
     await client.post("/api/maci/vote", json=_vote(), headers=headers)
     await client.post("/api/maci/vote", json=_vote(), headers=headers)
 
-    stored = await maci_service.maci_messages_collection().find(
-        {"poll_id": "consulta-1"}
-    ).to_list(length=10)
+    stored = (
+        await maci_service.maci_messages_collection()
+        .find({"poll_id": "consulta-1"})
+        .to_list(length=10)
+    )
 
     assert len(stored) == 2
     # Ningún campo declara el tipo de mensaje: solo texto cifrado y su orden.
@@ -331,6 +340,7 @@ async def test_a_vote_and_a_key_change_are_indistinguishable(client):
 
 
 # === Recuento ===
+
 
 async def test_tally_never_publishes_an_unverifiable_result(client):
     """Un conteo sin prueba no es un resultado: es un número no verificable."""
@@ -429,12 +439,14 @@ async def _open_poll(proposal_id="prop-1"):
     from app.core.database import proposals_collection
     from app.services import maci_service
 
-    await proposals_collection().insert_one({
-        "id": proposal_id,
-        "title": "Propuesta con urna",
-        "status": "active",
-        "ends_at": datetime.now(timezone.utc) + timedelta(days=7),
-    })
+    await proposals_collection().insert_one(
+        {
+            "id": proposal_id,
+            "title": "Propuesta con urna",
+            "status": "active",
+            "ends_at": datetime.now(timezone.utc) + timedelta(days=7),
+        }
+    )
     return await maci_service.poll_id_for_proposal(proposal_id)
 
 
@@ -517,6 +529,7 @@ async def test_poll_endpoint_does_not_announce_an_unanchored_key(client):
 
 # === Generación de la llave del coordinador ===
 
+
 def test_generated_keypair_is_valid_by_construction():
     """Lo generado debe pasar la MISMA validación que las llaves de votantes.
 
@@ -533,7 +546,9 @@ def test_generated_keypair_is_valid_by_construction():
 
 
 def test_public_key_derivation_is_deterministic():
-    assert maci_service.derive_public_key(12345) == maci_service.derive_public_key(12345)
+    assert maci_service.derive_public_key(12345) == maci_service.derive_public_key(
+        12345
+    )
     assert maci_service.derive_public_key(1) != maci_service.derive_public_key(2)
 
 
@@ -544,8 +559,12 @@ def test_the_generator_is_the_public_key_of_private_key_one():
 
 def test_private_keys_outside_the_subgroup_range_are_rejected():
     """Fuera de [1, subOrder) el punto no pertenece al subgrupo primo."""
-    for invalid in (0, -1, maci_service.BABYJUB_SUBORDER,
-                    maci_service.BABYJUB_SUBORDER + 1):
+    for invalid in (
+        0,
+        -1,
+        maci_service.BABYJUB_SUBORDER,
+        maci_service.BABYJUB_SUBORDER + 1,
+    ):
         with pytest.raises(maci_service.MaciKeyError):
             maci_service.derive_public_key(invalid)
 
@@ -558,6 +577,7 @@ def test_two_generated_keypairs_differ():
 
 
 # === Frontera anónima endurecida (TAREA 5) ===
+
 
 async def test_extra_fields_are_rejected_not_ignored(client):
     """Antes se descartaban en silencio: el frontend podía estar filtrando
@@ -609,11 +629,13 @@ async def test_a_closed_proposal_does_not_accept_messages(client):
     from app.core.database import proposals_collection
     from app.services import maci_service
 
-    await proposals_collection().insert_one({
-        "id": "prop-cerrada",
-        "status": "expired",
-        "ends_at": datetime.now(timezone.utc) - timedelta(days=1),
-    })
+    await proposals_collection().insert_one(
+        {
+            "id": "prop-cerrada",
+            "status": "expired",
+            "ends_at": datetime.now(timezone.utc) - timedelta(days=1),
+        }
+    )
     poll_id = await maci_service.poll_id_for_proposal("prop-cerrada")
 
     response = await client.post(

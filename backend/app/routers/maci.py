@@ -10,6 +10,7 @@ construir el circuito de tally: sin ellos ningún resultado es verificable, y
 por eso /polls/{id}/tally nunca devuelve un conteo. Los endpoints de votación
 en vigor siguen siendo los de `governance.py`.
 """
+
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException

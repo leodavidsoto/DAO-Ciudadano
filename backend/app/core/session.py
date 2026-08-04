@@ -21,6 +21,7 @@ token, no hay estado que guardar ni que expirar por separado.
 El header `Authorization: Bearer` sigue funcionando igual: la app móvil no
 tiene cookies de navegador ni riesgo de CSRF, y no debe romperse.
 """
+
 import hashlib
 import hmac
 from typing import Optional, Tuple

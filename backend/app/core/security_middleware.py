@@ -2,6 +2,7 @@
 Security Middleware
 Rate limiting, CSRF protection, and security headers
 """
+
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -24,7 +25,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
     Rate limiting middleware with progressive slowdown
     """
-    
+
     _SENSITIVE_PATH_PATTERNS = (
         re.compile(r"^/api/auth(?:/|$)"),
         re.compile(r"^/api/wallet/(?:challenge|verify)/?$"),
@@ -74,7 +75,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/health/live",
             "/health/ready",
         }
-        
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -106,8 +106,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 status_code=429,
                 content={
                     "detail": "Rate limit exceeded. Please wait before making more requests.",
-                    "retry_after": self.window_seconds
-                }
+                    "retry_after": self.window_seconds,
+                },
             )
 
         # Progressive slowdown for failed attempts.
@@ -117,10 +117,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if failures > self.PENALTY_THRESHOLD:
             delay = min(failures * 0.5, 30)  # Max 30 seconds
             await asyncio.sleep(delay)
-        
+
         # Process request
         response = await call_next(request)
-        
+
         # Track failed attempts
         if response.status_code in [401, 403, 422]:
             await self.store.penalty(client_ip, 1, self.PENALTY_TTL_SECONDS)
@@ -128,7 +128,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             await self.store.penalty(client_ip, -1, self.PENALTY_TTL_SECONDS)
 
         return response
-    
+
     # Umbral y caducidad de la penalización progresiva. El TTL evita que un
     # contador quede vivo para siempre; el barrido manual que hacía falta con
     # los diccionarios en proceso desapareció con ellos.
@@ -223,10 +223,7 @@ class RequestBodyLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        headers = {
-            key.lower(): value
-            for key, value in scope.get("headers", [])
-        }
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
         raw_length = headers.get(b"content-length")
         if raw_length is not None:
             try:
@@ -242,9 +239,7 @@ class RequestBodyLimitMiddleware:
                 )
                 return
             if content_length > self.max_body_size:
-                await self._respond(
-                    scope, receive, send, 413, "Request body too large"
-                )
+                await self._respond(scope, receive, send, 413, "Request body too large")
                 return
 
         received = 0
@@ -268,17 +263,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """
     Add security headers to all responses
     """
-    
+
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        
+
         # Security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        
+
         # Content Security Policy
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
@@ -288,7 +285,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "img-src 'self' data: https:; "
             "connect-src 'self' https://*.infura.io wss://*.infura.io https://*.alchemy.com;"
         )
-        
+
         return response
 
 
@@ -296,7 +293,7 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
     """
     Validate and sanitize incoming requests
     """
-    
+
     # Blocked patterns (SQL injection, XSS attempts)
     BLOCKED_PATTERNS = [
         "UNION SELECT",
@@ -307,7 +304,7 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
         "onerror=",
         "onclick=",
     ]
-    
+
     async def dispatch(self, request: Request, call_next):
         # Check for blocked patterns in URL
         url_str = str(request.url).upper()
@@ -315,14 +312,14 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
             if pattern.upper() in url_str:
                 logger.warning(f"Blocked pattern detected in URL: {pattern}")
                 return JSONResponse(
-                    status_code=400,
-                    content={"detail": "Invalid request"}
+                    status_code=400, content={"detail": "Invalid request"}
                 )
-        
+
         return await call_next(request)
 
 
 # === Utility Functions ===
+
 
 def generate_nonce() -> str:
     """Generate a secure random nonce for vote verification"""
@@ -362,6 +359,7 @@ def verify_eth_address(address: str) -> bool:
 
 
 # === Anti-Fraud Detection ===
+
 
 class FraudDetector:
     """Detección de patrones de voto sospechosos (ROADMAP 3.8).

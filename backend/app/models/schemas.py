@@ -2,6 +2,7 @@
 Pydantic Models for DAO Ciudadana
 Data validation and serialization schemas
 """
+
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 from datetime import datetime, timezone
@@ -10,13 +11,16 @@ import uuid
 
 # === Base Models ===
 
+
 class TimestampMixin(BaseModel):
     """Mixin for timestamp fields"""
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = None
 
 
 # === Identity Models ===
+
 
 class ClaveUnicaRequest(BaseModel):
     rut: str
@@ -34,6 +38,7 @@ class NFCRequest(BaseModel):
 
     When absent (web demo flow), the backend generates a demo serial.
     """
+
     chip_serial: Optional[str] = Field(default=None, max_length=64)
 
 
@@ -53,8 +58,10 @@ class LivenessResponse(BaseModel):
 
 # === User Models (RUT + Email registration) ===
 
+
 class UserRegisterRequest(BaseModel):
     """Request model for user registration with RUT and email"""
+
     rut: str
     email: str
     nombre: str
@@ -63,6 +70,7 @@ class UserRegisterRequest(BaseModel):
 
 class UserLoginRequest(BaseModel):
     """Request model for user login"""
+
     rut: str
     email: str
 
@@ -75,6 +83,7 @@ class User(BaseModel):
     (app/core/identity.lookup_key) que sí son determinísticos y permiten
     buscar por RUT/email sin descifrar toda la colección.
     """
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     rut: str  # cifrado
     rut_key: str  # índice ciego, determinístico
@@ -90,6 +99,7 @@ class User(BaseModel):
 
 class UserResponse(BaseModel):
     """Response model for user operations"""
+
     ok: bool
     user_id: Optional[str] = None
     rut: Optional[str] = None
@@ -101,6 +111,7 @@ class UserResponse(BaseModel):
 
 
 # === Membership Models ===
+
 
 class MintSBTRequest(BaseModel):
     wallet_address: str
@@ -118,7 +129,7 @@ class MintSBTResponse(BaseModel):
 class Member(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     wallet_address: str
-    token_id: int
+    token_id: Optional[int] = None
     # Las membresías emitidas por la vía ZK NO tienen doc_hash: el documento
     # nunca llega al servidor, que es justamente el objetivo del rediseño.
     # Inventar uno para rellenar el modelo sería fabricar un dato.
@@ -134,11 +145,14 @@ class Member(BaseModel):
     # raíces que el emisor aprobó tras consumir un grant civil de un solo uso.
     # El minteo demo nunca lo hace.
     identity_verified: bool = False
-    tx_hash: Optional[str] = None  # None en modo demo; hash real si se minteó on-chain (task 1.5)
+    tx_hash: Optional[str] = (
+        None  # None en modo demo; hash real si se minteó on-chain (task 1.5)
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # === Dashboard Models ===
+
 
 class DashboardStats(BaseModel):
     total_members: int
@@ -147,6 +161,7 @@ class DashboardStats(BaseModel):
 
 
 # === Governance Models (New) ===
+
 
 class Proposal(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))

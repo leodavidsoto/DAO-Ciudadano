@@ -13,6 +13,7 @@ Dos cosas distintas que la tarea junta:
    endpoints `/audit` recomputan el recuento verificando cada firma EIP-712 y
    dicen en qué se diferencia de lo publicado.
 """
+
 from datetime import datetime, timedelta, timezone
 
 from eth_account import Account
@@ -56,23 +57,32 @@ def _sign_proposal_ballot(account, proposal_id, choice, nonce):
 async def _signed_vote(client, account, proposal_id, choice, nonce):
     headers = await _headers_for(client, account.address.lower())
     signature = _sign_proposal_ballot(account, proposal_id, choice, nonce)
-    return await client.post("/api/governance/vote", json={
-        "proposal_id": proposal_id,
-        "voter_address": account.address.lower(),
-        "vote": choice,
-        "nonce": nonce,
-        "signature": signature,
-    }, headers=headers)
+    return await client.post(
+        "/api/governance/vote",
+        json={
+            "proposal_id": proposal_id,
+            "voter_address": account.address.lower(),
+            "vote": choice,
+            "nonce": nonce,
+            "signature": signature,
+        },
+        headers=headers,
+    )
 
 
 # === Reconstrucción desde firmas válidas ===
+
 
 async def test_audit_reproduces_the_published_tally(client):
     await _mint_member(client, ADDR_A)
     await _mint_member(client, ADDR_B)
     proposal_id = (await _create_proposal(client)).json()["id"]
-    assert (await _signed_vote(client, ACCOUNT_A, proposal_id, "for", "n1")).json()["ok"]
-    assert (await _signed_vote(client, ACCOUNT_B, proposal_id, "against", "n2")).json()["ok"]
+    assert (await _signed_vote(client, ACCOUNT_A, proposal_id, "for", "n1")).json()[
+        "ok"
+    ]
+    assert (await _signed_vote(client, ACCOUNT_B, proposal_id, "against", "n2")).json()[
+        "ok"
+    ]
 
     audit = (await client.get(f"/api/governance/proposals/{proposal_id}/audit")).json()
 
@@ -128,7 +138,9 @@ async def test_delegated_weight_survives_the_audit(client):
     proposal_id = (await _create_proposal(client)).json()["id"]
     assert (await _delegate(client, ADDR_B, ADDR_A)).json()["ok"] is True
 
-    assert (await _signed_vote(client, ACCOUNT_A, proposal_id, "for", "n1")).json()["weight"] == 2
+    assert (await _signed_vote(client, ACCOUNT_A, proposal_id, "for", "n1")).json()[
+        "weight"
+    ] == 2
 
     audit = (await client.get(f"/api/governance/proposals/{proposal_id}/audit")).json()
 
@@ -183,6 +195,7 @@ async def test_audit_is_public(client):
 
 # === Atomicidad de la finalización de elecciones ===
 
+
 async def test_a_crash_mid_finalization_is_repaired_on_the_next_run(client):
     """La caída que producía un parlamento incompleto para siempre.
 
@@ -206,9 +219,10 @@ async def test_a_crash_mid_finalization_is_repaired_on_the_next_run(client):
     await _close_election(election_id)
 
     await client.get(f"/api/governance/elections/{election_id}/results")
-    assert await representatives_collection().count_documents(
-        {"election_id": election_id}
-    ) == 3
+    assert (
+        await representatives_collection().count_documents({"election_id": election_id})
+        == 3
+    )
 
     # Simula la caída con fidelidad: se escribió UN escaño de los tres y la
     # marca `finalized_at` nunca llegó a escribirse, que es exactamente el
@@ -221,16 +235,18 @@ async def test_a_crash_mid_finalization_is_repaired_on_the_next_run(client):
     await elections_collection().update_one(
         {"id": election_id}, {"$unset": {"finalized_at": ""}}
     )
-    assert await representatives_collection().count_documents(
-        {"election_id": election_id}
-    ) == 1
+    assert (
+        await representatives_collection().count_documents({"election_id": election_id})
+        == 1
+    )
 
     # Cualquier lectura posterior reconcilia en vez de dar por bueno lo parcial.
     await client.get(f"/api/governance/elections/{election_id}/results")
 
-    assert await representatives_collection().count_documents(
-        {"election_id": election_id}
-    ) == 3
+    assert (
+        await representatives_collection().count_documents({"election_id": election_id})
+        == 3
+    )
 
 
 async def test_finalization_is_idempotent(client):
@@ -250,9 +266,10 @@ async def test_finalization_is_idempotent(client):
     for _ in range(3):
         await client.get(f"/api/governance/elections/{election_id}/results")
 
-    assert await representatives_collection().count_documents(
-        {"election_id": election_id}
-    ) == 1
+    assert (
+        await representatives_collection().count_documents({"election_id": election_id})
+        == 1
+    )
 
 
 async def test_a_stale_representative_is_removed(client):
@@ -271,25 +288,33 @@ async def test_a_stale_representative_is_removed(client):
     await client.get(f"/api/governance/elections/{election_id}/results")
 
     # Alguien insertó a mano un representante que nadie eligió.
-    await representatives_collection().insert_one({
-        "election_id": election_id,
-        "address": ADDR_C,
-        "votes": 99,
-        "term_start": datetime.now(timezone.utc),
-        "term_end": datetime.now(timezone.utc) + timedelta(days=365),
-    })
+    await representatives_collection().insert_one(
+        {
+            "election_id": election_id,
+            "address": ADDR_C,
+            "votes": 99,
+            "term_start": datetime.now(timezone.utc),
+            "term_end": datetime.now(timezone.utc) + timedelta(days=365),
+        }
+    )
 
     election = await governance_service.sync_election_status(
-        {"id": election_id, "status": "closed",
-         "voting_end_at": datetime.now(timezone.utc) - timedelta(hours=1),
-         "nominations_end_at": datetime.now(timezone.utc) - timedelta(hours=2),
-         "seats": 1, "term_months": 12}
+        {
+            "id": election_id,
+            "status": "closed",
+            "voting_end_at": datetime.now(timezone.utc) - timedelta(hours=1),
+            "nominations_end_at": datetime.now(timezone.utc) - timedelta(hours=2),
+            "seats": 1,
+            "term_months": 12,
+        }
     )
     await governance_service.finalize_election(election)
 
-    seated = await representatives_collection().find(
-        {"election_id": election_id}
-    ).to_list(length=10)
+    seated = (
+        await representatives_collection()
+        .find({"election_id": election_id})
+        .to_list(length=10)
+    )
     assert [s["address"] for s in seated] == [ADDR_A]
 
 

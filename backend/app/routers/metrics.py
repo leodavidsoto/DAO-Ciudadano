@@ -16,6 +16,7 @@ el endpoint responde 503 en vez de publicarse abierto. Fuera de producción se
 permite sin token para no estorbar el desarrollo local, pero se avisa en los
 logs.
 """
+
 import hmac
 import logging
 

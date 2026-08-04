@@ -13,6 +13,7 @@ Falla cerrado: si falta IDENTITY_PEPPER y DEBUG=False, identity_hash()
 lanza IdentityPepperMissing en vez de degradar silenciosamente a un hash
 sin sal.
 """
+
 import hashlib
 import hmac
 import re
@@ -74,7 +75,9 @@ def identity_hash(rut: str) -> bytes:
     pero no reversible sin el pepper.
     """
     normalized = normalize_rut(rut)
-    return hmac.new(_pepper_bytes(), normalized.encode("utf-8"), hashlib.sha256).digest()
+    return hmac.new(
+        _pepper_bytes(), normalized.encode("utf-8"), hashlib.sha256
+    ).digest()
 
 
 def identity_hash_hex(rut: str) -> str:
@@ -96,7 +99,9 @@ def document_identity_hash(doc_hash: str) -> bytes:
     """
     normalized = (doc_hash or "").strip().lower()
     return hmac.new(
-        _pepper_bytes(), b"onchain-identity:" + normalized.encode("utf-8"), hashlib.sha256
+        _pepper_bytes(),
+        b"onchain-identity:" + normalized.encode("utf-8"),
+        hashlib.sha256,
     ).digest()
 
 

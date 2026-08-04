@@ -2,6 +2,7 @@
 Shared fixtures: in-memory MongoDB (mongomock) + ASGI test client.
 No real network or database is touched by this suite.
 """
+
 import os
 import sys
 from pathlib import Path
@@ -12,7 +13,9 @@ from pathlib import Path
 # la suite entera rompería si estos quedaran vacíos como en CI real.
 # Valores fijos y obviamente-de-test, no los que usa producción.
 os.environ.setdefault("IDENTITY_PEPPER", "test-only-identity-pepper-not-for-production")
-os.environ.setdefault("PII_ENCRYPTION_KEY", "pDWj9oG8D2Ms2dcHjTCiLsQM5raWlXfiINYLooDS4Q0=")
+os.environ.setdefault(
+    "PII_ENCRYPTION_KEY", "pDWj9oG8D2Ms2dcHjTCiLsQM5raWlXfiINYLooDS4Q0="
+)
 os.environ.setdefault("SECRET_KEY", "test-only-secret-key-not-for-production")
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("MINT_MODE", "demo")
@@ -95,7 +98,9 @@ async def client():
     await fraud_detector.reset()
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as c:
         yield c
 
     Database.client = None

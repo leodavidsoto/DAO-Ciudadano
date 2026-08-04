@@ -18,6 +18,7 @@ solo), así que una credencial emitida hoy sigue sirviendo mañana. Si alguien
 revoca una raíz con `revokeIdentityRoot`, las credenciales emitidas contra ella
 dejan de poder mintear — es una decisión de gobernanza, no un accidente.
 """
+
 import logging
 from dataclasses import dataclass
 from typing import List, Optional
@@ -156,7 +157,9 @@ async def insert_commitment(commitment: int, subject_key: str) -> MerkleWitness:
     """
     commitment = _validate_commitment(commitment)
     if not subject_key:
-        raise IdentityTreeError("Falta el identificador de sujeto para la idempotencia.")
+        raise IdentityTreeError(
+            "Falta el identificador de sujeto para la idempotencia."
+        )
 
     existing = await identity_commitments_collection().find_one(
         {"subject_key": subject_key}
@@ -187,14 +190,16 @@ async def insert_commitment(commitment: int, subject_key: str) -> MerkleWitness:
     # para la misma persona bajo concurrencia; la lectura de arriba solo da un
     # error más claro.
     try:
-        await identity_commitments_collection().insert_one({
-            "subject_key": subject_key,
-            "commitment": str(commitment),
-            "leaf_index": index,
-            "identity_root": str(witness.root),
-            "path_elements": [str(v) for v in witness.path_elements],
-            "path_indices": [str(v) for v in witness.path_indices],
-        })
+        await identity_commitments_collection().insert_one(
+            {
+                "subject_key": subject_key,
+                "commitment": str(commitment),
+                "leaf_index": index,
+                "identity_root": str(witness.root),
+                "path_elements": [str(v) for v in witness.path_elements],
+                "path_indices": [str(v) for v in witness.path_indices],
+            }
+        )
     except DuplicateKeyError:
         stored = await identity_commitments_collection().find_one(
             {"subject_key": subject_key}

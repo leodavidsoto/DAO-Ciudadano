@@ -1,4 +1,5 @@
 """Wallet session surface: only the SIWE challenge/verify flow is exposed."""
+
 from datetime import datetime, timedelta, timezone
 
 from eth_account import Account
@@ -31,8 +32,7 @@ async def test_wallet_challenge_uses_sensitive_rate_limit(client):
     limit = settings.RATE_LIMIT_SENSITIVE_REQUESTS
 
     allowed = [
-        await client.post("/api/wallet/challenge", json=payload)
-        for _ in range(limit)
+        await client.post("/api/wallet/challenge", json=payload) for _ in range(limit)
     ]
     limited = await client.post("/api/wallet/challenge", json=payload)
 

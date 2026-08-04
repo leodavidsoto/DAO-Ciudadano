@@ -6,6 +6,7 @@ el backend entrega reproduzca la misma raíz que calcula el circuito. Por eso
 el primer test replica la aritmética de verify_identity.circom en lugar de
 comparar contra la implementación misma.
 """
+
 import json
 from pathlib import Path
 
@@ -57,7 +58,10 @@ async def test_witness_reproduces_the_circuit_root(client):
     assert len(witness.path_elements) == TREE_DEPTH
     assert len(witness.path_indices) == TREE_DEPTH
     assert set(witness.path_indices) <= {0, 1}
-    assert fold_path(commitment, witness.path_elements, witness.path_indices) == witness.root
+    assert (
+        fold_path(commitment, witness.path_elements, witness.path_indices)
+        == witness.root
+    )
 
 
 async def test_matches_the_published_circuit_fixture(client):
@@ -71,11 +75,13 @@ async def test_matches_the_published_circuit_fixture(client):
         pytest.skip("Falta la fixture del circuito")
     vector = json.loads(FIXTURE.read_text())
 
-    leaf = poseidon([
-        FIXTURE_IDENTITY_SECRET,
-        int(vector["recipient"], 16),
-        int(vector["membershipScope"]),
-    ])
+    leaf = poseidon(
+        [
+            FIXTURE_IDENTITY_SECRET,
+            int(vector["recipient"], 16),
+            int(vector["membershipScope"]),
+        ]
+    )
 
     witness = await insert_commitment(leaf, subject_key="sujeto-fixture")
 
@@ -96,9 +102,10 @@ async def test_several_leaves_stay_consistent(client):
 
     for position, (commitment, witness) in enumerate(witnesses):
         assert witness.index == position
-        assert fold_path(
-            commitment, witness.path_elements, witness.path_indices
-        ) == witness.root
+        assert (
+            fold_path(commitment, witness.path_elements, witness.path_indices)
+            == witness.root
+        )
 
     # Insertar cambia la raíz: no es un error, es lo que obliga al contrato a
     # mantener aprobadas las raíces históricas.

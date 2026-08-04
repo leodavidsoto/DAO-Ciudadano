@@ -10,6 +10,7 @@ dato real de un número inventado:
 * el ETH de testnet NO se convierte a USD,
 * y ningún número de la respuesta está escrito en el código.
 """
+
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -31,8 +32,15 @@ def _clean_caches():
     treasury_service.clear_caches()
 
 
-def _configure(monkeypatch, chain_id=MAINNET, wei=None, code=b"\x60\x60", fail=False,
-               tokens=None, token_fails=False):
+def _configure(
+    monkeypatch,
+    chain_id=MAINNET,
+    wei=None,
+    code=b"\x60\x60",
+    fail=False,
+    tokens=None,
+    token_fails=False,
+):
     """Sustituye la cadena por un doble y devuelve el balance esperado.
 
     `tokens` es {direccion: (symbol, decimals, raw_balance)}; se declara
@@ -111,12 +119,11 @@ def _configure(monkeypatch, chain_id=MAINNET, wei=None, code=b"\x60\x60", fail=F
 
 def _price(monkeypatch, value="2000.55", provider="coingecko"):
     monkeypatch.setattr(settings, "ETH_PRICE_PROVIDER", provider)
-    monkeypatch.setattr(
-        treasury_service, "_fetch_price_usd", lambda: Decimal(value)
-    )
+    monkeypatch.setattr(treasury_service, "_fetch_price_usd", lambda: Decimal(value))
 
 
 # === Estados de la respuesta ===
+
 
 async def test_unconfigured_treasury_is_reported_not_faked(client):
     response = await client.get("/api/governance/treasury")
@@ -170,6 +177,7 @@ async def test_an_empty_treasury_is_zero_not_null(client, monkeypatch):
 
 # === El ETH de testnet no vale dólares ===
 
+
 async def test_testnet_eth_is_never_priced_in_usd(client, monkeypatch):
     expected = _configure(monkeypatch, chain_id=SEPOLIA)
     _price(monkeypatch, "2000")
@@ -194,6 +202,7 @@ async def test_price_provider_can_be_disabled_without_losing_the_balance(
 
 
 # === Precio: caché, degradación y cordura ===
+
 
 def test_price_is_cached_between_calls(monkeypatch):
     calls = []
@@ -289,6 +298,7 @@ def test_binance_payload_is_parsed(monkeypatch):
 
 # === Caché del snapshot ===
 
+
 async def test_snapshot_is_cached_so_the_public_endpoint_cannot_amplify(
     client, monkeypatch
 ):
@@ -312,16 +322,19 @@ async def test_snapshot_is_cached_so_the_public_endpoint_cannot_amplify(
 
 # === Runway ===
 
+
 async def _expense(days_ago: float, amount: float, currency: str = "ETH"):
-    await treasury_transactions_collection().insert_one({
-        "id": f"tx-{days_ago}-{amount}",
-        "type": "expense",
-        "amount": amount,
-        "currency": currency,
-        "description": "Gasto de prueba",
-        "category": "operations",
-        "timestamp": datetime.now(timezone.utc) - timedelta(days=days_ago),
-    })
+    await treasury_transactions_collection().insert_one(
+        {
+            "id": f"tx-{days_ago}-{amount}",
+            "type": "expense",
+            "amount": amount,
+            "currency": currency,
+            "description": "Gasto de prueba",
+            "category": "operations",
+            "timestamp": datetime.now(timezone.utc) - timedelta(days=days_ago),
+        }
+    )
 
 
 async def test_runway_is_computed_from_the_real_balance(client, monkeypatch):
@@ -379,9 +392,7 @@ def _token_prices(monkeypatch, **by_address):
     monkeypatch.setattr(
         treasury_service,
         "_fetch_token_prices_usd",
-        lambda addresses: {
-            a.lower(): Decimal(str(p)) for a, p in by_address.items()
-        },
+        lambda addresses: {a.lower(): Decimal(str(p)) for a, p in by_address.items()},
     )
 
 

@@ -25,6 +25,7 @@ Dos decisiones que conviene no revertir sin pensarlo
    `ballot_nonces` y `mint_operations` son justamente la memoria de "esto ya
    pasó". Borrarlos por viejos reabre la ventana de repetición que cierran.
 """
+
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -133,8 +134,10 @@ def describe() -> List[dict]:
             "retention_days": (
                 round(r.ttl_seconds / SECONDS_PER_DAY, 2) if r.ttl_seconds else None
             ),
-            "enforced": "ttl-index" if (r.automatic and r.ttl_seconds) else (
-                "script" if r.ttl_seconds else "indefinite"
+            "enforced": (
+                "ttl-index"
+                if (r.automatic and r.ttl_seconds)
+                else ("script" if r.ttl_seconds else "indefinite")
             ),
             "reason": r.reason,
         }

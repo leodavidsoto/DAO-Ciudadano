@@ -9,6 +9,7 @@ La otra garantía crítica es que el patrocinio de la DAO no financie una
 transacción arbitraria: `callData` lo controla el cliente por completo, así
 que se decodifica y se exige que sea exactamente el mintMembership declarado.
 """
+
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -29,7 +30,11 @@ async def _session(client, account):
     ).signature.hex()
     verify = await client.post(
         "/api/wallet/verify",
-        json={"address": account.address, "nonce": data["nonce"], "signature": signature},
+        json={
+            "address": account.address,
+            "nonce": data["nonce"],
+            "signature": signature,
+        },
     )
     return {"Authorization": f"Bearer {verify.json()['token']}"}
 
@@ -49,7 +54,9 @@ async def test_config_declares_non_custodial_and_fails_closed(client):
     assert body["account_type"] == "safe"
     assert body["entry_point_version"] == "0.7"
     # El módulo canónico es parte del contrato: el cliente lo fija y rechaza otro.
-    assert body["safe_4337_module_address"] == "0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226"
+    assert (
+        body["safe_4337_module_address"] == "0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226"
+    )
     assert body["missing"], "debe enumerar qué falta para poder habilitarse"
 
 
@@ -73,8 +80,15 @@ def _account_profile():
     }
 
 
-def _build_call_data(to_sbt=SBT, recipient=None, operation=0, value=0,
-                     nullifier=NULLIFIER, root=ROOT, pa=None):
+def _build_call_data(
+    to_sbt=SBT,
+    recipient=None,
+    operation=0,
+    value=0,
+    nullifier=NULLIFIER,
+    root=ROOT,
+    pa=None,
+):
     """Construye el callData de DOS capas, como lo hace el cliente.
 
     La externa es Safe4337Module.executeUserOpWithErrorString; dentro va la
@@ -88,19 +102,27 @@ def _build_call_data(to_sbt=SBT, recipient=None, operation=0, value=0,
 
     w3 = Web3()
     sbt = w3.eth.contract(abi=chain_service._MINT_ABI)
-    inner = sbt.encode_abi("mintMembership", args=[
-        Web3.to_checksum_address(recipient or CITIZEN.address),
-        [int(v) for v in (pa or PA)],
-        [[int(v) for v in row] for row in PB],
-        [int(v) for v in PC],
-        bytes.fromhex(nullifier.removeprefix("0x")),
-        int(root),
-    ])
+    inner = sbt.encode_abi(
+        "mintMembership",
+        args=[
+            Web3.to_checksum_address(recipient or CITIZEN.address),
+            [int(v) for v in (pa or PA)],
+            [[int(v) for v in row] for row in PB],
+            [int(v) for v in PC],
+            bytes.fromhex(nullifier.removeprefix("0x")),
+            int(root),
+        ],
+    )
     wrapper = w3.eth.contract(abi=_SAFE_EXEC_ABI)
-    return wrapper.encode_abi("executeUserOpWithErrorString", args=[
-        Web3.to_checksum_address(to_sbt), value,
-        bytes.fromhex(inner.removeprefix("0x")), operation,
-    ])
+    return wrapper.encode_abi(
+        "executeUserOpWithErrorString",
+        args=[
+            Web3.to_checksum_address(to_sbt),
+            value,
+            bytes.fromhex(inner.removeprefix("0x")),
+            operation,
+        ],
+    )
 
 
 def _prepare_body(**overrides):
@@ -112,8 +134,11 @@ def _prepare_body(**overrides):
         "account": _account_profile(),
         "mint": {
             "wallet_address": CITIZEN.address,
-            "pA": PA, "pB": PB, "pC": PC,
-            "nullifier_hash": NULLIFIER, "identity_root": ROOT,
+            "pA": PA,
+            "pB": PB,
+            "pC": PC,
+            "nullifier_hash": NULLIFIER,
+            "identity_root": ROOT,
         },
         "user_operation": {
             "sender": "0x" + "11" * 20,
@@ -180,8 +205,9 @@ def test_account_profile_must_match_the_served_config():
 
     from app.routers.erc4337 import SafeAccountProfile, _assert_account_profile
 
-    bad = SafeAccountProfile(**{**_account_profile(),
-                                "safe_4337_module_address": "0x" + "99" * 20})
+    bad = SafeAccountProfile(
+        **{**_account_profile(), "safe_4337_module_address": "0x" + "99" * 20}
+    )
     with pytest.raises(HTTPException) as exc:
         _assert_account_profile(bad)
     assert "Módulo Safe4337" in exc.value.detail
@@ -210,7 +236,9 @@ def test_declared_proof_must_match_the_executed_one():
     from fastapi import HTTPException
 
     from app.routers.erc4337 import (
-        MintPayload, _assert_proof_matches, _decode_inner_mint_call,
+        MintPayload,
+        _assert_proof_matches,
+        _decode_inner_mint_call,
         _decode_safe_wrapper,
     )
 
@@ -218,8 +246,12 @@ def test_declared_proof_must_match_the_executed_one():
     wrapper = _decode_safe_wrapper(_build_call_data(pa=["99", "98"]))
     inner = _decode_inner_mint_call(wrapper["data"])
     declared = MintPayload(
-        wallet_address=CITIZEN.address, pA=PA, pB=PB, pC=PC,
-        nullifier_hash=NULLIFIER, identity_root=ROOT,
+        wallet_address=CITIZEN.address,
+        pA=PA,
+        pB=PB,
+        pC=PC,
+        nullifier_hash=NULLIFIER,
+        identity_root=ROOT,
     )
 
     with pytest.raises(HTTPException) as exc:
@@ -240,8 +272,11 @@ async def test_prepare_mint_refuses_while_sponsorship_is_unavailable(client):
             "account": _account_profile(),
             "mint": {
                 "wallet_address": CITIZEN.address,
-                "pA": PA, "pB": PB, "pC": PC,
-                "nullifier_hash": NULLIFIER, "identity_root": ROOT,
+                "pA": PA,
+                "pB": PB,
+                "pC": PC,
+                "nullifier_hash": NULLIFIER,
+                "identity_root": ROOT,
             },
             "user_operation": {"sender": "0x" + "11" * 20, "callData": "0x"},
         },
@@ -265,8 +300,11 @@ async def test_prepare_mint_cannot_be_requested_for_another_wallet(client):
             "account": _account_profile(),
             "mint": {
                 "wallet_address": CITIZEN.address,
-                "pA": PA, "pB": PB, "pC": PC,
-                "nullifier_hash": NULLIFIER, "identity_root": ROOT,
+                "pA": PA,
+                "pB": PB,
+                "pC": PC,
+                "nullifier_hash": NULLIFIER,
+                "identity_root": ROOT,
             },
             "user_operation": {"sender": "0x" + "11" * 20, "callData": "0x"},
         },
@@ -324,7 +362,12 @@ VECTOR_FACTORY = "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"
 def _vector_factory_data():
     from pathlib import Path
 
-    path = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "safe_factory_data.txt"
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "tests"
+        / "fixtures"
+        / "safe_factory_data.txt"
+    )
     return path.read_text().strip()
 
 
@@ -342,8 +385,14 @@ def test_create2_derivation_matches_the_real_client(monkeypatch):
     from app.routers.erc4337 import _assert_safe_address_is_derived
 
     code = bytes.fromhex(
-        (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
-         / "safe_proxy_creation_code.txt").read_text().strip()
+        (
+            Path(__file__).resolve().parents[1]
+            / "tests"
+            / "fixtures"
+            / "safe_proxy_creation_code.txt"
+        )
+        .read_text()
+        .strip()
     )
     _stub_proxy_creation_code(monkeypatch, code)
 
@@ -363,8 +412,14 @@ def test_a_declared_address_that_does_not_match_is_rejected(monkeypatch):
     from app.routers.erc4337 import _assert_safe_address_is_derived
 
     code = bytes.fromhex(
-        (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
-         / "safe_proxy_creation_code.txt").read_text().strip()
+        (
+            Path(__file__).resolve().parents[1]
+            / "tests"
+            / "fixtures"
+            / "safe_proxy_creation_code.txt"
+        )
+        .read_text()
+        .strip()
     )
     _stub_proxy_creation_code(monkeypatch, code)
 
@@ -440,9 +495,7 @@ def test_a_safe_op_signature_recovers_its_owner():
         user_op, owner.key.hex(), pm.ENTRYPOINT_V07, 11155111, MODULE
     )
 
-    recovered = safe_4337.recover_owner(
-        signed, pm.ENTRYPOINT_V07, 11155111, MODULE
-    )
+    recovered = safe_4337.recover_owner(signed, pm.ENTRYPOINT_V07, 11155111, MODULE)
 
     assert recovered.lower() == owner.address.lower()
 
@@ -453,14 +506,16 @@ def test_a_signature_over_a_different_operation_does_not_verify():
 
     owner = Account.from_key("0x" + "c1" * 32)
     signed = safe_4337.sign_user_operation(
-        _complete_user_op(), owner.key.hex(), pm.ENTRYPOINT_V07, 11155111, MODULE,
+        _complete_user_op(),
+        owner.key.hex(),
+        pm.ENTRYPOINT_V07,
+        11155111,
+        MODULE,
     )
     # El callData cambia DESPUÉS de firmar.
     tampered = {**signed, "callData": "0xfeedface"}
 
-    recovered = safe_4337.recover_owner(
-        tampered, pm.ENTRYPOINT_V07, 11155111, MODULE
-    )
+    recovered = safe_4337.recover_owner(tampered, pm.ENTRYPOINT_V07, 11155111, MODULE)
 
     assert recovered.lower() != owner.address.lower()
 
@@ -471,7 +526,9 @@ def test_a_malformed_signature_is_rejected_with_a_reason():
     with pytest.raises(ValueError):
         safe_4337.recover_owner(
             {"sender": "0x" + "11" * 20, "signature": "0x1234"},
-            pm.ENTRYPOINT_V07, 11155111, MODULE,
+            pm.ENTRYPOINT_V07,
+            11155111,
+            MODULE,
         )
 
 
@@ -485,31 +542,38 @@ async def test_submit_rejects_a_signature_from_another_wallet(client, monkeypatc
     monkeypatch.setattr(settings, "SAFE_4337_MODULE_ADDRESS", MODULE)
 
     prepared = {**_complete_user_op(), "signature": "0x"}
-    await erc4337_router.erc4337_operations_collection().insert_one({
-        "operation_id": "op_test_firma",
-        "nullifier_hash": "0x" + "aa" * 32,
-        "owner_address": owner.address.lower(),
-        "safe_address": prepared["sender"].lower(),
-        "prepared_user_operation": prepared,
-        "status": "prepared",
-    })
+    await erc4337_router.erc4337_operations_collection().insert_one(
+        {
+            "operation_id": "op_test_firma",
+            "nullifier_hash": "0x" + "aa" * 32,
+            "owner_address": owner.address.lower(),
+            "safe_address": prepared["sender"].lower(),
+            "prepared_user_operation": prepared,
+            "status": "prepared",
+        }
+    )
 
     # La firma la produce OTRA wallet sobre la misma operación.
     signed = _signed_user_op(impostor, prepared)
 
     relayed = []
     monkeypatch.setattr(
-        pm, "send_user_operation",
+        pm,
+        "send_user_operation",
         lambda op: relayed.append(op) or "0xhash",
     )
 
-    response = await client.post("/api/erc4337/submit-mint", json={
-        "operation_id": "op_test_firma",
-        "owner_address": owner.address.lower(),
-        "safe_address": prepared["sender"].lower(),
-        "entry_point": pm.ENTRYPOINT_V07,
-        "user_operation": signed,
-    }, headers=headers)
+    response = await client.post(
+        "/api/erc4337/submit-mint",
+        json={
+            "operation_id": "op_test_firma",
+            "owner_address": owner.address.lower(),
+            "safe_address": prepared["sender"].lower(),
+            "entry_point": pm.ENTRYPOINT_V07,
+            "user_operation": signed,
+        },
+        headers=headers,
+    )
 
     assert response.status_code == 422
     assert "no corresponde al propietario" in response.json()["detail"]
@@ -524,32 +588,37 @@ async def test_submit_relays_a_correctly_signed_operation(client, monkeypatch):
     monkeypatch.setattr(settings, "SAFE_4337_MODULE_ADDRESS", MODULE)
 
     prepared = {**_complete_user_op(), "signature": "0x"}
-    await erc4337_router.erc4337_operations_collection().insert_one({
-        "operation_id": "op_test_ok",
-        "nullifier_hash": "0x" + "bb" * 32,
-        "owner_address": owner.address.lower(),
-        "safe_address": prepared["sender"].lower(),
-        "prepared_user_operation": prepared,
-        "status": "prepared",
-    })
-    signed = _signed_user_op(owner, prepared)
-    monkeypatch.setattr(
-        pm, "send_user_operation", lambda op: "0x" + "fe" * 32
+    await erc4337_router.erc4337_operations_collection().insert_one(
+        {
+            "operation_id": "op_test_ok",
+            "nullifier_hash": "0x" + "bb" * 32,
+            "owner_address": owner.address.lower(),
+            "safe_address": prepared["sender"].lower(),
+            "prepared_user_operation": prepared,
+            "status": "prepared",
+        }
     )
+    signed = _signed_user_op(owner, prepared)
+    monkeypatch.setattr(pm, "send_user_operation", lambda op: "0x" + "fe" * 32)
 
-    response = await client.post("/api/erc4337/submit-mint", json={
-        "operation_id": "op_test_ok",
-        "owner_address": owner.address.lower(),
-        "safe_address": prepared["sender"].lower(),
-        "entry_point": pm.ENTRYPOINT_V07,
-        "user_operation": signed,
-    }, headers=headers)
+    response = await client.post(
+        "/api/erc4337/submit-mint",
+        json={
+            "operation_id": "op_test_ok",
+            "owner_address": owner.address.lower(),
+            "safe_address": prepared["sender"].lower(),
+            "entry_point": pm.ENTRYPOINT_V07,
+            "user_operation": signed,
+        },
+        headers=headers,
+    )
 
     assert response.status_code == 200, response.json()
     assert response.json()["user_operation_hash"] == "0x" + "fe" * 32
 
 
 # === La membresía patrocinada llega a la gobernanza (P-70) ===
+
 
 async def test_a_sponsored_mint_creates_the_membership(client, monkeypatch):
     """Sin esto, el ciudadano obtenía el SBT y no podía votar."""
@@ -559,16 +628,19 @@ async def test_a_sponsored_mint_creates_the_membership(client, monkeypatch):
 
     owner = Account.from_key("0x" + "d2" * 32)
     op_hash = "0x" + "cc" * 32
-    await erc4337_router.erc4337_operations_collection().insert_one({
-        "operation_id": "op_confirmada",
-        "nullifier_hash": "0x" + "dd" * 32,
-        "owner_address": owner.address.lower(),
-        "safe_address": "0x" + "11" * 20,
-        "user_operation_hash": op_hash,
-        "status": "submitted",
-    })
+    await erc4337_router.erc4337_operations_collection().insert_one(
+        {
+            "operation_id": "op_confirmada",
+            "nullifier_hash": "0x" + "dd" * 32,
+            "owner_address": owner.address.lower(),
+            "safe_address": "0x" + "11" * 20,
+            "user_operation_hash": op_hash,
+            "status": "submitted",
+        }
+    )
     monkeypatch.setattr(
-        pm, "get_user_operation_receipt",
+        pm,
+        "get_user_operation_receipt",
         lambda h: {"success": True, "receipt": {"transactionHash": "0xtx"}},
     )
     monkeypatch.setattr(chain_service, "membership_token_of", lambda addr: 77)

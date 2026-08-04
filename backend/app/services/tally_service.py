@@ -35,6 +35,7 @@ Las papeletas sin firma son un caso aparte: existen porque
 bandera sigue apagada, y siempre se reportan en `unsigned` para que nadie lea
 "auditado" como "criptográficamente probado" cuando la mitad no lleva firma.
 """
+
 import asyncio
 import logging
 from typing import Optional

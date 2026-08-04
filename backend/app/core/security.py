@@ -6,6 +6,7 @@ instance actually wired into the ASGI stack. A second, never-mounted
 `RateLimiter` class used to sit here; it enforced nothing and only made the
 codebase look like it had two limiters.
 """
+
 import hashlib
 
 

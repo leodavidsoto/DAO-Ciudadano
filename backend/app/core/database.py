@@ -2,6 +2,7 @@
 Database Module
 MongoDB connection and utilities
 """
+
 from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Optional
 import logging
@@ -33,7 +34,7 @@ class Database:
         cls.db = cls.client[db_name]
         logger.info(f"Connected to MongoDB database: {db_name}")
         return cls.db
-    
+
     @classmethod
     def close(cls):
         """Close database connection"""
@@ -41,7 +42,7 @@ class Database:
             cls.client.close()
             logger.info("Disconnected from MongoDB")
         cls.indexes_ready = False
-    
+
     @classmethod
     def get_db(cls):
         """Get database instance"""

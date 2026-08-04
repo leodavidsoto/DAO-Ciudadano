@@ -30,6 +30,7 @@ es exactamente el tipo de degradación que este repositorio elimina.
 No se falla cerrado (rechazar todo) a propósito: dejaría el servicio inaccesible
 por una incidencia de la caché, que es peor que un límite temporalmente más laxo.
 """
+
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -241,7 +242,9 @@ class FallbackRateLimitStore(RateLimitStore):
 
     @property
     def backend(self) -> str:
-        return "memory (redis no disponible)" if self._degraded else self._primary.backend
+        return (
+            "memory (redis no disponible)" if self._degraded else self._primary.backend
+        )
 
     @property
     def degraded(self) -> bool:

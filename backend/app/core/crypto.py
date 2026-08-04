@@ -37,6 +37,7 @@ resuelta y no debe declararse como tal.
 Falla cerrado: sin ninguna llave válida y DEBUG=False, encrypt()/decrypt()
 lanzan EncryptionKeyMissing.
 """
+
 import base64
 import hashlib
 from typing import List

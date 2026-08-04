@@ -9,6 +9,7 @@ ALSO requires the caller to be authenticated (SIWE) as the exact address it
 claims to act as: tests sign in with real eth_account keypairs and attach
 the resulting Bearer token.
 """
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 
@@ -36,22 +37,30 @@ ADDR_D = ACCOUNT_D.address.lower()
 NON_MEMBER = NON_MEMBER_ACCOUNT.address.lower()
 
 _ACCOUNTS_BY_ADDRESS = {
-    a.address.lower(): a for a in (ACCOUNT_A, ACCOUNT_B, ACCOUNT_C, ACCOUNT_D, NON_MEMBER_ACCOUNT)
+    a.address.lower(): a
+    for a in (ACCOUNT_A, ACCOUNT_B, ACCOUNT_C, ACCOUNT_D, NON_MEMBER_ACCOUNT)
 }
 
 
 async def _sign_in(client, account):
     """Ejecuta el flujo SIWE real (challenge + firma + verify) y devuelve
     los headers de Authorization para autenticar como esa cuenta."""
-    challenge = await client.post("/api/wallet/challenge", json={"address": account.address})
+    challenge = await client.post(
+        "/api/wallet/challenge", json={"address": account.address}
+    )
     challenge.raise_for_status()
     body = challenge.json()
-    signed = Account.sign_message(encode_defunct(text=body["message"]), private_key=account.key)
-    verify = await client.post("/api/wallet/verify", json={
-        "address": account.address,
-        "nonce": body["nonce"],
-        "signature": signed.signature.hex(),
-    })
+    signed = Account.sign_message(
+        encode_defunct(text=body["message"]), private_key=account.key
+    )
+    verify = await client.post(
+        "/api/wallet/verify",
+        json={
+            "address": account.address,
+            "nonce": body["nonce"],
+            "signature": signed.signature.hex(),
+        },
+    )
     verify.raise_for_status()
     return {"Authorization": f"Bearer {verify.json()['token']}"}
 
@@ -65,43 +74,67 @@ async def _headers_for(client, address):
 async def _mint_member(client, address):
     """Register an active member through the real mint endpoint (self-auth)."""
     headers = await _headers_for(client, address)
-    response = await client.post("/api/membership/mint", json={
-        "wallet_address": address,
-        "assurance_level": "AL2",
-        "doc_hash": f"0xdoc{address[-8:]}",
-    }, headers=headers)
+    response = await client.post(
+        "/api/membership/mint",
+        json={
+            "wallet_address": address,
+            "assurance_level": "AL2",
+            "doc_hash": f"0xdoc{address[-8:]}",
+        },
+        headers=headers,
+    )
     assert response.json()["ok"] is True, f"fixture mint failed: {response.json()}"
     return response
 
 
-async def _create_proposal(client, title="Propuesta de prueba",
-                           description="Una descripción suficientemente larga para validar.",
-                           creator=ADDR_A, duration_days=7, headers=None):
+async def _create_proposal(
+    client,
+    title="Propuesta de prueba",
+    description="Una descripción suficientemente larga para validar.",
+    creator=ADDR_A,
+    duration_days=7,
+    headers=None,
+):
     if headers is None and creator in _ACCOUNTS_BY_ADDRESS:
         headers = await _headers_for(client, creator)
-    return await client.post("/api/governance/proposals", json={
-        "title": title,
-        "description": description,
-        "category": "general",
-        "creator_address": creator,
-        "duration_days": duration_days,
-    }, headers=headers)
+    return await client.post(
+        "/api/governance/proposals",
+        json={
+            "title": title,
+            "description": description,
+            "category": "general",
+            "creator_address": creator,
+            "duration_days": duration_days,
+        },
+        headers=headers,
+    )
 
 
 async def _vote(client, voter, proposal_id, choice, headers=None):
     if headers is None and voter in _ACCOUNTS_BY_ADDRESS:
         headers = await _headers_for(client, voter)
-    return await client.post("/api/governance/vote", json={
-        "proposal_id": proposal_id, "voter_address": voter, "vote": choice,
-    }, headers=headers)
+    return await client.post(
+        "/api/governance/vote",
+        json={
+            "proposal_id": proposal_id,
+            "voter_address": voter,
+            "vote": choice,
+        },
+        headers=headers,
+    )
 
 
 async def _delegate(client, delegator, delegate, headers=None):
     if headers is None and delegator in _ACCOUNTS_BY_ADDRESS:
         headers = await _headers_for(client, delegator)
-    return await client.post("/api/governance/delegate", json={
-        "delegator_address": delegator, "delegate_address": delegate,
-    }, headers=headers)
+    return await client.post(
+        "/api/governance/delegate",
+        json={
+            "delegator_address": delegator,
+            "delegate_address": delegate,
+        },
+        headers=headers,
+    )
 
 
 async def _revoke_delegation(client, delegator, headers=None):
@@ -111,6 +144,7 @@ async def _revoke_delegation(client, delegator, headers=None):
 
 
 # === Proposals ===
+
 
 async def test_create_proposal(client):
     await _mint_member(client, ADDR_A)
@@ -162,6 +196,7 @@ async def test_create_proposal_rejects_acting_as_another_address(client):
 
 # === Voting ===
 
+
 async def test_vote_flow(client):
     await _mint_member(client, ADDR_A)
     await _mint_member(client, ADDR_B)
@@ -196,9 +231,12 @@ async def test_simultaneous_votes_are_counted_once(client):
     payloads = [first.json(), second.json()]
 
     assert sum(payload.get("ok") is True for payload in payloads) == 1
-    assert await votes_collection().count_documents(
-        {"proposal_id": proposal_id, "voter_address": ADDR_B}
-    ) == 1
+    assert (
+        await votes_collection().count_documents(
+            {"proposal_id": proposal_id, "voter_address": ADDR_B}
+        )
+        == 1
+    )
     proposal = (await client.get(f"/api/governance/proposals/{proposal_id}")).json()
     assert proposal["votes_for"] == 1
     assert proposal["total_votes"] == 1
@@ -214,12 +252,14 @@ async def test_signed_ballot_is_persisted_and_publicly_verifiable(
     proposal_id = (await _create_proposal(client)).json()["id"]
     headers = await _headers_for(client, ADDR_B)
     nonce = "audit-ballot-nonce"
-    encoded = encode_typed_data(full_message=ballot_service.typed_data(
-        proposal_id,
-        ADDR_B,
-        "for",
-        nonce,
-    ))
+    encoded = encode_typed_data(
+        full_message=ballot_service.typed_data(
+            proposal_id,
+            ADDR_B,
+            "for",
+            nonce,
+        )
+    )
     signature = ACCOUNT_B.sign_message(encoded).signature.hex()
 
     response = await client.post(
@@ -272,30 +312,34 @@ async def test_production_never_accepts_unsigned_proposal_vote_when_flag_is_off(
     monkeypatch.setattr(settings, "SIWE_URI", "https://estamosdao.cl")
     monkeypatch.setattr(settings, "SIWE_CHAIN_ID", 11155111)
     monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", False)
-    await members_collection().insert_one({
-        "wallet_address": ADDR_B,
-        "token_id": 99,
-        "status": "active",
-        "issuance_mode": "onchain",
-        "identity_verified": True,
-        "tx_hash": "0x" + "ab" * 32,
-    })
+    await members_collection().insert_one(
+        {
+            "wallet_address": ADDR_B,
+            "token_id": 99,
+            "status": "active",
+            "issuance_mode": "onchain",
+            "identity_verified": True,
+            "tx_hash": "0x" + "ab" * 32,
+        }
+    )
     now = datetime.now(timezone.utc)
-    await proposals_collection().insert_one({
-        "id": "prod-proposal",
-        "title": "Producción segura",
-        "description": "Una propuesta que exige papeleta firmada en producción.",
-        "category": "general",
-        "creator_address": ADDR_B,
-        "status": "active",
-        "votes_for": 0,
-        "votes_against": 0,
-        "votes_abstain": 0,
-        "total_votes": 0,
-        "quorum_required": 10,
-        "created_at": now,
-        "ends_at": now + timedelta(days=1),
-    })
+    await proposals_collection().insert_one(
+        {
+            "id": "prod-proposal",
+            "title": "Producción segura",
+            "description": "Una propuesta que exige papeleta firmada en producción.",
+            "category": "general",
+            "creator_address": ADDR_B,
+            "status": "active",
+            "votes_for": 0,
+            "votes_against": 0,
+            "votes_abstain": 0,
+            "total_votes": 0,
+            "quorum_required": 10,
+            "created_at": now,
+            "ends_at": now + timedelta(days=1),
+        }
+    )
     headers = await _headers_for(client, ADDR_B)
 
     response = await _vote(
@@ -342,9 +386,15 @@ async def test_vote_rejects_invalid_choice(client):
     que se necesita una sesión válida para que un `vote` inválido
     produzca 422 en vez de 401."""
     headers = await _headers_for(client, ADDR_A)
-    response = await client.post("/api/governance/vote", json={
-        "proposal_id": "x", "voter_address": ADDR_A, "vote": "maybe",
-    }, headers=headers)
+    response = await client.post(
+        "/api/governance/vote",
+        json={
+            "proposal_id": "x",
+            "voter_address": ADDR_A,
+            "vote": "maybe",
+        },
+        headers=headers,
+    )
     assert response.status_code == 422
 
 
@@ -370,30 +420,26 @@ async def test_expired_proposals_are_resolved(client):
         {"id": passed_id},
         {"$set": {"ends_at": past}},
     )
-    await votes_collection().insert_one({
-        "proposal_id": passed_id,
-        "voter_address": ADDR_A,
-        "vote": "for",
-        "weight": 7
-    })
-    await votes_collection().insert_one({
-        "proposal_id": passed_id,
-        "voter_address": ADDR_B,
-        "vote": "against",
-        "weight": 3
-    })
+    await votes_collection().insert_one(
+        {"proposal_id": passed_id, "voter_address": ADDR_A, "vote": "for", "weight": 7}
+    )
+    await votes_collection().insert_one(
+        {
+            "proposal_id": passed_id,
+            "voter_address": ADDR_B,
+            "vote": "against",
+            "weight": 3,
+        }
+    )
 
     # No quorum -> expired
     await proposals_collection().update_one(
         {"id": expired_id},
         {"$set": {"ends_at": past}},
     )
-    await votes_collection().insert_one({
-        "proposal_id": expired_id,
-        "voter_address": ADDR_A,
-        "vote": "for",
-        "weight": 1
-    })
+    await votes_collection().insert_one(
+        {"proposal_id": expired_id, "voter_address": ADDR_A, "vote": "for", "weight": 1}
+    )
 
     listing = (await client.get("/api/governance/proposals")).json()
     by_id = {p["id"]: p["status"] for p in listing}
@@ -402,6 +448,7 @@ async def test_expired_proposals_are_resolved(client):
 
 
 # === Delegated voting power (A-5) ===
+
 
 async def test_vote_weight_includes_active_delegators(client):
     for addr in (ADDR_A, ADDR_B, ADDR_C):
@@ -423,15 +470,19 @@ async def test_vote_weight_includes_active_delegators(client):
 
     # The applied weight is persisted on the vote record, together with the
     # delegators that compose it (sin eso el peso no es recomputable).
-    record = await votes_collection().find_one({
-        "proposal_id": proposal_id, "voter_address": ADDR_C.lower(),
-    })
+    record = await votes_collection().find_one(
+        {
+            "proposal_id": proposal_id,
+            "voter_address": ADDR_C.lower(),
+        }
+    )
     assert record["weight"] == 3
     assert sorted(record["delegators"]) == sorted([ADDR_A.lower(), ADDR_B.lower()])
     assert record["weight"] == 1 + len(record["delegators"])
 
 
 # === Doble conteo del peso delegado (P-61) ===
+
 
 async def test_delegating_after_voting_does_not_count_the_weight_twice(client):
     """A vota, después delega en B: su peso ya se gastó en su propia papeleta."""
@@ -532,6 +583,7 @@ async def test_vote_after_revoking_delegation(client):
 
 # === Delegation ===
 
+
 async def test_delegation_rejects_self(client):
     await _mint_member(client, ADDR_A)
     response = await _delegate(client, ADDR_A, ADDR_A)
@@ -623,6 +675,7 @@ async def test_revoke_delegation_rejects_acting_as_another_address(client):
 
 # === Treasury (honest reporting) ===
 
+
 async def test_treasury_reports_unconfigured_not_fabricated(client):
     treasury = (await client.get("/api/governance/treasury")).json()
     assert treasury["configured"] is False
@@ -653,15 +706,17 @@ async def test_treasury_transactions_serialize_stored_records(client):
     """
     from app.core.database import treasury_transactions_collection
 
-    await treasury_transactions_collection().insert_one({
-        "id": "tx-1",
-        "type": "income",
-        "amount": 1.5,
-        "currency": "ETH",
-        "description": "Aporte registrado",
-        "category": "operations",
-        "timestamp": datetime.now(timezone.utc),
-    })
+    await treasury_transactions_collection().insert_one(
+        {
+            "id": "tx-1",
+            "type": "income",
+            "amount": 1.5,
+            "currency": "ETH",
+            "description": "Aporte registrado",
+            "category": "operations",
+            "timestamp": datetime.now(timezone.utc),
+        }
+    )
 
     response = await client.get("/api/governance/treasury/transactions")
 
@@ -700,9 +755,14 @@ async def test_replayed_ballot_nonce_is_rejected_as_conflict(client, monkeypatch
     nonce = "replayed-nonce"
 
     def _signed(proposal_id):
-        encoded = encode_typed_data(full_message=ballot_service.typed_data(
-            proposal_id, ADDR_B, "for", nonce,
-        ))
+        encoded = encode_typed_data(
+            full_message=ballot_service.typed_data(
+                proposal_id,
+                ADDR_B,
+                "for",
+                nonce,
+            )
+        )
         return ACCOUNT_B.sign_message(encoded).signature.hex()
 
     async def _cast(proposal_id):

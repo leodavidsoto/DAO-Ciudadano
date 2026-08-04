@@ -33,6 +33,7 @@ Tres reglas que este módulo no rompe
 Las llamadas son bloqueantes (web3 y requests son síncronos): los llamadores
 las ejecutan con `asyncio.to_thread`.
 """
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -135,8 +136,8 @@ def configuration_errors() -> dict[str, str]:
     declared = [t.strip() for t in settings.TREASURY_TOKENS.split(",") if t.strip()]
     invalid = [t for t in declared if not Web3.is_address(t)]
     if invalid:
-        errors["TREASURY_TOKENS"] = (
-            "contiene direcciones inválidas: " + ", ".join(invalid[:3])
+        errors["TREASURY_TOKENS"] = "contiene direcciones inválidas: " + ", ".join(
+            invalid[:3]
         )
     elif len(declared) > max(0, settings.TREASURY_MAX_TOKENS):
         errors["TREASURY_TOKENS"] = (
@@ -175,7 +176,9 @@ def read_balance() -> dict:
         wei = int(w3.eth.get_balance(address))
     except Exception as exc:
         # Sin el texto del error: la URL del RPC puede llevar una API key.
-        logger.error("No se pudo leer el balance de la tesorería (%s)", type(exc).__name__)
+        logger.error(
+            "No se pudo leer el balance de la tesorería (%s)", type(exc).__name__
+        )
         raise TreasuryUnavailable(
             "No se pudo consultar el balance on-chain de la tesorería."
         ) from exc
@@ -272,14 +275,16 @@ def read_token_balances(w3, holder: str) -> list[dict]:
             symbol = f"{address[:6]}…{address[-4:]}"
             symbol_source = "address"
 
-        balances.append({
-            "address": address,
-            "symbol": symbol,
-            "symbol_source": symbol_source,
-            "decimals": decimals,
-            "raw": raw_balance,
-            "amount": Decimal(raw_balance) / (Decimal(10) ** decimals),
-        })
+        balances.append(
+            {
+                "address": address,
+                "symbol": symbol,
+                "symbol_source": symbol_source,
+                "decimals": decimals,
+                "raw": raw_balance,
+                "amount": Decimal(raw_balance) / (Decimal(10) ** decimals),
+            }
+        )
 
     return balances
 
@@ -489,7 +494,9 @@ def eth_price_usd(chain_id: Optional[int] = None) -> PriceQuote:
     """
     provider = (settings.ETH_PRICE_PROVIDER or "coingecko").strip().lower()
     if provider in {"", "none", "disabled"}:
-        return PriceQuote(None, provider or "none", None, False, "proveedor deshabilitado")
+        return PriceQuote(
+            None, provider or "none", None, False, "proveedor deshabilitado"
+        )
 
     if chain_id is not None and chain_id != MAINNET_CHAIN_ID:
         return PriceQuote(
@@ -515,8 +522,12 @@ def eth_price_usd(chain_id: Optional[int] = None) -> PriceQuote:
             and cached_at is not None
             and now - cached_at < max(0, settings.ETH_PRICE_STALE_MAX_SECONDS)
         ):
-            return PriceQuote(cached, provider, cached_at, True, "usando el último precio conocido")
-        return PriceQuote(None, provider, None, False, "el proveedor de precio no respondió")
+            return PriceQuote(
+                cached, provider, cached_at, True, "usando el último precio conocido"
+            )
+        return PriceQuote(
+            None, provider, None, False, "el proveedor de precio no respondió"
+        )
 
     _price_cache.set(price)
     return PriceQuote(price, provider, time.time(), False)
@@ -584,36 +595,44 @@ def build_snapshot() -> dict:
     # Un activo cuenta para el total solo si tiene precio. Los que no lo
     # tienen no valen cero: valen "no lo sabemos", y esa diferencia decide si
     # el total consolidado se puede publicar.
-    assets = [{
-        "symbol": "ETH",
-        "address": None,
-        "decimals": 18,
-        "amount": float(eth_amount),
-        "usd_price": float(quote.usd) if quote.usd is not None else None,
-        "usd_value": float(eth_amount * quote.usd) if quote.usd is not None else None,
-    }]
+    assets = [
+        {
+            "symbol": "ETH",
+            "address": None,
+            "decimals": 18,
+            "amount": float(eth_amount),
+            "usd_price": float(quote.usd) if quote.usd is not None else None,
+            "usd_value": (
+                float(eth_amount * quote.usd) if quote.usd is not None else None
+            ),
+        }
+    ]
     for token in tokens:
         price = prices.get(token["address"].lower())
-        assets.append({
-            "symbol": token["symbol"],
-            "symbol_source": token["symbol_source"],
-            "address": token["address"].lower(),
-            "decimals": token["decimals"],
-            "amount": float(token["amount"]),
-            "usd_price": float(price) if price is not None else None,
-            "usd_value": float(token["amount"] * price) if price is not None else None,
-        })
+        assets.append(
+            {
+                "symbol": token["symbol"],
+                "symbol_source": token["symbol_source"],
+                "address": token["address"].lower(),
+                "decimals": token["decimals"],
+                "amount": float(token["amount"]),
+                "usd_price": float(price) if price is not None else None,
+                "usd_value": (
+                    float(token["amount"] * price) if price is not None else None
+                ),
+            }
+        )
 
     # Solo estorba para el total un activo SIN precio y CON saldo: si el saldo
     # es cero, aporta cero valor lo valga lo que valga.
     unpriced = [
-        a["symbol"] for a in assets
-        if a["usd_price"] is None and a["amount"] > 0
+        a["symbol"] for a in assets if a["usd_price"] is None and a["amount"] > 0
     ]
     if unpriced:
         total_usd = None
         total_usd_reason = (
-            "no hay precio para " + ", ".join(unpriced)
+            "no hay precio para "
+            + ", ".join(unpriced)
             + "; publicar un total que los ignora daría una tesorería más "
             "pequeña de lo que es"
         )

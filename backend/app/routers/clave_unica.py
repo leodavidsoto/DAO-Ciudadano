@@ -21,6 +21,7 @@ Contrato para el cliente:
 El grant resultante es de un solo uso y con TTL corto: se canjea en
 `POST /api/identity/identity-credential` para obtener la credencial ZK.
 """
+
 import logging
 from typing import Optional
 
@@ -137,9 +138,7 @@ async def callback(
     este endpoint como oráculo PKCE desde otro cliente.
     """
     try:
-        result = await clave_unica.complete_login(
-            request.code, request.state, binding
-        )
+        result = await clave_unica.complete_login(request.code, request.state, binding)
     except clave_unica.LoginAlreadyCompleted as done:
         # Idempotencia: la respuesta anterior se perdió y el navegador
         # reintenta. Se devuelve EL MISMO grant, no otro.
@@ -176,9 +175,7 @@ async def callback(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     # Se recuerda cifrado para poder repetir esta misma respuesta si se pierde.
-    await clave_unica.remember_issued_grant(
-        result["state"], grant, result["name"]
-    )
+    await clave_unica.remember_issued_grant(result["state"], grant, result["name"])
 
     return CallbackResponse(
         ok=True,

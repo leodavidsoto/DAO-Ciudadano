@@ -13,6 +13,7 @@ for the same wallet declared in the request body. Membership alone is not
 authentication: without the session check, an attacker could act as any
 member by copying their public address.
 """
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
@@ -57,6 +58,7 @@ MAX_SCAN = 200
 
 # === Models ===
 
+
 class ElectionCreate(BaseModel):
     title: str
     description: str
@@ -66,32 +68,38 @@ class ElectionCreate(BaseModel):
     voting_days: int = Field(default=7, ge=1, le=MAX_PHASE_DAYS)
     term_months: int = Field(default=12, ge=1, le=MAX_TERM_MONTHS)
 
-    @field_validator('creator_address')
+    @field_validator("creator_address")
     @classmethod
     def validate_creator_address(cls, v):
         if not verify_eth_address(v):
-            raise ValueError('Invalid Ethereum address format')
+            raise ValueError("Invalid Ethereum address format")
         return v.lower()
 
-    @field_validator('title')
+    @field_validator("title")
     @classmethod
     def validate_title(cls, v):
         v = v.strip()
         if len(v) < MIN_TITLE_LENGTH:
-            raise ValueError(f'Title must be at least {MIN_TITLE_LENGTH} characters')
+            raise ValueError(f"Title must be at least {MIN_TITLE_LENGTH} characters")
         if len(v) > MAX_TITLE_LENGTH:
-            raise ValueError(f'Title must be less than {MAX_TITLE_LENGTH} characters')
-        return re.sub(r'<[^>]+>', '', v)
+            raise ValueError(f"Title must be less than {MAX_TITLE_LENGTH} characters")
+        return re.sub(r"<[^>]+>", "", v)
 
-    @field_validator('description')
+    @field_validator("description")
     @classmethod
     def validate_description(cls, v):
         v = v.strip()
         if len(v) < MIN_DESCRIPTION_LENGTH:
-            raise ValueError(f'Description must be at least {MIN_DESCRIPTION_LENGTH} characters')
+            raise ValueError(
+                f"Description must be at least {MIN_DESCRIPTION_LENGTH} characters"
+            )
         if len(v) > MAX_DESCRIPTION_LENGTH:
-            raise ValueError(f'Description must be less than {MAX_DESCRIPTION_LENGTH} characters')
-        return re.sub(r'<script[^>]*>.*?</script>', '', v, flags=re.IGNORECASE | re.DOTALL)
+            raise ValueError(
+                f"Description must be less than {MAX_DESCRIPTION_LENGTH} characters"
+            )
+        return re.sub(
+            r"<script[^>]*>.*?</script>", "", v, flags=re.IGNORECASE | re.DOTALL
+        )
 
 
 class ElectionResponse(BaseModel):
@@ -112,22 +120,26 @@ class CandidacyCreate(BaseModel):
     candidate_address: str
     statement: str  # The candidate's program
 
-    @field_validator('candidate_address')
+    @field_validator("candidate_address")
     @classmethod
     def validate_address(cls, v):
         if not verify_eth_address(v):
-            raise ValueError('Invalid Ethereum address format')
+            raise ValueError("Invalid Ethereum address format")
         return v.lower()
 
-    @field_validator('statement')
+    @field_validator("statement")
     @classmethod
     def validate_statement(cls, v):
         v = v.strip()
         if len(v) < MIN_STATEMENT_LENGTH:
-            raise ValueError(f'Statement must be at least {MIN_STATEMENT_LENGTH} characters')
+            raise ValueError(
+                f"Statement must be at least {MIN_STATEMENT_LENGTH} characters"
+            )
         if len(v) > MAX_STATEMENT_LENGTH:
-            raise ValueError(f'Statement must be less than {MAX_STATEMENT_LENGTH} characters')
-        return re.sub(r'<[^>]+>', '', v)
+            raise ValueError(
+                f"Statement must be less than {MAX_STATEMENT_LENGTH} characters"
+            )
+        return re.sub(r"<[^>]+>", "", v)
 
 
 class CandidacyResponse(BaseModel):
@@ -146,11 +158,11 @@ class ElectionVoteRequest(BaseModel):
     nonce: Optional[str] = None
     signature: Optional[str] = None
 
-    @field_validator('voter_address', 'candidate_address')
+    @field_validator("voter_address", "candidate_address")
     @classmethod
     def validate_address(cls, v):
         if not verify_eth_address(v):
-            raise ValueError('Invalid Ethereum address format')
+            raise ValueError("Invalid Ethereum address format")
         return v.lower()
 
 
@@ -189,6 +201,7 @@ class RepresentativeResponse(BaseModel):
 
 # === Membership dependencies (C-3) ===
 
+
 async def verified_candidate(
     request: CandidacyCreate,
     authenticated: str = Depends(current_address),
@@ -216,6 +229,7 @@ async def verified_election_voter(
 
 
 # === Helpers ===
+
 
 async def _get_election_or_404(election_id: str) -> dict:
     election = await elections_collection().find_one({"id": election_id})
@@ -245,10 +259,16 @@ async def _counts_by_election(election_ids: list[str]) -> dict[str, tuple[int, i
         return {}
 
     async def _group(collection) -> dict[str, int]:
-        rows = await collection().aggregate([
-            {"$match": {"election_id": {"$in": election_ids}}},
-            {"$group": {"_id": "$election_id", "n": {"$sum": 1}}},
-        ]).to_list(length=len(election_ids))
+        rows = (
+            await collection()
+            .aggregate(
+                [
+                    {"$match": {"election_id": {"$in": election_ids}}},
+                    {"$group": {"_id": "$election_id", "n": {"$sum": 1}}},
+                ]
+            )
+            .to_list(length=len(election_ids))
+        )
         return {row["_id"]: row["n"] for row in rows}
 
     candidacies = await _group(candidacies_collection)
@@ -265,10 +285,20 @@ def _build_election_response(
     vote_count: int,
 ) -> ElectionResponse:
     return ElectionResponse(
-        **{k: election[k] for k in (
-            "id", "title", "description", "seats", "status",
-            "nominations_end_at", "voting_end_at", "term_months", "created_at"
-        )},
+        **{
+            k: election[k]
+            for k in (
+                "id",
+                "title",
+                "description",
+                "seats",
+                "status",
+                "nominations_end_at",
+                "voting_end_at",
+                "term_months",
+                "created_at",
+            )
+        },
         candidacy_count=candidacy_count,
         vote_count=vote_count,
     )
@@ -280,6 +310,7 @@ async def _to_election_response(election: dict) -> ElectionResponse:
 
 
 # === Election Endpoints ===
+
 
 @router.post("/elections", response_model=ElectionResponse)
 async def create_election(
@@ -304,7 +335,8 @@ async def create_election(
         "seats": request.seats,
         "status": "nominations",
         "nominations_end_at": now + timedelta(days=request.nominations_days),
-        "voting_end_at": now + timedelta(days=request.nominations_days + request.voting_days),
+        "voting_end_at": now
+        + timedelta(days=request.nominations_days + request.voting_days),
         "term_months": request.term_months,
         "created_at": now,
     }
@@ -371,6 +403,7 @@ async def get_election(election_id: str):
 
 # === Candidacy Endpoints ===
 
+
 @router.post("/elections/{election_id}/candidacies", response_model=CandidacyResponse)
 async def create_candidacy(
     election_id: str,
@@ -407,18 +440,23 @@ async def create_candidacy(
     return CandidacyResponse(**candidacy)
 
 
-@router.get("/elections/{election_id}/candidacies", response_model=List[CandidacyResponse])
+@router.get(
+    "/elections/{election_id}/candidacies", response_model=List[CandidacyResponse]
+)
 async def list_candidacies(election_id: str):
     """List candidacies for an election (registration order)."""
     await _get_election_or_404(election_id)
-    cursor = candidacies_collection().find(
-        {"election_id": election_id}
-    ).sort("created_at", 1)
+    cursor = (
+        candidacies_collection()
+        .find({"election_id": election_id})
+        .sort("created_at", 1)
+    )
     candidacies = await cursor.to_list(length=1000)
     return [CandidacyResponse(**c) for c in candidacies]
 
 
 # === Election Voting ===
+
 
 @router.post("/elections/{election_id}/vote", response_model=ElectionVoteResponse)
 async def vote_in_election(
@@ -459,14 +497,14 @@ async def vote_in_election(
 
     # Antifraude: misma heurística que en propuestas, y con la misma
     # separación entre comprobar y registrar (P-46).
-    suspicious, reason = await fraud_detector.check_rapid_voting(
-        request.voter_address
-    )
+    suspicious, reason = await fraud_detector.check_rapid_voting(request.voter_address)
     if suspicious:
-        logger.warning(f"Rapid election voting blocked: {request.voter_address} ({reason})")
+        logger.warning(
+            f"Rapid election voting blocked: {request.voter_address} ({reason})"
+        )
         raise HTTPException(
             status_code=429,
-            detail="Actividad de voto sospechosa: demasiados votos en poco tiempo. Intenta más tarde."
+            detail="Actividad de voto sospechosa: demasiados votos en poco tiempo. Intenta más tarde.",
         )
 
     # A delegated vote travels with the delegate; revoke to vote directly
@@ -497,20 +535,24 @@ async def vote_in_election(
             ),
         )
 
-    candidacy = await candidacies_collection().find_one({
-        "election_id": election_id,
-        "candidate_address": request.candidate_address,
-    })
+    candidacy = await candidacies_collection().find_one(
+        {
+            "election_id": election_id,
+            "candidate_address": request.candidate_address,
+        }
+    )
     if not candidacy:
         return ElectionVoteResponse(
             ok=False,
             error="La dirección elegida no es candidata en esta elección.",
         )
 
-    existing = await election_votes_collection().find_one({
-        "election_id": election_id,
-        "voter_address": request.voter_address,
-    })
+    existing = await election_votes_collection().find_one(
+        {
+            "election_id": election_id,
+            "voter_address": request.voter_address,
+        }
+    )
     if existing:
         return ElectionVoteResponse(
             ok=False,
@@ -575,6 +617,7 @@ async def vote_in_election(
 
 # === Results & Representatives ===
 
+
 @router.get("/elections/{election_id}/results", response_model=ElectionResultsResponse)
 async def get_election_results(election_id: str):
     """Standings ordered by weighted votes; the top `seats` are elected.
@@ -595,9 +638,7 @@ async def get_election_results(election_id: str):
     # Seats go to the top `seats` candidates WITH votes (zero-vote candidates
     # are never "elected", even if seats remain unfilled).
     elected_addresses = {
-        r["candidate_address"]
-        for r in results[: election["seats"]]
-        if r["votes"] > 0
+        r["candidate_address"] for r in results[: election["seats"]] if r["votes"] > 0
     }
 
     return ElectionResultsResponse(
@@ -634,27 +675,37 @@ async def audit_election_tally(election_id: str):
 async def list_representatives():
     """Representatives whose term is currently in force."""
     # Sync any election that should have closed but was never read again
-    stale_cursor = elections_collection().find({
-        "status": {"$ne": "closed"},
-        "voting_end_at": {"$lt": datetime.now(timezone.utc)},
-    })
+    stale_cursor = elections_collection().find(
+        {
+            "status": {"$ne": "closed"},
+            "voting_end_at": {"$lt": datetime.now(timezone.utc)},
+        }
+    )
     async for election in stale_cursor:
         await governance_service.sync_election_status(election)
 
     now = datetime.now(timezone.utc)
-    cursor = representatives_collection().find({
-        "term_start": {"$lte": now},
-        "term_end": {"$gt": now},
-    }).sort("votes", -1)
+    cursor = (
+        representatives_collection()
+        .find(
+            {
+                "term_start": {"$lte": now},
+                "term_end": {"$gt": now},
+            }
+        )
+        .sort("votes", -1)
+    )
     reps = await cursor.to_list(length=200)
 
     # One $in query instead of one lookup per representative.
     election_ids = list({rep["election_id"] for rep in reps})
     titles = {}
     if election_ids:
-        elections = await elections_collection().find(
-            {"id": {"$in": election_ids}}, {"id": 1, "title": 1}
-        ).to_list(length=len(election_ids))
+        elections = (
+            await elections_collection()
+            .find({"id": {"$in": election_ids}}, {"id": 1, "title": 1})
+            .to_list(length=len(election_ids))
+        )
         titles = {e["id"]: e.get("title") for e in elections}
 
     return [
@@ -702,9 +753,13 @@ async def get_election_ballot_evidence(
     """
     await _get_election_or_404(election_id)
 
-    records = await election_votes_collection().find(
-        {"election_id": election_id}
-    ).sort("timestamp", 1).limit(limit).to_list(limit)
+    records = (
+        await election_votes_collection()
+        .find({"election_id": election_id})
+        .sort("timestamp", 1)
+        .limit(limit)
+        .to_list(limit)
+    )
 
     evidence = []
     for record in records:
@@ -727,16 +782,18 @@ async def get_election_ballot_evidence(
             except Exception:
                 signature_valid = False
 
-        evidence.append(ElectionBallotEvidence(
-            election_id=election_id,
-            voter_address=record.get("voter_address", ""),
-            candidate_address=record.get("candidate_address", ""),
-            weight=record.get("weight", 1),
-            nonce=record.get("nonce"),
-            timestamp=record.get("timestamp"),
-            signature=signature,
-            signature_scheme=record.get("signature_scheme"),
-            chain_id=chain_id,
-            signature_valid=signature_valid,
-        ))
+        evidence.append(
+            ElectionBallotEvidence(
+                election_id=election_id,
+                voter_address=record.get("voter_address", ""),
+                candidate_address=record.get("candidate_address", ""),
+                weight=record.get("weight", 1),
+                nonce=record.get("nonce"),
+                timestamp=record.get("timestamp"),
+                signature=signature,
+                signature_scheme=record.get("signature_scheme"),
+                chain_id=chain_id,
+                signature_valid=signature_valid,
+            )
+        )
     return evidence
