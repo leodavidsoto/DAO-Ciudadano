@@ -44,6 +44,14 @@ const App = () => {
                 </OnboardingProvider>
               }
             />
+            <Route
+              path="/unete/clave-unica/callback"
+              element={
+                <OnboardingProvider>
+                  <OnboardingPage appearance="civic" />
+                </OnboardingProvider>
+              }
+            />
 
             <Route path="/dashboard" element={<DashboardLayout />}>
               <Route index element={<OverviewSection />} />

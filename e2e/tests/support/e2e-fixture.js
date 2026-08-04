@@ -73,6 +73,9 @@ const selectorResult = (contractInterface, functionName, values) => ({
 
 const E2E_SESSION_COOKIE = 'dao_session=e2e-http-only-session';
 const E2E_CSRF_TOKEN = 'c'.repeat(64);
+const E2E_OIDC_STATE = 'state_e2e_1234567890abcdefghijklmnopqrstuvwxyz';
+const E2E_OIDC_CODE = 'e2e-one-time-authorization-code';
+const E2E_OIDC_BINDING_COOKIE = 'dao_oidc_binding=e2e-browser-binding';
 
 const buildSiweChallenge = (address) => {
     const nonce = 'E2EFLOW20260801';
@@ -337,7 +340,26 @@ export const installBackendFixture = async (page) => {
         siweVerifications: [],
         sessionReads: [],
         logouts: [],
+        oidcCallbackRequests: [],
+        identityGrantConsumed: false,
     };
+
+    await page.route('https://clave-unica.fixture.invalid/authorize**', async (route) => {
+        const requestUrl = new URL(route.request().url());
+        if (requestUrl.searchParams.get('state') !== E2E_OIDC_STATE) {
+            return route.fulfill({ status: 400, body: 'Invalid fixture state' });
+        }
+        return route.fulfill({
+            status: 302,
+            headers: {
+                location:
+                    `http://127.0.0.1:3005/unete/clave-unica/callback` +
+                    `?code=${E2E_OIDC_CODE}&state=${E2E_OIDC_STATE}`,
+                'cache-control': 'no-store',
+            },
+            body: '',
+        });
+    });
 
     await page.route('**/api/**', async (route) => {
         const request = route.request();
@@ -350,6 +372,10 @@ export const installBackendFixture = async (page) => {
             .map((value) => value.trim())
             .includes(E2E_SESSION_COOKIE);
         const hasCsrfHeader = headers['x-csrf-token'] === E2E_CSRF_TOKEN;
+        const hasOidcBinding = (headers.cookie || '')
+            .split(';')
+            .map((value) => value.trim())
+            .includes(E2E_OIDC_BINDING_COOKIE);
 
         if (method === 'OPTIONS') {
             return route.fulfill({
@@ -366,6 +392,49 @@ export const installBackendFixture = async (page) => {
 
         if (method === 'GET' && path === '/api/dashboard/stats') {
             return jsonResponse(route, { total_members: 1, recent_joins: 1 });
+        }
+        if (method === 'GET' && path === '/api/auth/clave-unica/status') {
+            return jsonResponse(route, {
+                available: true,
+                protocol_version: 'clave-unica-oidc-pkce-v1',
+                pkce_method: 'S256',
+                browser_bound: true,
+                credential_exchange_browser_bound: true,
+                callback_idempotent: true,
+                grant_single_use: true,
+                redirect_transport: 'frontend-post',
+                grant_ttl_seconds: 300,
+            });
+        }
+        if (method === 'POST' && path === '/api/auth/clave-unica/authorize') {
+            return jsonResponse(route, {
+                authorization_url:
+                    `https://clave-unica.fixture.invalid/authorize` +
+                    `?client_id=e2e&state=${E2E_OIDC_STATE}`,
+                state: E2E_OIDC_STATE,
+                expires_in: 600,
+            }, 200, {
+                'set-cookie':
+                    `${E2E_OIDC_BINDING_COOKIE}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
+            });
+        }
+        if (method === 'POST' && path === '/api/auth/clave-unica/callback') {
+            const body = request.postDataJSON();
+            state.oidcCallbackRequests.push({ body, cookie: headers.cookie || null });
+            if (
+                !hasOidcBinding ||
+                body.code !== E2E_OIDC_CODE ||
+                body.state !== E2E_OIDC_STATE
+            ) {
+                return jsonResponse(route, { detail: 'Fixture OIDC binding rejected' }, 401);
+            }
+            return jsonResponse(route, {
+                ok: true,
+                identity_grant: E2E_FIXTURE.identityGrant,
+                identity_grant_expires_in: 300,
+                assurance_level: 'CLAVE_UNICA',
+                name: 'Ciudadana E2E',
+            });
         }
         if (method === 'POST' && path === '/api/wallet/challenge') {
             const body = request.postDataJSON();
@@ -427,7 +496,6 @@ export const installBackendFixture = async (page) => {
                 ok: true,
                 score: null,
                 analysis: 'Resultado controlado del fixture E2E; no es biometría.',
-                identity_grant: E2E_FIXTURE.identityGrant,
             });
         }
         if (method === 'GET' && path.startsWith('/api/membership/member/')) {
@@ -437,7 +505,7 @@ export const installBackendFixture = async (page) => {
             return jsonResponse(route, { found: false, member: null });
         }
         if (method === 'POST' && path === '/api/auth/identity-credential') {
-            if (!hasSessionCookie) {
+            if (!hasSessionCookie || !hasOidcBinding) {
                 return jsonResponse(route, { detail: 'Fixture session missing' }, 401);
             }
             if (!hasCsrfHeader) {
@@ -448,6 +516,10 @@ export const installBackendFixture = async (page) => {
             if (body.identity_grant !== E2E_FIXTURE.identityGrant) {
                 return jsonResponse(route, { detail: 'Fixture grant rejected' }, 403);
             }
+            if (state.identityGrantConsumed) {
+                return jsonResponse(route, { detail: 'Fixture grant already consumed' }, 409);
+            }
+            state.identityGrantConsumed = true;
             const identityRoot = toIdentityRoot(body.identity_commitment);
             const signature = await issuerWallet.signMessage(
                 canonicalCredentialMessage({

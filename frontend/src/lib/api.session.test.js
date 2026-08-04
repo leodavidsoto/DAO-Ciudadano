@@ -39,6 +39,7 @@ const loadApi = () => {
         create,
         credentialed,
         anonymous,
+        anonymousRequestInterceptor: anonymous.interceptors.request.use.mock.calls[0][0],
         requestInterceptor: credentialed.interceptors.request.use.mock.calls[0][0],
         responseInterceptor: credentialed.interceptors.response.use.mock.calls[0][0],
         responseErrorInterceptor: credentialed.interceptors.response.use.mock.calls[0][1],
@@ -51,8 +52,8 @@ afterEach(() => {
     window.localStorage.clear();
 });
 
-test('uses cookies for authenticated calls and keeps MACI credentialless', () => {
-    const { create, anonymous } = loadApi();
+test('uses cookies for authenticated calls and strips credentials from MACI', () => {
+    const { create, anonymous, anonymousRequestInterceptor } = loadApi();
 
     expect(create).toHaveBeenNthCalledWith(1, expect.objectContaining({
         withCredentials: true,
@@ -62,8 +63,17 @@ test('uses cookies for authenticated calls and keeps MACI credentialless', () =>
         withCredentials: false,
         withXSRFToken: false,
     }));
-    expect(anonymous.interceptors.request.use).not.toHaveBeenCalled();
+    expect(anonymous.interceptors.request.use).toHaveBeenCalledTimes(1);
     expect(anonymous.interceptors.response.use).not.toHaveBeenCalled();
+
+    const config = {
+        headers: {
+            Authorization: 'Bearer must-not-leak',
+            'X-CSRF-Token': CSRF_ONE,
+        },
+    };
+    expect(anonymousRequestInterceptor(config)).toBe(config);
+    expect(config.headers).toEqual({});
 });
 
 test('purges legacy JWT storage without reading or writing session values', async () => {

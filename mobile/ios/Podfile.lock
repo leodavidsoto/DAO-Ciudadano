@@ -40,6 +40,8 @@ PODS:
     - ReactCommon/turbomodule/core
     - SocketRocket
     - Yoga
+  - NFCPassportReader (2.3.3):
+    - OpenSSL-Universal
   - OpenSSL-Universal (3.6.2000)
   - RCT-Folly (2024.11.18.00):
     - boost
@@ -2759,6 +2761,7 @@ DEPENDENCIES:
   - glog (from `../node_modules/react-native/third-party-podspecs/glog.podspec`)
   - hermes-engine (from `../node_modules/react-native/sdks/hermes-engine/hermes-engine.podspec`)
   - lottie-react-native (from `../node_modules/lottie-react-native`)
+  - NFCPassportReader (from `./NFCPassportReader`)
   - RCT-Folly (from `../node_modules/react-native/third-party-podspecs/RCT-Folly.podspec`)
   - RCTDeprecation (from `../node_modules/react-native/ReactApple/Libraries/RCTFoundation/RCTDeprecation`)
   - RCTRequired (from `../node_modules/react-native/Libraries/Required`)
@@ -2866,6 +2869,8 @@ EXTERNAL SOURCES:
     :tag: hermes-v0.14.0
   lottie-react-native:
     :path: "../node_modules/lottie-react-native"
+  NFCPassportReader:
+    :path: "./NFCPassportReader"
   RCT-Folly:
     :podspec: "../node_modules/react-native/third-party-podspecs/RCT-Folly.podspec"
   RCTDeprecation:
@@ -3034,6 +3039,7 @@ SPEC CHECKSUMS:
   hermes-engine: 91d11c526ef5e19f89cff2768ee95957bbe2c428
   lottie-ios: 8f959969761e9c45d70353667d00af0e5b9cadb3
   lottie-react-native: 14c1f399012a3ac7c6baa29e6b62750643aed19b
+  NFCPassportReader: 93045fa1fb04873e0d16f18d63575275f6055cf6
   OpenSSL-Universal: ecee7b138fa75a74ecf00d7ffd248fb584739b9e
   RCT-Folly: 59ec0ac1f2f39672a0c6e6cecdd39383b764646f
   RCTDeprecation: 2b70c6e3abe00396cefd8913efbf6a2db01a2b36
@@ -3115,6 +3121,6 @@ SPEC CHECKSUMS:
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
   Yoga: 6ca93c8c13f56baeec55eb608577619b17a4d64e
 
-PODFILE CHECKSUM: 20bbb777cc05abb8241f8483c8db6d9d23d6f568
+PODFILE CHECKSUM: 00a8f90d50e63e271e73d9ce0e4545c65c027843
 
 COCOAPODS: 1.15.2

@@ -63,8 +63,8 @@ const WalletStep = () => {
         }
         const connectedWallet = { address, chainId, eip1193Provider };
         setWallet(connectedWallet);
-        const identity = await requestIdentityCredential(connectedWallet);
-        if (identity) setStep('mint');
+        await requestIdentityCredential(connectedWallet);
+        setStep('mint');
     };
 
     // MetaMask may already be authorized for this site, in which case useWallet

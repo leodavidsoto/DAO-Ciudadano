@@ -9,12 +9,10 @@
  * 2. Conectar billetera externa (MetaMask, WalletConnect) — próximamente,
  *    botón visible pero deshabilitado para no prometer algo que no existe.
  *
- * Si se llega desde el flujo NFC (Home -> Scan -> Success -> Wallet), los
- * datos del chip llegan en route.params. El minteo automático con esos datos
- * está DESHABILITADO hasta que exista lectura autenticada de la cédula: ver
- * el comentario en signInAndProceed. Si se llega directo desde "YA TENGO
- * MEMBRESÍA" en Home, route.params viene vacío y la pantalla se limita a
- * crear/cargar la wallet y mostrar el estado de membresía existente.
+ * A local NFC verification is never an issuance grant. This screen only
+ * creates/loads the wallet, establishes SIWE, and displays membership state.
+ * Issuance remains blocked until the backend defines and verifies a scoped,
+ * single-use grant or attestation.
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
@@ -32,7 +30,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Wallet as EthersWallet } from 'ethers';
 import apiService from '../services/apiService';
 import walletService, { GeneratedWallet } from '../services/walletService';
-import { ChileanIDData } from '../services/nfcService';
 
 interface MemberInfo {
     token_id: number;
@@ -44,12 +41,6 @@ interface MemberInfo {
 
 interface WalletScreenProps {
     navigation: any;
-    route?: {
-        params?: {
-            idData?: ChileanIDData;
-            serialNumber?: string;
-        };
-    };
 }
 
 type ScreenState =
@@ -62,10 +53,7 @@ type ScreenState =
 
 const ADDRESS_REGEX = /^0x[0-9a-fA-F]{40}$/;
 
-const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
-    const idData = route?.params?.idData;
-    const serialNumber = route?.params?.serialNumber;
-
+const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
     const [state, setState] = useState<ScreenState>('checking');
     const [pendingWallet, setPendingWallet] = useState<GeneratedWallet | null>(null);
     const [backupConfirmed, setBackupConfirmed] = useState(false);
@@ -96,29 +84,11 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                 return;
             }
 
-            if (idData && serialNumber) {
-                if ((route?.params as any)?.identityVerified) {
-                    setState('checking'); // Visual state to indicate processing
-                    try {
-                        await apiService.mintSBT({
-                            walletAddress: wallet.address,
-                            docHash: serialNumber, // Placeholder for actual nullifier_hash derived from ZK
-                            assuranceLevel: 'high',
-                        });
-                        const updatedStatus = await apiService.getMembershipStatus(wallet.address.toLowerCase());
-                        if (updatedStatus.found) {
-                            setMember(updatedStatus.member);
-                        }
-                    } catch (e: any) {
-                        setError('Error al emitir credencial ZK: ' + (e?.response?.data?.detail || e?.message));
-                    }
-                } else {
-                    setError(
-                        'Registro rechazado: El documento carece de firma electrónica válida del Registro Civil. ' +
-                        'Tu billetera quedó creada y guardada localmente, pero sin membresía vinculada.',
-                    );
-                }
-            }
+            setError(
+                'Emisión bloqueada: una verificación NFC local no autoriza un alta. ' +
+                'El backend aún no entrega ni verifica una atestación de identidad de un solo uso. ' +
+                'No se solicitó una credencial ni un nivel de assurance.',
+            );
             setState('ready');
         } catch (e: any) {
             setError(
@@ -126,7 +96,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
             );
             setState('ready');
         }
-    }, [idData, serialNumber, route]);
+    }, []);
 
     // Al entrar, revisa si ya hay una billetera guardada en el dispositivo.
     useEffect(() => {
@@ -198,7 +168,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
     // === Render: comprobando billetera existente ===
     if (state === 'checking' || state === 'signing-in') {
         const label = state === 'checking'
-            ? 'SINCRONIZANDO NODOS ZK...'
+            ? 'SINCRONIZANDO MEMBRESÍA...'
             : 'ESTABLECIENDO CONEXIÓN SEGURA SIWE...';
         return (
             <SafeAreaView style={styles.container}>
@@ -224,7 +194,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                         <Text style={styles.buttonText}>GENERAR LLAVES LOCALES</Text>
                     </TouchableOpacity>
                     <Text style={styles.hint}>
-                        Las pruebas Zero-Knowledge requieren un par de llaves asimétricas vinculadas a tu hardware.
+                        Esta billetera firma la sesión SIWE. No contiene ni sustituye una atestación de identidad.
                     </Text>
 
                     <TouchableOpacity style={styles.buttonDisabledOutline} disabled>
@@ -262,8 +232,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                     <View style={styles.warningBox}>
                         <Text style={styles.warningText}>
                             Transcribe estos 12 mnemónicos a un soporte físico seguro.
-                            Bajo protocolos de Account Abstraction, esta es la semilla maestra 
-                            de tu identidad anónima. El Estado no posee copia de esta llave.
+                            Esta frase controla la billetera local. El Estado no posee copia de esta llave.
                         </Text>
                     </View>
 
@@ -356,18 +325,19 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                         </View>
                     ) : (
                         <View style={styles.emptyCard}>
-                            <Text style={styles.emptyTitle}>NO HAY REGISTRO ACTIVO</Text>
+                            <Text style={styles.emptyTitle}>EMISIÓN BLOQUEADA</Text>
                             <Text style={styles.emptyText}>
-                                {idData
-                                    ? 'La autenticación criptográfica falló. No se generó la credencial.'
-                                    : 'Aún no has generado tu prueba ZK. Escanea tu cédula para validar tu identidad.'}
+                                La lectura NFC local no es un permiso de alta. Falta que el backend emita y verifique una atestación autorizada antes de solicitar cualquier credencial.
                             </Text>
                             <TouchableOpacity
                                 style={styles.secondaryButton}
                                 onPress={() => navigation.navigate('Scan')}
                             >
-                                <Text style={styles.secondaryButtonText}>INICIAR VERIFICACIÓN NFC</Text>
+                                <Text style={styles.secondaryButtonText}>VERIFICAR CÉDULA LOCALMENTE</Text>
                             </TouchableOpacity>
+                            <Text style={styles.blockedHint}>
+                                La verificación local no crea una membresía.
+                            </Text>
                         </View>
                     )}
                 </ScrollView>
@@ -621,6 +591,12 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: '600',
         letterSpacing: 1,
+    },
+    blockedHint: {
+        color: '#777',
+        fontSize: 11,
+        marginTop: 10,
+        textAlign: 'center',
     },
 });
 

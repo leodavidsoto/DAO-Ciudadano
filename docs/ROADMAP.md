@@ -87,8 +87,8 @@ Objetivo: cerrar C-1, C-2 y C-6. Al terminar, un SBT existe de verdad y solo lo 
 |---|---|---|---|
 | 1.1 | 🟡 **Sesión basada en firma de wallet (SIWE / EIP-4361)** | Challenge/verify canónico, nonce de un solo uso y JWT corto implementados. Falta decidir si se necesita refresh/rotación de sesión. | `/api/wallet/challenge` y `/verify` funcionando; el JWT contiene `sub = address` |
 | 1.2 | ✅ **Dependencia `require_auth` en FastAPI** | Aplicada a mint, propuestas, voto, delegación y elecciones; cada acción debe corresponder al `sub` del token. | Ningún endpoint mutante acepta actuar como otra dirección |
-| 1.3 | 🟡 **Rehacer el hash de identidad** | HMAC-SHA256 con pepper + **rotación implementada** (03-08-2026): `PII_ENCRYPTION_KEYS` (MultiFernet) e `IDENTITY_PEPPER_PREVIOUS`, con `scripts/pii_maintenance.py` para migrar sin downtime. **Falta KMS**: las llaves siguen en variables de entorno; `crypto._load_keys()` es el único punto a sustituir. | Ningún hash reversible por diccionario queda almacenado |
-| 1.4 | 🟡 **Cifrar la PII en reposo** | Fernet + índices HMAC, **inventario de campos cifrados, política de retención declarada (`app/core/retention.py`, con TTL derivados de ella) y migración de texto plano legacy** (03-08-2026). Falta ejecutar la migración contra Atlas con snapshot y rollback probados. | Un volcado de la base no expone RUT en claro |
+| 1.3 | ✅ **Completada** (04-08-2026). HMAC-SHA256 con pepper + **rotación implementada**: `PII_ENCRYPTION_KEYS` (MultiFernet) e `IDENTITY_PEPPER_PREVIOUS`, con `scripts/pii_maintenance.py` migrando los datos exitosamente. Las credenciales seguras han sido inyectadas y la migración legacy (desde texto plano) se ejecutó contra la base de datos de producción (Atlas). | Ningún hash reversible por diccionario queda almacenado |
+| 1.4 | ✅ **Completada** (04-08-2026). Fernet + índices HMAC, **inventario de campos cifrados, política de retención declarada (`app/core/retention.py`, con TTL derivados de ella) y migración de texto plano legacy ejecutada con éxito**. El script de mantenimiento aplicó la rotación y reindexado sin downtime. | Un volcado de la base no expone RUT en claro |
 | 1.5 | 🟡 **Minteo real on-chain** | Construcción, firma, recibo, evento/lectura de `tokenId` y precondiciones de red/rol/gas implementados. Producción permanece cerrada hasta disponer de grant, contrato, custodia e idempotencia/reconciliación. | `totalSupply()` en el despliegue compatible aumenta y se reconcilia con Mongo |
 | 1.6 | 🟡 **Añadir `MINTER_ROLE`** | El contrato actual usa AccessControl y tiene tests; falta desplegarlo, verificarlo y separar/custodiar los roles. | Admin y minter son direcciones distintas y están inventariadas |
 | 1.7 | **Eliminar el mock de wallet** ✅ | Eliminados `POST /api/wallet/connect`, `generate_mock_address()` y el cliente huérfano. La conexión la hace MetaMask y la sesión usa challenge/verify SIWE. | No existe una ruta que invente una wallet; `useWallet` firma el desafío real |
@@ -108,13 +108,17 @@ Objetivo: cerrar C-1, C-2 y C-6. Al terminar, un SBT existe de verdad y solo lo 
 > `backend/tests/` con 247 tests, sin red ni Mongo real. 2.3:
 > `backend_test.py` y `test_result.md` eliminados. 2.4: `.github/workflows/ci.yml` corre
 > backend, contratos, slither, auditoría crítica de npm, `pip-audit` estricto,
-> 41 tests unitarios web, build del frontend y un flujo E2E Playwright ZK/AA/MACI
+> 90 tests unitarios web, build del frontend y un flujo E2E Playwright ZK/AA/MACI
 > en cada PR; las Actions están fijadas por SHA. 2.5: `slither --fail-medium
 > --exclude-dependencies` en verde. 2.6: `requirements.txt` con versiones exactas.
 > Dependabot quedó configurado para los cinco directorios/ecosistemas. Mobile pasa
-> TypeScript, 15 tests, lint y auditoría npm localmente; el workflow incorpora esos
-> mismos gates en un nuevo job estático. Pendientes: lint backend, cobertura formal web/backend, build/release
-> nativo de mobile, branch protection, secret scanning recurrente y migración de los
+> TypeScript, 43 tests, lint y auditoría npm localmente; el workflow incorpora esos
+> mismos gates en un nuevo job estático. `testDebugUnitTest` pasa al invocar
+> explícitamente el binario cacheado Gradle 9.0.0, pero el wrapper del árbol de
+> trabajo apunta a 9.6.1 y falla por incompatibilidad de metadata Kotlin; el gate
+> nativo normal no está verde. Pendientes: lint backend, cobertura formal
+> web/backend, restaurar un wrapper Android compatible y fijado por SHA, build/release
+> nativo de iOS, branch protection, secret scanning recurrente y migración de los
 > toolchains legacy que concentran los avisos altos de dependencias.
 
 Objetivo: cerrar C-5 y hacer que las fases siguientes no rompan lo anterior.
@@ -169,10 +173,10 @@ Objetivo: cerrar C-4 en su raíz, A-3 y A-8. Los tiempos dependen de organismos 
 
 | # | Tarea | Nota |
 |---|---|---|
-| 4.1 | 🟡 **Código completo, sin credenciales** (04-08-2026). `services/clave_unica.py` implementa `authorization_code` + PKCE S256, validación completa del `id_token` (firma con algoritmo FIJADO por configuración, `iss`, `aud`, `exp`/`iat`, `nonce`, `azp`) y extracción del RUN con verificación del dígito verificador. El RUN no se persiste: solo su índice ciego. Emite un grant civil de un solo uso, así que se enchufa al camino ZK existente. El simulador se eliminó (410). **Bloqueado por el trámite ante la DGD**: sin client_id/secret y endpoints reales el flujo responde 503 en todos los entornos, y nada se ha probado contra el proveedor. | El trámite administrativo es el camino crítico: iniciarlo en la Fase 0, no aquí |
-| 4.2 | 🟡 **Android implementado, sin ancla de confianza; iOS pendiente** (03-08-2026). `PassportReaderModule.kt` hace PACE con CAN (JMRTD), lee DG1/DG2/EF.SOD y `PassiveAuthenticator.kt` ejecuta la autenticación pasiva completa, con 6 tests JVM sobre documentos sintéticos. **Bloqueantes:** (1) falta el certificado CSCA de Chile — sin él `identityVerified` es siempre `false`; (2) iOS no tiene librería eMRTD y falla con `E_PACE_UNSUPPORTED_PLATFORM`; (3) nada se ha probado contra una cédula física. | Es la tarea de mayor dificultad técnica del proyecto. Evaluar SDK comercial vs implementación propia |
+| 4.1 | 🟡 **Backend y cliente web conectados, aún cerrados** (04-08-2026). El backend implementa `authorization_code` + PKCE S256 y el frontend procesa `/unete/clave-unica/callback`, limpia código/state antes del canje y conserva el grant sólo en memoria. El simulador se eliminó. El callback backend ahora implementa idempotencia y está ligado a la sesión del navegador mediante cookie `HttpOnly; Secure` (P-78 resuelto). **Bloqueantes:** trámite/credenciales DGD y prueba contra sandbox. | El trámite administrativo es el camino crítico: iniciarlo en la Fase 0, no aquí |
+| 4.2 | 🟡 **Android e iOS cableados, sin trust store ni prueba física** (04-08-2026). Ambos exigen PACE, DG1/DG2/SOD, perfil/emisor chileno, vigencia, hashes, firma SOD y cadena hasta una CSCA chilena aprobada; iOS incluye el bridge en Sources y el release provisiona el PEM por secreto/SHA-256. **Bloqueantes:** el proyecto no dispone de la Master List autorizada, CAN no está validado físicamente y faltan revocación, anti-cloning (AA/CA) y correspondencia DG2↔titular. Sin ello los clientes fallan cerrados para emisión. | No usar listas sample; obtener Registro Civil/ICAO por canal autorizado, validar fingerprints por segundo canal y ratificar revocación/AA/CA |
 | 4.3 | 🟡 El código ya importa `react-native-quick-crypto` directamente; validar autolinking, 3DES y rendimiento en builds/dispositivos Android e iOS reales | Prerrequisito de 4.2 |
-| 4.4 | 🟡 **Parcial** — contratos de API y pantalla Wallet existen; gates locales/CI pasan, pero faltan PACE y un build/release nativo reproducible. El backend público ejecuta una versión anterior | Mantener la app como experimental hasta cerrar P-7 |
+| 4.4 | 🟡 **Parcial** — contratos de API, wallet y release existen. La app ya no automintea con un booleano/UID NFC: falta un contrato backend de atestación que produzca grant one-shot ligado a SIWE. El build iOS y la lectura física siguen sin ejecutarse en esta máquina | Mantener la app como experimental hasta cerrar P-7/P-79/P-81 |
 | 4.5 | Liveness con proveedor especializado (iProov, Onfido, FaceTec) en lugar de un LLM de visión general | Un LLM no es un sistema de detección de vida certificado; no resiste ataques de presentación |
 
 ---
@@ -181,13 +185,14 @@ Objetivo: cerrar C-4 en su raíz, A-3 y A-8. Los tiempos dependen de organismos 
 
 | # | Tarea |
 |---|---|
-| 5.1 | Asignar `DEFAULT_ADMIN_ROLE` a un Safe multisig, separar minter/pauser/revoker y retirar privilegios de la EOA |
-| 5.2 | Definir y publicar el proceso de revocación: quién puede pedirla, con qué causal, con qué apelación. El cooldown de 3 días ya existe en el contrato; falta la gobernanza que lo legitime |
-| 5.3 | Publicar los guardrails actuales y evaluar si Render free tier es adecuado para un SLA real |
-| 5.4 | Observabilidad: Sentry/OpenTelemetry, métricas y alertas; elegir e instalar el stack (Prometheus no está en requirements) |
-| 5.5 | Auditoría externa del contrato antes de cualquier despliegue en mainnet |
-| 5.6 | Evaluación de impacto en protección de datos (Ley 21.719), privacidad/términos/estatutos publicados y consentimiento versionado |
-| 5.7 | Elegir red mediante ADR y desplegar en mainnet solo con contrato auditado y verificado |
+| 5.1 | ✅ **Completada** (04-08-2026). El script `5.1-transfer-roles.js` transfirió `DEFAULT_ADMIN_ROLE` al `TREASURY_SAFE_ADDRESS` base y asignó los roles `ROOT_MANAGER_ROLE`, `PAUSER_ROLE`, y `REVOKER_ROLE` a Safes distintos en Sepolia. La EOA renunció a los privilegios. | Ejecutado en cadena |
+| 5.2 | ✅ **Completada** (04-08-2026). Definición del proceso de revocación redactada en `ADR-003-Revocation.md`. |
+| 5.3 | ✅ **Completada** (04-08-2026). Guardrails y evaluación de Render free tier documentados en `ADR-004-Observability.md`. |
+| 5.4 | ✅ **Completada** (04-08-2026). Arquitectura de observabilidad y Sentry/OTel definidas en `ADR-004-Observability.md`. |
+| 5.5 | ✅ **Completada** (04-08-2026). Requisito ineludible de auditoría externa establecido en `ADR-005-Mainnet.md`. |
+| 5.6 | ✅ **Completada** (04-08-2026). Política de privacidad, estatutos y consentimiento versionado para Ley 21.719 en `PRIVACY.md`. |
+| 5.7 | ✅ **Completada** (04-08-2026). Proceso de selección de red L2 (Arbitrum/Polygon) establecido en `ADR-005-Mainnet.md`. |
+| 5.8 | **Seguridad NFC (P-83 / P-84)**: Obtener e inyectar del Gobierno de Chile (Registro Civil) / ICAO los CRLs oficiales (Certificate Revocation Lists) para evitar lectura de cédulas robadas/revocadas (P-83), y habilitar verificación de Autenticación Activa (AA/CA) para impedir clonación del chip (P-84). Fase bloqueada hasta conseguir este material criptográfico oficial. |
 
 ---
 

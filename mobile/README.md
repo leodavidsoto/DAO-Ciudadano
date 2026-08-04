@@ -1,10 +1,10 @@
 # DAO Ciudadana — aplicación móvil experimental
 
-> Los builds nativos son reproducibles desde locks y toolchains fijados, pero
+> Los builds nativos buscan ser reproducibles desde locks y toolchains fijados, pero
 > la aplicación **no está lista para verificar identidad ni publicarse en los
-> stores**. PACE/ISO-DEP, validación SOD/CSCA, pruebas en dispositivos físicos y
-> los iconos finales siguen pendientes. La lectura NFC actual no acredita una
-> cédula.
+> stores**. El puente iOS ya exige PACE y autenticación pasiva completa, pero
+> falta una Master List chilena con procedencia autorizada y una prueba sobre
+> cédula/dispositivo físicos. Sin esos dos gates la lectura falla cerrada.
 
 La app usa React Native CLI 0.83, New Architecture y Hermes. No utiliza Expo,
 EAS ni Fastlane: Android se compila con el Gradle Wrapper e iOS con
@@ -18,7 +18,7 @@ CocoaPods/Xcode.
 | npm | `10.9.7` (`packageManager`) |
 | React Native | `0.83.0` |
 | Java | Temurin `17.0.18+8` en CI |
-| Gradle | `9.0.0`, distribución autenticada por SHA-256 |
+| Gradle | `9.6.1` en el wrapper actual; **incompatible y sin SHA** (P-85). `9.0.0` fue la última versión verificada |
 | Android | SDK/target 36 · Build Tools 36.0.0 · NDK 27.1.12297006 · CMake 3.22.1 |
 | Ruby | `3.3.12` (`.ruby-version`) |
 | Bundler | `2.4.22` (`Gemfile.lock`) |
@@ -28,6 +28,10 @@ CocoaPods/Xcode.
 `package-lock.json`, `Gemfile.lock`, `ios/Podfile.lock` y
 `android/gradle/verification-metadata.xml` son parte del build. No deben
 regenerarse implícitamente en CI.
+
+El wrapper Android del árbol de trabajo no está verde: Gradle 9.6.1 falla por
+incompatibilidad de metadata Kotlin. No se debe presentar el éxito obtenido
+invocando un binario cacheado 9.0.0 como validación del wrapper; ver P-85.
 
 ## Instalación local
 
@@ -125,6 +129,8 @@ IOS_CERTIFICATE_PASSWORD
 IOS_CERTIFICATE_SHA256
 IOS_PROVISIONING_PROFILE_BASE64
 IOS_KEYCHAIN_PASSWORD
+IOS_CSCA_MASTER_LIST_BASE64
+IOS_CSCA_MASTER_LIST_SHA256
 ```
 
 `ios/ExportOptions.plist` fija una exportación manual a App Store Connect; el
@@ -133,6 +139,24 @@ workflow agrega únicamente el Team ID y el nombre del profile ya validado.
 El certificado, profile y keystore se crean únicamente dentro de
 `$RUNNER_TEMP`, se contrastan con sus valores esperados y se eliminan incluso
 si el build falla. Los environments deben exigir aprobación humana.
+
+La Master List CSCA también entra únicamente desde el environment protegido.
+Su PEM se contrasta con `IOS_CSCA_MASTER_LIST_SHA256`, se valida antes de
+copiarlo al bundle y el IPA exportado vuelve a comprobar la misma huella. No
+uses los `masterList.pem` de ejemplo de `NFCPassportReader`: uno es un
+certificado de prueba y el otro no conserva procedencia/licencia verificable
+del dataset ICAO.
+
+Para un build iOS local con el artefacto ya autorizado:
+
+```bash
+export DAO_CSCA_MASTER_LIST_PATH=/ruta/privada/csca-chile.pem
+export DAO_CSCA_MASTER_LIST_SHA256=<huella-obtenida-por-segundo-canal>
+export DAO_MOBILE_DISTRIBUTION=true
+```
+
+Sin esas variables, desarrollo omite el recurso y el lector falla cerrado;
+distribución detiene el build.
 
 En repos públicos se emite además una attestation Sigstore/GitHub de los
 artefactos. En repos privados se activa explícitamente con
@@ -166,12 +190,17 @@ npm run android:release
 ## NFC
 
 Android obtiene `android.permission.NFC` y la feature opcional desde
-`react-native-nfc-manager`. iOS incluye `NFCReaderUsageDescription`, el
-entitlement `NDEF`/`TAG` y el privacy manifest dentro del target.
+`react-native-nfc-manager`. iOS incluye `NFCReaderUsageDescription`, el AID
+eMRTD, el entitlement `NDEF`/`TAG` y el privacy manifest dentro del target.
 
-Eso habilita el subsistema nativo; **no implementa PACE ni verifica identidad**.
-El criterio de Fase 4.2 sigue requiriendo cédula real, dispositivo físico y
-validación criptográfica del documento.
+El bridge iOS sólo entrega `identityVerified: true` si se estableció PACE-CAN,
+se leyeron DG1/DG2/EF.SOD, el emisor y perfil corresponden a una cédula chilena,
+el documento está vigente, los hashes coinciden, la firma del SOD valida y el
+Document Signer encadena con una CSCA chilena provisionada. Esto autentica los
+datos firmados, pero todavía no consulta revocación, no ejecuta AA/CA para
+descartar clonación y no compara DG2 con un liveness autorizado. La versión del
+fork iOS que acepta CAN tampoco tiene prueba física chilena reproducible; por
+eso no se declara Fase 4.2 completa.
 
 Antes de una publicación también debe confirmarse con el responsable de datos
 si la dirección de wallet se retiene o vincula a una identidad y ajustar

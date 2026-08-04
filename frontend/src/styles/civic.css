@@ -1667,3 +1667,247 @@ body:has(.civic-app)::-webkit-scrollbar-thumb:hover {
     opacity: .45 !important;
     cursor: not-allowed !important;
 }
+
+/* === ClaveÚnica OIDC / selección de identidad === */
+
+.civic-methods {
+    width: min(100%, 940px);
+    margin: 0 auto;
+}
+
+.civic-methods-heading {
+    max-width: 620px;
+    margin: 0 auto 24px;
+    text-align: center;
+}
+
+.civic-methods-heading .civic-section-title {
+    justify-content: center;
+    margin: 5px 0 8px;
+}
+
+.civic-methods-heading p { margin: 0; line-height: 1.65; }
+
+.civic-method-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.civic-method-card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+}
+
+.civic-method-card-primary {
+    grid-column: 1 / -1;
+    border-top: 3px solid var(--civic-rojo);
+    box-shadow: 0 14px 34px rgba(11, 37, 69, .08);
+}
+
+.civic-method-card h3,
+.civic-oidc-heading h2 {
+    margin: 8px 0 7px;
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 19px;
+    line-height: 1.25;
+}
+
+.civic-method-card p,
+.civic-oidc-heading p {
+    margin: 0;
+    color: var(--civic-suave);
+    font-size: 13.5px;
+    line-height: 1.65;
+}
+
+.civic-method-icon,
+.civic-oidc-seal {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 auto;
+    border-radius: 12px;
+    background: var(--civic-azul-suave);
+    color: var(--civic-azul);
+    font-size: 22px;
+}
+
+.civic-method-action { width: 100%; margin-top: auto; }
+
+.civic-method-note { padding: 11px 12px; font-size: 12px; }
+
+.civic-oidc {
+    width: min(100%, 760px);
+    margin: 0 auto;
+}
+
+.civic-oidc-panel {
+    display: grid;
+    gap: 22px;
+    padding: clamp(22px, 4vw, 34px);
+    border-top: 3px solid var(--civic-rojo);
+    box-shadow: 0 18px 42px rgba(11, 37, 69, .09);
+}
+
+.civic-oidc-heading { display: flex; align-items: flex-start; gap: 16px; }
+.civic-oidc-heading h2 { font-size: clamp(21px, 3vw, 27px); }
+.civic-oidc-heading p { max-width: 590px; }
+
+.civic-oidc-rail {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 1px solid var(--civic-borde);
+    border-radius: var(--civic-radio-sm);
+    overflow: hidden;
+}
+
+.civic-oidc-rail > div {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 14px;
+    color: var(--civic-suave);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.civic-oidc-rail > div + div { border-left: 1px solid var(--civic-borde); }
+.civic-oidc-rail i { color: var(--civic-azul); font-size: 17px; }
+.civic-oidc-rail strong { color: var(--civic-tinta); }
+
+.civic-oidc-loading {
+    justify-content: flex-start;
+    padding: 18px;
+    border: 1px solid var(--civic-azul-borde);
+    border-radius: var(--civic-radio-sm);
+    background: var(--civic-azul-suave);
+}
+
+.civic-oidc-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.civic-oidc-privacy {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin: 0;
+    color: var(--civic-tenue);
+    font-size: 11.5px;
+    line-height: 1.55;
+    text-align: center;
+}
+
+.civic-oidc-privacy i { color: var(--civic-azul); margin-top: 2px; }
+
+.civic-consent { width: min(100%, 820px); margin: 0 auto; }
+.civic-consent-panel { display: grid; gap: 20px; padding: clamp(22px, 4vw, 32px); }
+.civic-consent-panel > .civic-section-title { margin-top: -13px; }
+
+.civic-consent-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.civic-consent-grid > div {
+    padding: 17px;
+    border: 1px solid var(--civic-borde);
+    border-radius: var(--civic-radio-sm);
+    background: var(--civic-fondo);
+}
+
+.civic-consent-grid h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 13px;
+}
+
+.civic-consent-grid h3 i { color: var(--civic-azul); font-size: 16px; }
+.civic-consent-grid ul { margin: 0; padding-left: 18px; }
+.civic-consent-grid li { margin: 7px 0; color: var(--civic-suave); font-size: 12.5px; line-height: 1.55; }
+
+.civic-stages {
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-top: 40px;
+    flex-wrap: wrap;
+}
+
+.civic-stage {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--civic-tenue);
+    font-family: var(--civic-titulo);
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.civic-stage-number {
+    display: grid;
+    place-items: center;
+    width: 27px;
+    height: 27px;
+    border: 1px solid var(--civic-borde-fuerte);
+    border-radius: 50%;
+    background: var(--civic-superficie);
+    color: var(--civic-suave);
+    font-size: 11px;
+}
+
+.civic-stage.is-active { color: var(--civic-tinta); }
+.civic-stage.is-active .civic-stage-number {
+    border-color: var(--civic-azul);
+    background: var(--civic-azul);
+    color: #ffffff;
+}
+
+.civic-stage.is-done { color: var(--civic-azul); }
+.civic-stage.is-done .civic-stage-number {
+    border-color: var(--civic-azul-borde);
+    background: var(--civic-azul-suave);
+    color: var(--civic-azul);
+}
+
+.civic-stage-connector {
+    width: 28px;
+    border-top: 1px solid var(--civic-borde-fuerte);
+}
+
+.civic-oidc-cleanup-failure {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: var(--civic-fondo);
+}
+
+.civic-oidc-cleanup-failure .civic-note { max-width: 620px; }
+
+@media (max-width: 760px) {
+    .civic-method-grid,
+    .civic-consent-grid { grid-template-columns: 1fr; }
+    .civic-method-card-primary { grid-column: auto; }
+    .civic-oidc-rail { grid-template-columns: 1fr; }
+    .civic-oidc-rail > div + div {
+        border-left: 0;
+        border-top: 1px solid var(--civic-borde);
+    }
+    .civic-oidc-heading { flex-direction: column; }
+    .civic-oidc-actions .civic-btn { width: 100%; }
+}

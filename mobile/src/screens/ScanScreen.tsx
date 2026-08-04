@@ -1,6 +1,4 @@
-/**
- * NFC Scanner Screen - experimental NDEF tag reader
- */
+/** NFC scanner for authenticated Chilean identity documents. */
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -13,7 +11,7 @@ import {
     TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import nfcService from '../services/nfcService';
+import nfcService, { isVerifiedNFCReadResult } from '../services/nfcService';
 
 interface ScanScreenProps {
     navigation: any;
@@ -25,6 +23,7 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
     const [error, setError] = useState<string | null>(null);
     const [can, setCan] = useState('');
     const pulseAnim = React.useRef(new Animated.Value(1)).current;
+    const scanAttempt = React.useRef(0);
 
     const checkNFCStatus = useCallback(async () => {
         const initialized = await nfcService.initialize();
@@ -64,6 +63,7 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
     useEffect(() => {
         checkNFCStatus();
         return () => {
+            scanAttempt.current += 1;
             nfcService.stopReading();
         };
     }, [checkNFCStatus]);
@@ -77,6 +77,12 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
     }, [isScanning, pulseAnim, startPulseAnimation]);
 
     const handleStartScan = async () => {
+        const normalizedCan = can.trim();
+        if (!/^\d{6}$/.test(normalizedCan)) {
+            setError('El CAN debe contener exactamente los 6 dígitos impresos en la cédula.');
+            return;
+        }
+
         if (!nfcEnabled) {
             Alert.alert('NFC Deshabilitado', 'Por favor habilita NFC primero');
             return;
@@ -84,30 +90,27 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
 
         setIsScanning(true);
         setError(null);
+        const attempt = ++scanAttempt.current;
         try {
-            // Intentar leer la cédula usando PACE con el CAN proporcionado.
-            // Si el CAN no se provee o es solo modo diagnóstico, se puede usar readSimpleTag().
-            const result = can.length === 6 
-                ? await nfcService.readChileanIDPACE(can) 
-                : await nfcService.readSimpleTag();
+            const result = await nfcService.readChileanIDPACE(normalizedCan);
+            if (attempt !== scanAttempt.current) return;
 
-            if (result.success && result.data) {
-                navigation.navigate('Success', {
-                    idData: result.data,
-                    serialNumber: result.serialNumber,
-                    identityVerified: result.identityVerified,
-                });
+            if (isVerifiedNFCReadResult(result)) {
+                navigation.navigate('Success', { result });
             } else {
                 setError(result.error || 'Error al leer la cédula mediante PACE');
             }
         } catch (err: any) {
-            setError(err.message || 'Error inesperado');
+            if (attempt === scanAttempt.current) {
+                setError(err.message || 'Error inesperado');
+            }
         } finally {
-            setIsScanning(false);
+            if (attempt === scanAttempt.current) setIsScanning(false);
         }
     };
 
     const handleCancelScan = () => {
+        scanAttempt.current += 1;
         nfcService.stopReading();
         setIsScanning(false);
     };
@@ -118,7 +121,7 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
             <View style={styles.header}>
                 <Text style={styles.title}>LECTURA eMRTD</Text>
                 <Text style={styles.subtitle}>
-                    Escanea el chip NFC de tu cédula para generar tu prueba criptográfica ZK.
+                    Escanea el chip NFC para comprobar sus datos firmados y la cadena documental instalada.
                 </Text>
             </View>
 
@@ -166,10 +169,10 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                     1. Asegúrate de que NFC esté habilitado
                 </Text>
                 <Text style={styles.instructionText}>
-                    2. Acerca un tag NFC compatible a la parte trasera del teléfono
+                    2. Acerca tu cédula a la parte trasera del teléfono
                 </Text>
                 <Text style={styles.instructionText}>
-                    3. Mantén el tag quieto hasta que se complete la lectura
+                    3. Mantenla quieta hasta que finalice PACE y la autenticación pasiva
                 </Text>
             </View>
 

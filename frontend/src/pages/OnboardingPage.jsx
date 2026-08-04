@@ -8,21 +8,19 @@
  * portada — quien entraba desde "ÚNETE A LA RED" sentía que había
  * cambiado de sitio.
  *
- * Los componentes de cada paso NO se tocaron: siguen usando su vocabulario
- * de clases `cyber-*`, que `styles/civic.css` redefine por completo dentro
- * del contenedor `.civic-app`. Así el rediseño no arriesga la lógica del
- * flujo (NFC, liveness, wallet, minteo), que es la parte delicada.
- *
- * `.civic-onboarding` (en App.css) cubría solo cuatro de esas clases, así
- * que botones, insignias, campos y avisos seguían saliendo oscuros a mitad
- * del flujo. La capa completa vive ahora en `styles/civic.css`.
+ * El canal OIDC y sus estados nuevos usan exclusivamente el vocabulario
+ * `civic-*`. Los pasos piloto históricos conservan una capa de compatibilidad
+ * en `styles/civic.css` mientras se migran por separado.
  */
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useOnboarding } from '@/context';
+import {
+    CLAVE_UNICA_CALLBACK_PARAMS,
+    cleanClaveUnicaCallbackUrl,
+} from '@/lib/claveUnica';
 import '../styles/civic.css';
 import {
-    CyberStep,
     ErrorDisplay,
     MethodSelector,
     CivicMethodSelector,
@@ -40,6 +38,37 @@ import {
 const AZUL = '#003897';
 const TINTA = '#0B2545';
 
+const CivicStep = ({ n, title, active = false, done = false }) => (
+    <div
+        className={`civic-stage${active ? ' is-active' : ''}${done ? ' is-done' : ''}`}
+        aria-current={active ? 'step' : undefined}
+    >
+        <span className="civic-stage-number" aria-hidden="true">
+            {done ? <i className="ph-bold ph-check" /> : n}
+        </span>
+        <span className="civic-stage-title">{title}</span>
+    </div>
+);
+
+const captureAndCleanCallback = () => {
+    if (typeof window === 'undefined') return null;
+    const url = new URL(window.location.href);
+    const isCallbackRoute = url.pathname === '/unete/clave-unica/callback';
+    const carriesOidcResult = CLAVE_UNICA_CALLBACK_PARAMS.some((name) =>
+        url.searchParams.has(name)
+    );
+    if (!isCallbackRoute && !carriesOidcResult) return null;
+
+    const href = url.toString();
+    try {
+        const cleanUrl = cleanClaveUnicaCallbackUrl(href);
+        window.history.replaceState(window.history.state, '', cleanUrl);
+        return { href, cleaned: true };
+    } catch {
+        return { href, cleaned: false };
+    }
+};
+
 /** Etapas visibles del recorrido. `match` son los `step` del contexto que
  *  caen en esa etapa; `after`, los que ya la dejaron atrás. */
 const ETAPAS = [
@@ -51,12 +80,43 @@ const ETAPAS = [
 ];
 
 const OnboardingPage = ({ appearance }) => {
-    const { step, progress, error, loadStats } = useOnboarding();
+    const {
+        step,
+        progress,
+        error,
+        loadStats,
+        completeClaveUnicaCallback,
+    } = useOnboarding();
     const navigate = useNavigate();
+    const callbackStarted = useRef(false);
+    const callbackCapture = useRef(undefined);
+    if (callbackCapture.current === undefined) {
+        // Scrub before React commits images or any effect starts a request.
+        callbackCapture.current = captureAndCleanCallback();
+    }
 
     useEffect(() => {
-        loadStats();
+        if (callbackStarted.current || !callbackCapture.current) return;
+        callbackStarted.current = true;
+        completeClaveUnicaCallback(callbackCapture.current.href);
+    }, [completeClaveUnicaCallback]);
+
+    useEffect(() => {
+        // Callback pages deliberately skip this unrelated request. The URL
+        // must be scrubbed and the OIDC result validated first.
+        if (!callbackCapture.current) loadStats();
     }, [loadStats]);
+
+    if (callbackCapture.current && !callbackCapture.current.cleaned) {
+        return (
+            <main className="civic-app civic-onboarding civic-oidc-cleanup-failure">
+                <div className="civic-note civic-note-error" role="alert">
+                    No se pudo retirar el retorno de ClaveÚnica de la barra de direcciones.
+                    El canje permanece bloqueado; cierra esta pestaña y vuelve a comenzar.
+                </div>
+            </main>
+        );
+    }
 
     const renderStep = () => {
         switch (step) {
@@ -143,26 +203,23 @@ const OnboardingPage = ({ appearance }) => {
                         Prueba el registro ciudadano
                     </h1>
                     <p style={{ fontSize: 16.5, lineHeight: 1.6, color: '#46536E', margin: '14px auto 0', maxWidth: 520 }}>
-                        Este recorrido demuestra la experiencia propuesta. Los métodos disponibles
-                        todavía no acreditan tu identidad ni habilitan participación oficial.
+                        ClaveÚnica acredita identidad sólo cuando el canal OIDC seguro está disponible.
+                        Los recorridos NFC, imagen y registro básico continúan como demostraciones.
                     </p>
                 </div>
 
                 {/* ===== Indicador de etapas (escritorio) ===== */}
-                <div
-                    className="hidden lg:flex"
-                    style={{ alignItems: 'center', justifyContent: 'center', gap: 18, marginTop: 40, flexWrap: 'wrap' }}
-                >
+                <div className="hidden lg:flex civic-stages">
                     {ETAPAS.map((e, i) => (
                         <React.Fragment key={e.n}>
-                            <CyberStep
+                            <CivicStep
                                 n={e.n}
                                 title={e.title}
                                 active={e.match.includes(step)}
                                 done={e.after.includes(step)}
                             />
                             {i < ETAPAS.length - 1 && (
-                                <span aria-hidden="true" style={{ width: 34, height: 0, borderTop: '2px dashed #C6D5EC' }} />
+                                <span className="civic-stage-connector" aria-hidden="true" />
                             )}
                         </React.Fragment>
                     ))}
@@ -170,8 +227,8 @@ const OnboardingPage = ({ appearance }) => {
 
                 {/* ===== Progreso ===== */}
                 <div style={{ marginTop: 34, maxWidth: 560, marginLeft: 'auto', marginRight: 'auto' }}>
-                    <div className="cyber-progress-premium">
-                        <div className="cyber-progress-premium-fill" style={{ width: `${progress}%` }} />
+                    <div className="civic-bar" aria-label={`Progreso del registro: ${progress}%`}>
+                        <div className="civic-bar-blue" style={{ width: `${progress}%` }} />
                     </div>
                     <p style={{
                         textAlign: 'center', fontFamily: 'Poppins, sans-serif', fontSize: 12,

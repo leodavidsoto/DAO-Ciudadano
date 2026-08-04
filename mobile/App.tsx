@@ -14,21 +14,18 @@ import HomeScreen from './src/screens/HomeScreen';
 import ScanScreen from './src/screens/ScanScreen';
 import SuccessScreen from './src/screens/SuccessScreen';
 import WalletScreen from './src/screens/WalletScreen';
-import type { ChileanIDData } from './src/services/nfcService';
+import {
+  isVerifiedNFCReadResult,
+  type VerifiedNFCReadResult,
+} from './src/services/nfcService';
 
 type RootStackParamList = {
   Home: undefined;
   Scan: undefined;
   Success: {
-    idData: ChileanIDData;
-    serialNumber: string;
-    identityVerified?: boolean;
+    result: VerifiedNFCReadResult;
   };
-  Wallet: {
-    idData?: ChileanIDData;
-    serialNumber?: string;
-    identityVerified?: boolean;
-  } | undefined;
+  Wallet: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -155,13 +152,11 @@ function App(): React.JSX.Element {
           <Stack.Screen
             name="Success"
             component={SuccessScreen}
-            options={({ route }) => {
-              return {
-                title: route.params?.identityVerified === true
-                  ? 'IDENTIDAD VERIFICADA'
-                  : 'LECTURA NO VERIFICADA',
-              };
-            }}
+            options={({ route }) => ({
+              title: isVerifiedNFCReadResult(route.params?.result)
+                ? 'DOCUMENTO VERIFICADO'
+                : 'LECTURA NO VERIFICADA',
+            })}
           />
           <Stack.Screen
             name="Wallet"

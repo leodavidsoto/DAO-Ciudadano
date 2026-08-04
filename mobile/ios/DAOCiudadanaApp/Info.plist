@@ -28,6 +28,10 @@
 	<true/>
 	<key>NFCReaderUsageDescription</key>
 	<string>DAO Ciudadana usa NFC para leer el chip de la cédula cuando el ciudadano inicia voluntariamente la verificación.</string>
+	<key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
+	<array>
+		<string>A0000002471001</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

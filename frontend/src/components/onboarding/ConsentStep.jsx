@@ -1,61 +1,94 @@
-/**
- * Consent Step
- */
 import React from 'react';
-import { FileCheck, Lock, Shield, Wallet } from 'lucide-react';
-import { Button } from '../ui/button';
-import { CyberPanel } from './CyberUI';
 import { useOnboarding } from '@/context';
 
 const ConsentStep = () => {
-    const { setStep } = useOnboarding();
+    const { clave, setStep } = useOnboarding();
+    const hasVerifiedClaveUnica =
+        clave.authenticated === true && clave.assurance_level === 'CLAVE_UNICA';
 
     return (
-        <CyberPanel
-            title="RESUMEN Y LIMITACIONES DEL PILOTO"
-            description="La confirmación de RUT o imagen se solicitó antes de enviarlos al backend"
-            icon={<FileCheck className="h-8 w-8" />}
-        >
-            <div className="space-y-6">
-                <div className="grid md:grid-cols-2 gap-6">
-                    <div className="bg-green-500/10 border border-green-500/30 p-4 rounded-lg">
-                        <h3 className="cyber-label text-green-400 mb-3">
-                            <Lock className="inline w-4 h-4 mr-2" />
-                            IMPLEMENTADO HOY
+        <section className="civic-consent" aria-labelledby="identity-summary-title">
+            <div className="civic-card civic-card-pad civic-consent-panel">
+                <span className="civic-eyebrow">Resumen verificable</span>
+                <h2 id="identity-summary-title" className="civic-section-title">
+                    Estado de la acreditación
+                </h2>
+
+                {hasVerifiedClaveUnica ? (
+                    <div className="civic-note civic-note-ok" role="status">
+                        <i className="ph-bold ph-seal-check" aria-hidden="true" />
+                        <span>
+                            ClaveÚnica confirmó el acceso mediante el canal OIDC protegido.
+                            El grant civil está en memoria y aún debe ligarse a tu wallet con SIWE.
+                        </span>
+                    </div>
+                ) : (
+                    <div className="civic-note civic-note-warn" role="status">
+                        <i className="ph-bold ph-warning" aria-hidden="true" />
+                        <span>
+                            Este recorrido no acreditó identidad civil. No existe un grant válido
+                            para emitir la credencial ciudadana.
+                        </span>
+                    </div>
+                )}
+
+                <div className="civic-consent-grid">
+                    <div>
+                        <h3>
+                            <i className="ph-bold ph-lock-key" aria-hidden="true" />
+                            Garantías activas
                         </h3>
-                        <ul className="text-sm text-gray-300 space-y-2 font-mono">
-                            <li>• RUT, email, nombre y apellido cifrados en la colección de usuarios</li>
-                            <li>• Sesión de wallet validada mediante firma</li>
-                            <li>• La imagen de selfie no se conserva como archivo</li>
-                            <li>• El resultado indica si hubo transacción on-chain real</li>
+                        <ul>
+                            <li>El código y state OIDC se retiraron de la URL antes del canje.</li>
+                            <li>El grant no se persiste en almacenamiento web.</li>
+                            <li>La wallet deberá demostrar control mediante SIWE.</li>
+                            <li>La prueba ZK se generará localmente antes de una emisión.</li>
                         </ul>
                     </div>
-
-                    <div className="bg-red-500/10 border border-red-500/30 p-4 rounded-lg">
-                        <h3 className="cyber-label text-red-400 mb-3">
-                            <Shield className="inline w-4 h-4 mr-2" />
-                            LIMITACIONES ABIERTAS
+                    <div>
+                        <h3>
+                            <i className="ph-bold ph-warning-circle" aria-hidden="true" />
+                            Límites vigentes
                         </h3>
-                        <ul className="text-sm text-gray-300 space-y-2 font-mono">
-                            <li>• ClaveÚnica, NFC y liveness siguen en modo demo</li>
-                            <li>• El piloto puede guardar membresías solo en el backend</li>
-                            <li>• Aún falta evaluación legal y política de retención</li>
-                            <li>• No uses este registro como credencial oficial</li>
+                        <ul>
+                            <li>NFC web e imagen continúan como demostraciones sin assurance civil.</li>
+                            <li>El piloto aún no es una credencial de identidad civil.</li>
+                            <li>Faltan evaluación legal, despliegue compatible y operación productiva.</li>
+                            <li>La emisión falla cerrada si alguna dependencia no está provisionada.</li>
                         </ul>
                     </div>
                 </div>
 
-                <div className="flex justify-center gap-4">
-                    <Button onClick={() => setStep('wallet')} className="cyber-button">
-                        <Wallet className="w-4 h-4 mr-2" />
-                        CONTINUAR A LA WALLET
-                    </Button>
-                    <Button onClick={() => setStep('method')} variant="outline" className="border-gray-600 text-gray-400 hover:text-white">
+                <div className="civic-oidc-actions">
+                    {hasVerifiedClaveUnica ? (
+                        <button
+                            type="button"
+                            onClick={() => setStep('wallet')}
+                            className="civic-btn civic-btn-primary"
+                        >
+                            <i className="ph-bold ph-wallet" aria-hidden="true" />
+                            CONTINUAR A LA WALLET
+                        </button>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={() => setStep('clave')}
+                            className="civic-btn civic-btn-primary"
+                        >
+                            <i className="ph-bold ph-shield-check" aria-hidden="true" />
+                            ACREDITAR CON CLAVEÚNICA
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        onClick={() => setStep('method')}
+                        className="civic-btn civic-btn-quiet"
+                    >
                         REVISAR MÉTODOS
-                    </Button>
+                    </button>
                 </div>
             </div>
-        </CyberPanel>
+        </section>
     );
 };
 

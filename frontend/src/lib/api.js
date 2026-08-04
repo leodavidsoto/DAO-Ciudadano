@@ -142,7 +142,10 @@ export const buildIdentityCredentialRequest = ({
 
 // === Auth API ===
 export const authAPI = {
-    claveUnica: (rut) => api.post('/auth/clave-unica', { rut }),
+    claveUnicaStatus: () => api.get('/auth/clave-unica/status'),
+    claveUnicaAuthorize: () => api.post('/auth/clave-unica/authorize'),
+    claveUnicaCallback: ({ code, state }) =>
+        api.post('/auth/clave-unica/callback', { code, state }),
     nfc: () => api.post('/auth/nfc'),
     liveness: (file) => {
         const formData = new FormData();
@@ -168,7 +171,7 @@ export const authAPI = {
         identityGrant,
     }) =>
         api.post(
-            '/auth/identity-credential',
+            '/identity/identity-credential',
             buildIdentityCredentialRequest({
                 walletAddress,
                 identityCommitment,
@@ -368,7 +371,10 @@ export const normalizeEncryptedBallotReceipt = (response) => {
     if (!Number.isSafeInteger(receipt.index) || receipt.index < 0) {
         throw new Error('La urna respondió sin un índice verificable del mensaje.');
     }
-    if (!/^(?:0x)?[0-9a-fA-F]{64}$/.test(receipt.message_chain || '')) {
+    if (
+        typeof receipt.message_chain !== 'string' ||
+        !/^(?:0x)?[0-9a-fA-F]{64}$/.test(receipt.message_chain)
+    ) {
         throw new Error('La urna respondió sin un acumulador verificable del mensaje.');
     }
     const normalizedChain = receipt.message_chain.startsWith('0x')

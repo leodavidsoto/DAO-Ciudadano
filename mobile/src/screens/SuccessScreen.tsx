@@ -1,6 +1,4 @@
-/**
- * Success Screen - Display scan results and proceed to wallet connection
- */
+/** Display only identity data that crossed the verified NFC boundary. */
 
 import React from 'react';
 import {
@@ -9,35 +7,41 @@ import {
     StyleSheet,
     TouchableOpacity,
     ScrollView,
-    Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChileanIDData } from '../services/nfcService';
+import {
+    isVerifiedNFCReadResult,
+    type VerifiedNFCReadResult,
+} from '../services/nfcService';
 
 interface SuccessScreenProps {
     navigation: any;
-    route: {
-        params: {
-            idData: ChileanIDData;
-            serialNumber: string;
-            identityVerified?: boolean;
+    route?: {
+        params?: {
+            result?: VerifiedNFCReadResult;
         };
     };
 }
 
 const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
-    const { idData, serialNumber, identityVerified = false } = route.params;
+    // Navigation is another runtime boundary. Do not trust a route boolean or
+    // display identity fields unless the full evidence object still validates.
+    const candidate = route?.params?.result;
+    const identityVerified = isVerifiedNFCReadResult(candidate);
+    const idData = identityVerified ? candidate.data : null;
+    const verification = identityVerified ? candidate.verification : null;
 
     const handleContinue = () => {
-        navigation.navigate('Wallet', { idData, serialNumber, identityVerified });
+        if (!identityVerified) {
+            navigation.navigate('Scan');
+            return;
+        }
+        navigation.navigate('Wallet');
     };
 
     return (
         <SafeAreaView style={styles.container}>
             <ScrollView contentContainerStyle={styles.content}>
-                {/* Estado de lectura. El ícono y el texto reflejan si la
-                    identidad fue verificada criptográficamente (PACE + Autenticación Pasiva)
-                    o si solo se detectó un tag NFC sin material criptográfico válido. */}
                 <View style={identityVerified ? styles.successIcon : styles.warningIcon}>
                     <Text style={identityVerified ? styles.checkmark : styles.warningMark}>
                         {identityVerified ? '✓' : '!'}
@@ -45,79 +49,82 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
                 </View>
 
                 <Text style={identityVerified ? styles.title : styles.titleWarning}>
-                    {identityVerified ? 'IDENTIDAD VERIFICADA' : 'LECTURA NO VERIFICADA'}
+                    {identityVerified ? 'DOCUMENTO VERIFICADO' : 'LECTURA NO VERIFICADA'}
                 </Text>
                 <Text style={styles.subtitle}>
                     {identityVerified
-                        ? 'La identificación fue autenticada criptográficamente con la cadena de confianza del Estado'
-                        : 'El chip NFC no pudo ser verificado. Falla de autenticidad o certificado inválido.'}
+                        ? 'La app comprobó localmente los datos firmados de la cédula y su cadena CSCA chilena instalada.'
+                        : 'La evidencia de autenticación pasiva está ausente o incompleta. No se mostrarán datos del documento.'}
                 </Text>
 
-                {/* Data Card */}
-                <View style={styles.dataCard}>
-                    <Text style={styles.cardTitle}>
-                        {identityVerified ? 'DATOS AUTENTICADOS (eMRTD)' : 'DATOS NO CONFIRMADOS'}
-                    </Text>
+                {idData && verification && (
+                    <View style={styles.dataCard}>
+                        <Text style={styles.cardTitle}>DATOS AUTENTICADOS (DG1)</Text>
 
-                    <View style={styles.dataRow}>
-                        <Text style={styles.dataLabel}>Serial NFC:</Text>
-                        <Text style={styles.dataValue}>{serialNumber}</Text>
-                    </View>
-
-                    {idData.documentNumber && (
                         <View style={styles.dataRow}>
                             <Text style={styles.dataLabel}>Documento:</Text>
                             <Text style={styles.dataValue}>{idData.documentNumber}</Text>
                         </View>
-                    )}
-
-                    {idData.rut && (
-                        <View style={styles.dataRow}>
-                            <Text style={styles.dataLabel}>RUT:</Text>
-                            <Text style={styles.dataValue}>{idData.rut}</Text>
-                        </View>
-                    )}
-
-                    {idData.firstName && (
                         <View style={styles.dataRow}>
                             <Text style={styles.dataLabel}>Nombre:</Text>
                             <Text style={styles.dataValue}>
                                 {idData.firstName} {idData.lastName}
                             </Text>
                         </View>
-                    )}
+                        <View style={styles.dataRow}>
+                            <Text style={styles.dataLabel}>Emisor:</Text>
+                            <Text style={styles.dataValue}>{idData.issuingState}</Text>
+                        </View>
+                        <View style={styles.dataRow}>
+                            <Text style={styles.dataLabel}>Nacionalidad:</Text>
+                            <Text style={styles.dataValue}>{idData.nationality}</Text>
+                        </View>
+                        <View style={styles.dataRow}>
+                            <Text style={styles.dataLabel}>Nacimiento:</Text>
+                            <Text style={styles.dataValue}>{idData.dateOfBirth}</Text>
+                        </View>
+                        <View style={styles.dataRow}>
+                            <Text style={styles.dataLabel}>Vencimiento:</Text>
+                            <Text style={styles.dataValue}>{idData.dateOfExpiry}</Text>
+                        </View>
 
-                    <View style={styles.hashContainer}>
-                        <Text style={styles.hashLabel}>Identificador ZK derivado (Hardware UID):</Text>
-                        <Text style={styles.hashValue}>
-                            {serialNumber.substring(0, 8)}...{serialNumber.substring(serialNumber.length - 4)}
-                        </Text>
+                        <View style={styles.evidenceContainer}>
+                            <Text style={styles.evidenceTitle}>EVIDENCIA VERIFICADA</Text>
+                            <Text style={styles.evidenceText}>✓ Canal PACE-CAN establecido</Text>
+                            <Text style={styles.evidenceText}>✓ DG1, DG2 y EF.SOD presentes</Text>
+                            <Text style={styles.evidenceText}>✓ Hashes de data groups</Text>
+                            <Text style={styles.evidenceText}>✓ Firma EF.SOD</Text>
+                            <Text style={styles.evidenceText}>✓ Perfil de cédula chilena</Text>
+                            <Text style={styles.evidenceText}>✓ Documento dentro de vigencia</Text>
+                            <Text style={styles.evidenceText}>✓ Ancla CSCA chilena del Registro Civil</Text>
+                            <Text style={styles.evidenceText}>
+                                ✓ Cadena CSCA ({verification.trustAnchorsInstalled} anclas instaladas)
+                            </Text>
+                        </View>
                     </View>
-                </View>
+                )}
 
-                {/* Estado real de la verificación criptográfica */}
                 {identityVerified ? (
                     <View style={styles.securityBadge}>
                         <Text style={styles.securityIcon}>🔒</Text>
                         <Text style={styles.securityText}>
-                            Verificación criptográfica completada
+                            Autenticación pasiva local completada. No comprueba revocación ni descarta por sí sola un chip clonado; la emisión sigue bloqueada hasta contar con atestación autorizada.
                         </Text>
                     </View>
                 ) : (
                     <View style={styles.pendingBadge}>
                         <Text style={styles.securityIcon}>⚠️</Text>
                         <Text style={styles.pendingText}>
-                            Lectura sin verificar: El documento carece de firma criptográfica válida del Registro Civil. Autenticación fallida.
+                            Flujo detenido: vuelve a escanear. Una lectura no verificada no puede continuar a membresía.
                         </Text>
                     </View>
                 )}
             </ScrollView>
 
-            {/* Continue Button */}
             <View style={styles.buttonContainer}>
                 <TouchableOpacity style={styles.button} onPress={handleContinue}>
                     <Text style={styles.buttonText}>
-                        {identityVerified ? 'GENERAR CREDENCIAL ZERO-KNOWLEDGE' : 'DESCARTAR LECTURA'}
+                        {identityVerified ? 'CONTINUAR A MEMBRESÍA' : 'VOLVER A ESCANEAR'}
                     </Text>
                 </TouchableOpacity>
             </View>
@@ -232,21 +239,22 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '600',
     },
-    hashContainer: {
+    evidenceContainer: {
         marginTop: 16,
         padding: 12,
         backgroundColor: '#00FFFF10',
         borderRadius: 8,
     },
-    hashLabel: {
+    evidenceTitle: {
         color: '#00FFFF',
         fontSize: 11,
-        marginBottom: 4,
+        marginBottom: 8,
+        letterSpacing: 1,
     },
-    hashValue: {
-        color: '#00FFFF',
-        fontSize: 14,
-        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    evidenceText: {
+        color: '#B8FFFF',
+        fontSize: 12,
+        marginVertical: 2,
     },
     securityBadge: {
         flexDirection: 'row',

@@ -13,7 +13,9 @@ import {
 
 jest.mock('../lib/api', () => ({
     authAPI: {
-        claveUnica: jest.fn(),
+        claveUnicaStatus: jest.fn(),
+        claveUnicaAuthorize: jest.fn(),
+        claveUnicaCallback: jest.fn(),
         nfc: jest.fn(),
         liveness: jest.fn(),
         issueIdentityCredential: jest.fn(),
@@ -86,6 +88,7 @@ const Probe = () => {
 beforeEach(async () => {
     jest.clearAllMocks();
     window.sessionStorage.clear();
+    window.history.replaceState({}, '', '/unete');
     context = null;
     container = document.createElement('div');
     root = createRoot(container);
@@ -448,19 +451,52 @@ test('exchanges an in-memory civil grant for a sanitized signed credential', asy
         chainId: '11155111',
     });
     verifyIdentityCredential.mockReturnValue(normalizedCredential);
-    authAPI.claveUnica.mockResolvedValue({
-        data: { ok: true, identity_grant: 'opaque-one-time-grant' },
+    authAPI.claveUnicaStatus.mockResolvedValue({
+        data: {
+            available: true,
+            protocol_version: 'clave-unica-oidc-pkce-v1',
+            pkce_method: 'S256',
+            browser_bound: true,
+            credential_exchange_browser_bound: true,
+            callback_idempotent: true,
+            grant_single_use: true,
+            redirect_transport: 'frontend-post',
+            grant_ttl_seconds: 300,
+        },
+    });
+    authAPI.claveUnicaCallback.mockResolvedValue({
+        data: {
+            ok: true,
+            identity_grant: 'opaque-one-time-grant',
+            identity_grant_expires_in: 300,
+            assurance_level: 'CLAVE_UNICA',
+            name: 'Ciudadana',
+        },
     });
     authAPI.issueIdentityCredential.mockResolvedValue({
         data: { ok: true, identity: rawCredential },
     });
 
+    const state = 'state_1234567890abcdefghijklmnopqrstuvwxyz';
+    window.sessionStorage.setItem(
+        'dao-ciudadano:clave-unica:oidc-attempt:v1',
+        JSON.stringify({
+            version: 1,
+            state,
+            expiresAt: Date.now() + 60_000,
+        })
+    );
+    window.history.replaceState(
+        {},
+        '',
+        `/unete/clave-unica/callback?code=one-time-code&state=${state}`
+    );
     await act(async () => {
-        context.setRut('11111111-1');
+        await context.completeClaveUnicaCallback();
     });
-    await act(async () => {
-        await context.authenticateClaveUnica(true);
-    });
+    expect(window.location.search).toBe('');
+    expect(context.claveUnicaFlow.status).toBe('authenticated');
+    expect(context.step).toBe('consent');
     await act(async () => {
         await context.requestIdentityCredential();
     });
@@ -484,4 +520,133 @@ test('exchanges an in-memory civil grant for a sanitized signed credential', asy
         await context.requestIdentityCredential();
     });
     expect(authAPI.issueIdentityCredential).toHaveBeenCalledTimes(1);
+});
+
+test('refuses to exchange an OIDC code when browser binding is not published', async () => {
+    const state = 'state_1234567890abcdefghijklmnopqrstuvwxyz';
+    window.sessionStorage.setItem(
+        'dao-ciudadano:clave-unica:oidc-attempt:v1',
+        JSON.stringify({
+            version: 1,
+            state,
+            expiresAt: Date.now() + 60_000,
+        })
+    );
+    window.history.replaceState(
+        {},
+        '',
+        `/unete/clave-unica/callback?code=one-time-code&state=${state}`
+    );
+    authAPI.claveUnicaStatus.mockResolvedValue({
+        data: {
+            available: true,
+            protocol_version: 'clave-unica-oidc-pkce-v1',
+            pkce_method: 'S256',
+            browser_bound: false,
+            credential_exchange_browser_bound: true,
+            callback_idempotent: true,
+            grant_single_use: true,
+            redirect_transport: 'frontend-post',
+            grant_ttl_seconds: 300,
+        },
+    });
+
+    await act(async () => {
+        await context.completeClaveUnicaCallback();
+    });
+
+    expect(authAPI.claveUnicaCallback).not.toHaveBeenCalled();
+    expect(context.claveUnicaFlow.status).toBe('error');
+    expect(context.error).toMatch(/garantías de seguridad/i);
+    expect(window.location.search).toBe('');
+});
+
+test('never promotes a grant returned by the NFC demonstration', async () => {
+    authAPI.nfc.mockResolvedValue({
+        data: { ok: true, identity_grant: 'must-not-be-trusted' },
+    });
+
+    await act(async () => {
+        await context.authenticateNFC();
+    });
+    await act(async () => {
+        await context.requestIdentityCredential();
+    });
+
+    expect(JSON.stringify(context.nfc)).not.toContain('must-not-be-trusted');
+    expect(authAPI.issueIdentityCredential).not.toHaveBeenCalled();
+    expect(context.error).toMatch(/grant de identidad/i);
+});
+
+test('never promotes a grant returned by the liveness demonstration', async () => {
+    authAPI.liveness.mockResolvedValue({
+        data: { ok: true, identity_grant: 'must-not-be-trusted' },
+    });
+    const file = new File(['image'], 'selfie.jpg', { type: 'image/jpeg' });
+
+    await act(async () => {
+        context.handleFileSelect({ target: { files: [file] } });
+    });
+    await act(async () => {
+        await context.analyzeLiveness(true);
+    });
+    await act(async () => {
+        await context.requestIdentityCredential();
+    });
+
+    expect(JSON.stringify(context.selfie)).not.toContain('must-not-be-trusted');
+    expect(authAPI.issueIdentityCredential).not.toHaveBeenCalled();
+    expect(context.error).toMatch(/grant de identidad/i);
+});
+
+test('clears a prior civil grant when the citizen selects a demo method', async () => {
+    const state = 'state_1234567890abcdefghijklmnopqrstuvwxyz';
+    window.sessionStorage.setItem(
+        'dao-ciudadano:clave-unica:oidc-attempt:v1',
+        JSON.stringify({
+            version: 1,
+            state,
+            expiresAt: Date.now() + 60_000,
+        })
+    );
+    window.history.replaceState(
+        {},
+        '',
+        `/unete/clave-unica/callback?code=one-time-code&state=${state}`
+    );
+    authAPI.claveUnicaStatus.mockResolvedValue({
+        data: {
+            available: true,
+            protocol_version: 'clave-unica-oidc-pkce-v1',
+            pkce_method: 'S256',
+            browser_bound: true,
+            credential_exchange_browser_bound: true,
+            callback_idempotent: true,
+            grant_single_use: true,
+            redirect_transport: 'frontend-post',
+            grant_ttl_seconds: 300,
+        },
+    });
+    authAPI.claveUnicaCallback.mockResolvedValue({
+        data: {
+            ok: true,
+            identity_grant: 'opaque-one-time-grant',
+            identity_grant_expires_in: 300,
+            assurance_level: 'CLAVE_UNICA',
+            name: 'Ciudadana',
+        },
+    });
+
+    await act(async () => {
+        await context.completeClaveUnicaCallback();
+    });
+    await act(async () => {
+        context.selectIdentityMethod('nfc');
+        await context.requestIdentityCredential();
+    });
+
+    expect(context.step).toBe('nfc');
+    expect(context.clave).toEqual({});
+    expect(authAPI.issueIdentityCredential).not.toHaveBeenCalled();
+    expect(context.error).toMatch(/grant de identidad/i);
 });

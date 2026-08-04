@@ -21,6 +21,14 @@ import {
     checkZkAvailability,
     ZkNotProvisionedError,
 } from '../lib/zk';
+import {
+    clearClaveUnicaAttempt,
+    consumeClaveUnicaAttempt,
+    readAndCleanClaveUnicaCallback,
+    redirectToClaveUnica,
+    validateClaveUnicaCallbackResponse,
+    validateClaveUnicaStatus,
+} from '../lib/claveUnica';
 
 const OnboardingContext = createContext(null);
 
@@ -177,16 +185,6 @@ export const extractIdentityCredential = (data) => {
     return null;
 };
 
-/**
- * Opaque, short-lived proof that the civil verification flow completed. It is
- * deliberately kept in memory and exchanged exactly once after SIWE.
- */
-export const extractIdentityGrant = (data) => {
-    if (!isRecord(data)) return null;
-    const grant = data.identity_grant;
-    return typeof grant === 'string' && grant.trim() ? grant.trim() : null;
-};
-
 const withoutIdentityGrant = (data) => {
     if (!isRecord(data)) return data;
     const safeData = { ...data };
@@ -241,6 +239,10 @@ export const OnboardingProvider = ({ children }) => {
     const [identity, setIdentity] = useState(null);
     const identityGrantRef = useRef(null);
     const identityEnrollmentInFlight = useRef(false);
+    const claveUnicaCallbackInFlight = useRef(false);
+    // Every transition is backed by an OIDC/network/browser event. There are
+    // no timers or fabricated progress percentages in this flow.
+    const [claveUnicaFlow, setClaveUnicaFlow] = useState({ status: 'idle' });
     // Prueba de conocimiento cero generada localmente (ADR-001, D-2).
     // `status`: idle | enrolling | generating | ready | unavailable | error
     const [zk, setZk] = useState({ status: 'idle' });
@@ -260,12 +262,6 @@ export const OnboardingProvider = ({ children }) => {
     }, [step]);
 
     // === API Actions ===
-
-    const captureIdentityGrant = useCallback((data) => {
-        const grant = extractIdentityGrant(data);
-        if (grant) identityGrantRef.current = grant;
-        return grant;
-    }, []);
 
     const captureAccountAbstractionProgress = useCallback((event) => {
         const next = mergeAccountAbstractionProgress(
@@ -290,32 +286,120 @@ export const OnboardingProvider = ({ children }) => {
         setAccountAbstraction(next);
     }, [wallet.address, wallet.chainId]);
 
-    const authenticateClaveUnica = useCallback(async (processingAccepted = false) => {
-        if (!processingAccepted) {
-            setError('Confirma la advertencia de tratamiento antes de enviar el RUT al backend.');
+    const readClaveUnicaCapabilities = useCallback(async () => {
+        const response = await authAPI.claveUnicaStatus();
+        return validateClaveUnicaStatus(response.data);
+    }, []);
+
+    const authenticateClaveUnica = useCallback(async () => {
+        setError('');
+        setClaveUnicaFlow({ status: 'checking' });
+        try {
+            await readClaveUnicaCapabilities();
+            setClaveUnicaFlow({ status: 'starting' });
+            const response = await authAPI.claveUnicaAuthorize();
+            redirectToClaveUnica(response.data, {
+                navigate: (authorizationUrl) => {
+                    setClaveUnicaFlow({ status: 'redirecting' });
+                    window.location.assign(authorizationUrl);
+                },
+            });
+        } catch (err) {
+            const message = apiErrorMessage(
+                err,
+                err.message || 'No fue posible iniciar el acceso con ClaveÚnica.',
+                'El servicio rechazó el inicio con ClaveÚnica'
+            );
+            setClaveUnicaFlow({ status: 'error', errorCode: err.code || null });
+            setError(message);
+        }
+    }, [readClaveUnicaCapabilities]);
+
+    const completeClaveUnicaCallback = useCallback(async (callbackHref) => {
+        if (claveUnicaCallbackInFlight.current) return false;
+        claveUnicaCallbackInFlight.current = true;
+        identityGrantRef.current = null;
+        setClave({});
+        setStep('clave');
+        setError('');
+        setClaveUnicaFlow({ status: 'validating' });
+        try {
+            // The address bar is scrubbed before parsing or making any network
+            // request, including malformed and provider-error callbacks.
+            const callback = readAndCleanClaveUnicaCallback({ href: callbackHref });
+            consumeClaveUnicaAttempt(callback.state);
+            if (callback.kind === 'error') {
+                throw new Error(
+                    callback.error === 'access_denied'
+                        ? 'Cancelaste el acceso en ClaveÚnica.'
+                        : 'ClaveÚnica no pudo completar la autenticación.'
+                );
+            }
+
+            const capabilities = await readClaveUnicaCapabilities();
+            const response = await authAPI.claveUnicaCallback({
+                code: callback.code,
+                state: callback.state,
+            });
+            const result = validateClaveUnicaCallbackResponse(
+                response.data,
+                capabilities.grantTtlSeconds
+            );
+
+            // This callback is the sole path allowed to populate the bearer
+            // grant. It stays in memory and is exchanged once after SIWE.
+            identityGrantRef.current = {
+                value: result.identityGrant,
+                expiresAt: Date.now() + result.grantTtlSeconds * 1000,
+            };
+            setClave({
+                authenticated: true,
+                assurance_level: result.assuranceLevel,
+                identity_grant_expires_in: result.grantTtlSeconds,
+                name: result.name,
+            });
+            setClaveUnicaFlow({
+                status: 'authenticated',
+                name: result.name,
+            });
+            setStep('consent');
+            return true;
+        } catch (err) {
+            try {
+                clearClaveUnicaAttempt();
+            } catch {
+                // The attempt has its own short TTL; authentication still fails.
+            }
+            identityGrantRef.current = null;
+            setClave({});
+            const message = apiErrorMessage(
+                err,
+                err.message || 'No se pudo validar el retorno de ClaveÚnica.',
+                'El servicio rechazó el retorno de ClaveÚnica'
+            );
+            setClaveUnicaFlow({ status: 'error', errorCode: err.code || null });
+            setError(message);
+            return false;
+        } finally {
+            claveUnicaCallbackInFlight.current = false;
+        }
+    }, [readClaveUnicaCapabilities]);
+
+    const selectIdentityMethod = useCallback((nextStep) => {
+        if (!['clave', 'registro', 'nfc', 'selfie'].includes(nextStep)) {
+            setError('El método de identidad seleccionado no es válido.');
             return;
         }
-        setLoading(true);
+        // Starting another method invalidates any prior bearer grant and
+        // signed identity held by this tab. Demo routes can never inherit a
+        // previous civil accreditation silently.
+        identityGrantRef.current = null;
+        setIdentity(null);
+        setClave({});
+        setClaveUnicaFlow({ status: 'idle' });
         setError('');
-        try {
-            const response = await authAPI.claveUnica(rut);
-            if (response.data.ok) {
-                captureIdentityGrant(response.data);
-                setClave(withoutIdentityGrant(response.data));
-                setStep('nfc');
-            } else {
-                setError(response.data.error || 'Error en ClaveÚnica');
-            }
-        } catch (err) {
-            setError(apiErrorMessage(
-                err,
-                'No fue posible contactar al servicio de ClaveÚnica simulado.',
-                'El servicio rechazó la simulación de ClaveÚnica'
-            ));
-        } finally {
-            setLoading(false);
-        }
-    }, [rut, captureIdentityGrant]);
+        setStep(nextStep);
+    }, []);
 
     const authenticateNFC = useCallback(async () => {
         setLoading(true);
@@ -323,7 +407,6 @@ export const OnboardingProvider = ({ children }) => {
         try {
             const response = await authAPI.nfc();
             if (response.data.ok) {
-                captureIdentityGrant(response.data);
                 setNfc(withoutIdentityGrant(response.data));
                 setStep('selfie');
             } else {
@@ -338,7 +421,7 @@ export const OnboardingProvider = ({ children }) => {
         } finally {
             setLoading(false);
         }
-    }, [captureIdentityGrant]);
+    }, []);
 
     const analyzeLiveness = useCallback(async (processingAccepted = false) => {
         if (!processingAccepted) {
@@ -355,7 +438,6 @@ export const OnboardingProvider = ({ children }) => {
         try {
             const response = await authAPI.liveness(selectedFile);
             if (response.data.ok) {
-                captureIdentityGrant(response.data);
                 setSelfie(withoutIdentityGrant(response.data));
                 setStep('consent');
             } else {
@@ -370,7 +452,7 @@ export const OnboardingProvider = ({ children }) => {
         } finally {
             setLoading(false);
         }
-    }, [selectedFile, captureIdentityGrant]);
+    }, [selectedFile]);
 
     // NOTA: la conexión de wallet real (MetaMask + sesión SIWE) vive en
     // hooks/useWallet.js y se usa directamente desde WalletStep.jsx -- no
@@ -441,13 +523,17 @@ export const OnboardingProvider = ({ children }) => {
             setError('Conecta una wallet y una red antes de solicitar la credencial identity.');
             return null;
         }
-        const identityGrant = identityGrantRef.current;
-        if (!identityGrant) {
-            setError(
-                'La verificación civil no entregó un grant de identidad de un solo uso; no se puede emitir la credencial ZK.'
-            );
+        const identityGrantRecord = identityGrantRef.current;
+        if (
+            !identityGrantRecord ||
+            typeof identityGrantRecord.value !== 'string' ||
+            !Number.isSafeInteger(identityGrantRecord.expiresAt) ||
+            identityGrantRecord.expiresAt <= Date.now()
+        ) {
+            identityGrantRef.current = null;
             return null;
         }
+        const identityGrant = identityGrantRecord.value;
 
         identityEnrollmentInFlight.current = true;
         setZk({ status: 'enrolling' });
@@ -821,6 +907,8 @@ export const OnboardingProvider = ({ children }) => {
         setWallet({});
         setMint({});
         setIdentity(null);
+        setClaveUnicaFlow({ status: 'idle' });
+        claveUnicaCallbackInFlight.current = false;
         accountAbstractionRef.current = { status: 'idle' };
         setAccountAbstraction({ status: 'idle' });
         accountAbstractionStorageKeyRef.current = null;
@@ -855,9 +943,12 @@ export const OnboardingProvider = ({ children }) => {
         zk,
         zkMintEnabled: true,
         accountAbstraction,
+        claveUnicaFlow,
 
         // Actions
         authenticateClaveUnica,
+        completeClaveUnicaCallback,
+        selectIdentityMethod,
         authenticateNFC,
         analyzeLiveness,
         generateProof,

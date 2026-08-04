@@ -6,4 +6,6 @@ RCT_EXTERN_METHOD(startPACESession:(NSString *)can
                   withResolver:(RCTPromiseResolveBlock)resolve
                   withRejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(cancelPACESession)
+
 @end

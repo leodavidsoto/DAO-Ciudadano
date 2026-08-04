@@ -11,6 +11,7 @@ module.exports = {
   jest: {
     configure: {
       moduleNameMapper: {
+        '^@/(.*)$': '<rootDir>/src/$1',
         '^@zk-kit/baby-jubjub$': '<rootDir>/node_modules/@zk-kit/baby-jubjub/dist/index.cjs',
         '^@zk-kit/eddsa-poseidon$': '<rootDir>/node_modules/@zk-kit/eddsa-poseidon/dist/index.cjs',
         '^@zk-kit/poseidon-cipher$': '<rootDir>/node_modules/@zk-kit/poseidon-cipher/dist/index.cjs',

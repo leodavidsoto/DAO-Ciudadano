@@ -52,7 +52,7 @@ const isDefinitiveBallotRejection = (error) => {
     if (!Number.isInteger(status) || status < 400 || status >= 500) return false;
     // These statuses can be emitted after an intermediary/backend already
     // accepted the idempotent message, so the exact ciphertext must survive.
-    return ![408, 409, 425, 429].includes(status);
+    return ![408, 425, 429].includes(status);
 };
 
 const getMaciReadiness = (response) => {
@@ -222,6 +222,7 @@ const VotingBallot = ({ walletAddress, chainId, eip1193Provider }) => {
             } else {
                 // Load ~400 kB of MACI/BabyJub/Poseidon only for an actual
                 // ballot; browsing proposals must not pay that bundle cost.
+                advanceCryptoPhase('preparing_key');
                 const {
                     createBallotIdempotencyKey,
                     createMaciKeypair,
@@ -231,7 +232,6 @@ const VotingBallot = ({ walletAddress, chainId, eip1193Provider }) => {
                     verifyMaciCoordinatorOnChain,
                 } = await import('../../lib/maci');
                 assertCurrentSession();
-                advanceCryptoPhase('preparing_key');
                 const voterKeypair =
                     voterKeypairRef.current || await createMaciKeypair();
                 assertCurrentSession();

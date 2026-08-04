@@ -28,6 +28,8 @@ import java.security.cert.TrustAnchor
 import java.security.cert.X509Certificate
 import java.util.Timer
 import java.util.TimerTask
+import java.util.GregorianCalendar
+import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -119,13 +121,13 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
         val once = SingleShotPromise(promise)
 
         val normalizedCan = can.trim()
-        if (normalizedCan.isEmpty() || !normalizedCan.all { it.isDigit() }) {
+        if (normalizedCan.length != 6 || !normalizedCan.all { it in '0'..'9' }) {
             // El CAN impreso en la cédula es numérico. Un valor con letras es
             // un error de captura, no un fallo criptográfico: distinguirlo
             // evita que la UI culpe al chip.
             once.reject(
                 "E_INVALID_CAN",
-                "El CAN debe ser el número impreso en la cédula (solo dígitos)."
+                "El CAN debe contener exactamente los 6 dígitos impresos en la cédula."
             )
             return
         }
@@ -285,12 +287,40 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
                 mapOf(1 to dg1Raw, 2 to dg2Raw),
                 loadTrustAnchors(),
             )
+            val mrz = dg1.mrzInfo
+            val issuingStateIsChile = mrz.issuingState.orEmpty()
+                .trim('<').uppercase() == "CHL"
+            val documentProfileIsIdentityCard = mrz.documentCode.orEmpty()
+                .trim().uppercase().startsWith("I")
+            val documentNotExpired = isUnexpiredMRZDate(mrz.dateOfExpiry.orEmpty())
+            val countrySigningCertificateSubject = outcome.documentSignerIssuer.orEmpty()
+            val countrySigningCertificateIsChile =
+                isApprovedChileanCSCASubject(countrySigningCertificateSubject)
+            val passed = outcome.passed &&
+                issuingStateIsChile &&
+                documentProfileIsIdentityCard &&
+                documentNotExpired &&
+                countrySigningCertificateIsChile
 
             return Arguments.createMap().apply {
                 // El veredicto criptográfico, nunca una constante.
-                putBoolean("identityVerified", outcome.passed)
-                putMap("data", buildData(dg1, dg2Raw, tag))
-                putMap("verification", toWritableMap(outcome))
+                putBoolean("identityVerified", passed)
+                putMap(
+                    "data",
+                    if (passed) buildData(dg1, dg2Raw) else Arguments.createMap()
+                )
+                putMap(
+                    "verification",
+                    toWritableMap(
+                        outcome,
+                        passed,
+                        issuingStateIsChile,
+                        documentProfileIsIdentityCard,
+                        documentNotExpired,
+                        countrySigningCertificateIsChile,
+                        countrySigningCertificateSubject,
+                    )
+                )
             }
         } finally {
             try {
@@ -328,20 +358,35 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
      * solo sabe "falló" no puede decirle al ciudadano si el problema es su
      * cédula o nuestra configuración.
      */
-    private fun toWritableMap(outcome: PassiveAuthOutcome): WritableMap {
+    private fun toWritableMap(
+        outcome: PassiveAuthOutcome,
+        passed: Boolean,
+        issuingStateIsChile: Boolean,
+        documentProfileIsIdentityCard: Boolean,
+        documentNotExpired: Boolean,
+        countrySigningCertificateIsChile: Boolean,
+        countrySigningCertificateSubject: String,
+    ): WritableMap {
         val failures = Arguments.createArray()
         outcome.failures.forEach { failures.pushString(it) }
 
         return Arguments.createMap().apply {
-            putBoolean("passed", outcome.passed)
+            putBoolean("passed", passed)
             putBoolean("dataGroupHashesMatch", outcome.dataGroupHashesMatch)
             putBoolean("sodSignatureValid", outcome.sodSignatureValid)
             putBoolean("certificateChainTrusted", outcome.certificateChainTrusted)
+            putBoolean("paceEstablished", true)
+            putBoolean("requiredDataGroupsPresent", true)
+            putBoolean("issuingStateIsChile", issuingStateIsChile)
+            putBoolean("documentProfileIsIdentityCard", documentProfileIsIdentityCard)
+            putBoolean("documentNotExpired", documentNotExpired)
+            putBoolean("countrySigningCertificateIsChile", countrySigningCertificateIsChile)
             putInt("trustAnchorsInstalled", outcome.trustAnchorsInstalled)
             putString("digestAlgorithm", outcome.digestAlgorithm)
             putString("signatureAlgorithm", outcome.signatureAlgorithm)
             putString("documentSigner", outcome.documentSigner)
             putString("documentSignerIssuer", outcome.documentSignerIssuer)
+            putString("countrySigningCertificateSubject", countrySigningCertificateSubject)
             putArray("failures", failures)
         }
     }
@@ -370,7 +415,9 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
             try {
                 assets.open("$CSCA_ASSET_DIR/$name").use { input ->
                     val certificate = factory.generateCertificate(input) as X509Certificate
-                    anchors.add(TrustAnchor(certificate, null))
+                    if (isApprovedChileanCSCASubject(certificate.subjectX500Principal.name)) {
+                        anchors.add(TrustAnchor(certificate, null))
+                    }
                 }
             } catch (_: Exception) {
                 // Un archivo ilegible no puede degradar la validación de los
@@ -380,7 +427,7 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
         return anchors
     }
 
-    private fun buildData(dg1: DG1File, dg2Raw: ByteArray, tag: Tag): WritableMap {
+    private fun buildData(dg1: DG1File, dg2Raw: ByteArray): WritableMap {
         val mrz = dg1.mrzInfo
         return Arguments.createMap().apply {
             putString("documentNumber", mrz.documentNumber.orEmpty().trim('<'))
@@ -391,7 +438,6 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
             putString("nationality", mrz.nationality.orEmpty().trim('<'))
             putString("issuingState", mrz.issuingState.orEmpty().trim('<'))
             putString("sex", mrz.gender?.toString().orEmpty())
-            putString("serialNumber", tag.id?.joinToString("") { "%02X".format(it) }.orEmpty())
             // El RUT no tiene un campo propio en la MRZ: viaja en los datos
             // opcionales y su formato exacto en la cédula chilena no está
             // verificado contra un documento real. Se exponen en crudo y NO se
@@ -401,6 +447,36 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
             putString("optionalData1", mrz.optionalData1.orEmpty().trim('<'))
             putString("optionalData2", mrz.optionalData2.orEmpty().trim('<'))
             putMap("photo", extractPhoto(dg2Raw))
+        }
+    }
+
+    private fun isApprovedChileanCSCASubject(subject: String): Boolean {
+        val fields = subject.split(',').map { it.trim().replace(" ", "").uppercase() }
+        return fields.contains("C=CL") &&
+            subject.uppercase().contains("SERVICIO DE REGISTRO CIVIL")
+    }
+
+    private fun isUnexpiredMRZDate(value: String): Boolean {
+        if (!value.matches(Regex("^[0-9]{6}$"))) return false
+        return try {
+            val expiry = GregorianCalendar(TimeZone.getTimeZone("UTC")).apply {
+                isLenient = false
+                clear()
+                set(
+                    2000 + value.substring(0, 2).toInt(),
+                    value.substring(2, 4).toInt() - 1,
+                    value.substring(4, 6).toInt(),
+                )
+            }.timeInMillis
+            val today = GregorianCalendar(TimeZone.getTimeZone("UTC")).apply {
+                set(GregorianCalendar.HOUR_OF_DAY, 0)
+                set(GregorianCalendar.MINUTE, 0)
+                set(GregorianCalendar.SECOND, 0)
+                set(GregorianCalendar.MILLISECOND, 0)
+            }.timeInMillis
+            expiry >= today
+        } catch (_: Exception) {
+            false
         }
     }
 
