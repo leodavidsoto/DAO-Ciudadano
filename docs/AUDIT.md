@@ -1659,7 +1659,7 @@ HTTPS en cualquier entorno: en claro viajarían el código de autorización y el
 Sigue sin probarse contra ClaveÚnica: no hay credenciales de la DGD.
 
 463 tests (446 antes).
-| P-85 | El usuario instruye degradar `gradle-wrapper.properties` a Gradle 9.0.0-bin. Sin embargo, React Native 0.83 fuerza internamente Android Gradle Plugin (AGP) 9.3.1 (en `libs.versions.toml`). AGP 9.3.1 es **incompatible** con Gradle 9.0.0 (requiere Gradle 9.5.0 mínimo, lanzando `NoClassDefFoundError`). El pipeline de CI continuará fallando tras fijar Gradle a 9.0.0-bin. | `mobile/android/gradle/wrapper/gradle-wrapper.properties`, `mobile/node_modules/@react-native/gradle-plugin/gradle/libs.versions.toml:13` | Crítica (CI/Infraestructura) | 🟡 Parcial: Modificado el wrapper según las reglas e inyectado el checksum `kotlin-reflect` para evitar errores de verificación, pero el build nativo requiere escalar AGP a 8.x (no soportado por RN 0.83) o subir Gradle a 9.5. |
+| P-85 | ~~React Native 0.83 fuerza AGP 9.3.1, incompatible con Gradle 9.0.0~~ **Premisa falsa, ver Decimoséptima pasada.** El catálogo de RN fija `agp = "8.12.0"` y la app usa 8.9.1; el único `9.3.1` del repo es `androidx.databinding`. Con el wrapper actual (Gradle 9.0.0) el comando exacto de CI **compila**: 27m49s, APK+AAB para 4 ABIs, verificación estricta. Subir a 9.5.0 **rompe** el build (Kotlin 2.3.20 vs 2.2.0). | `mobile/android/gradle/wrapper/gradle-wrapper.properties` | Crítica (CI/Infraestructura) | ✅ **Cerrado** (04-08-2026): verificado ejecutando, no razonando. Wrapper en 9.0.0 con su SHA-256 oficial, `validateDistributionUrl` y `networkTimeout` restaurado |
 
 ---
 
@@ -1832,3 +1832,77 @@ el proveedor y auditoría de uso— que ningún cambio de código resuelve. Sigu
 el procedimiento de `docs/SECURITY_RUNBOOK.md`.
 
 472 tests. black, flake8 y mypy en verde.
+
+
+---
+
+## Decimoséptima pasada (04-08-2026) — P-85: la premisa era falsa
+
+Se instruyó subir Gradle a 9.5.0 porque «React Native 0.83 fuerza AGP 9.3.1 e
+es incompatible con Gradle 9.0.0». **Ninguna de las dos afirmaciones se
+sostiene**, y actuar sobre ellas habría roto el gate que se quería destrabar.
+
+### De dónde salió el «AGP 9.3.1»
+
+El único `9.3.1` de todo el repositorio es
+`androidx.databinding:databinding-common:9.3.1` en `verification-metadata.xml`
+—una biblioteca de *databinding*, no el plugin de Android—. El catálogo de
+React Native declara `agp = "8.12.0"` (y ese catálogo compila el plugin de RN,
+no la app), y `android/build.gradle:16` fija
+`classpath("com.android.tools.build:gradle:8.9.1")`.
+
+### El build no estaba roto
+
+Se ejecutó el **comando exacto de CI** (`npm run android:ci`, que corre
+`lintRelease`, `testReleaseUnitTest`, `assembleRelease`, `validateReleaseBundle`
+con `--dependency-verification=strict` y cuatro ABIs) con el wrapper vigente:
+
+    BUILD SUCCESSFUL in 27m 49s
+    521 actionable tasks: 494 executed, 27 up-to-date
+
+APK sin firmar (86 MB) y AAB generados, y el script completó todas sus
+aserciones —zipalign, `aapt2 dump badging`, permiso NFC, no-debuggable y las
+cuatro arquitecturas nativas—, que es lo que imprime los checksums finales.
+
+### Subir Gradle es lo que rompe
+
+Se probó la instrucción antes de descartarla. Con Gradle 9.5.0 (checksum
+oficial `553c78f5…`):
+
+    Gradle 9.5.0
+    Kotlin:  2.3.20
+    > Task :gradle-plugin:settings-plugin:compileKotlin FAILED
+      Internal compiler error.
+
+Es el mismo modo de fallo que ya describía la parte narrativa de P-85: el
+plugin de React Native no compila con la metadata de Kotlin que trae el Gradle
+más nuevo. Gradle 9.0.0 embebe **Kotlin 2.2.0** y funciona; 9.5.0 embebe
+**2.3.20** y no. La dirección correcta es **no subir**, no subir más.
+
+El wrapper queda en 9.0.0 con su SHA-256 oficial verificado contra
+`services.gradle.org` (`8fad3d78…`), `validateDistributionUrl=true` y
+`networkTimeout=10000`, que alguien había eliminado al reordenar el archivo.
+
+### P-86 (baja, corregida): lintear después de compilar daba 6087 problemas
+
+`npm run lint` es `eslint .`, así que arrastraba `android/build/reports` —los
+informes HTML que genera Gradle—. Quien compilara Android en local y luego
+linteara veía **6087 problemas** que escondían los 21 reales del código. En CI
+no se notaba porque el job estático lintea antes de compilar nada.
+
+Con `.eslintignore` el gate local pasa a coincidir con el de CI: 0 errores y 21
+avisos, exactamente el presupuesto configurado (`--max-warnings=21`).
+
+Nota para quien toque el móvil: ese presupuesto está **al límite**. Un aviso
+más rompe CI, así que conviene arreglar los `no-bitwise` de `bacCrypto.ts`
+—que son legítimos en criptografía y podrían llevar una excepción de regla en
+vez de gastar cupo— antes de añadir código nuevo.
+
+### Estado del móvil tras esta pasada
+
+| Gate | Resultado |
+|---|---|
+| `npm run typecheck` | ✅ limpio |
+| `npm test` | ✅ 43 tests, 5 suites |
+| `npm run lint -- --max-warnings=21` | ✅ 0 errores, 21 avisos |
+| `npm run android:ci` (comando de CI) | ✅ BUILD SUCCESSFUL, APK+AAB |

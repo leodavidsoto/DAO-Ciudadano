@@ -1,0 +1,15 @@
+# Salida generada, no código fuente.
+#
+# `npm run lint` es `eslint .`, así que arrastra todo lo que Gradle y Xcode
+# dejan en el árbol. Sin esto, cualquiera que compile Android en local y
+# después lintee ve ~6000 problemas de informes HTML generados —el gate se
+# vuelve inútil y esconde los 21 avisos reales del código—.
+#
+# En CI no se notaba porque el job estático lintea ANTES de compilar nada.
+android/build/
+android/app/build/
+android/.gradle/
+ios/build/
+ios/Pods/
+ios/NFCPassportReader/
+vendor/
