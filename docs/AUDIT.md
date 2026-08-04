@@ -1198,3 +1198,81 @@ símbolo, tokens de testnet sin precio, dirección inválida y exceso de tokens
 como error de configuración visible en `/health/ready`.
 
 402 tests (391 antes).
+
+---
+
+## Undécima pasada (04-08-2026) — recuento reconstruible (3.10)
+
+### P-69 (alta, corregida): la finalización de una elección no se reintentaba nunca
+
+`backend/app/services/governance_service.py` — la causa raíz era más profunda
+que el `insert_many` no atómico. `sync_election_status` llamaba a
+`finalize_election` **solo en la transición de estado**:
+
+```python
+if derived != election.get("status"):
+    ...
+    if derived == "closed":
+        await cls.finalize_election(election)
+```
+
+Una vez persistido `status: "closed"`, esa rama no volvía a entrar jamás. Y
+`finalize_election` empezaba con "si ya existe cualquier representante, salir".
+Combinados: si el proceso moría a mitad del `insert_many` —que no es atómico
+entre documentos— quedaba un parlamento con tres escaños de cinco, **para
+siempre**, y sin ninguna señal visible: la lista de representantes se ve
+perfectamente normal, solo que le faltan personas.
+
+Corregido con el patrón de marca de commit, sin transacciones (exigirían
+replica set, que el despliegue actual no tiene):
+
+- `finalize_election` reconcilia en vez de insertar: `upsert` por
+  (election_id, address) con índice único, y borra a quien ya no salga
+  elegido. Reejecutarla no cambia nada.
+- `finalized_at` se escribe **al final**, después de reconciliar. Su ausencia
+  significa exactamente "esto no terminó", así que la siguiente lectura lo
+  reintenta.
+
+Verificado con una caída simulada fiel (escaños parciales + marca ausente) y
+con mutación: revertir la condición hace fallar el test.
+
+### Reconstrucción desde firmas válidas
+
+`backend/app/services/tally_service.py` (nuevo) y los endpoints públicos
+`/governance/proposals/{id}/audit` y `/governance/elections/{id}/audit`.
+
+Derivar los totales de las papeletas elimina la divergencia, pero por sí solo
+solo significa "confiamos en otra colección del mismo servidor". La auditoría
+recomputa el resultado desde cero comprobando, papeleta a papeleta:
+
+1. que la firma EIP-712 recupera exactamente la dirección del votante,
+2. que el peso declarado cuadra con su composición (`1 + len(delegators)`,
+   persistida desde P-61) — un peso inflado a mano en la base se detecta,
+3. que no hay dos papeletas del mismo votante.
+
+Lo que no pasa esas tres no se cuenta y aparece en `rejected` con su motivo.
+`matches` dice si el recuento verificado coincide con el publicado.
+
+Las papeletas sin firma se cuentan solo mientras `SIGNED_BALLOTS_REQUIRED`
+esté apagado (piloto) y **siempre** se reportan en `ballots_unsigned`: nadie
+debe leer "auditado" como "criptográficamente probado" cuando parte del censo
+no lleva firma.
+
+Los endpoints son públicos y sin autenticación a propósito — un resultado que
+solo puede comprobar quien tiene sesión no es verificable, es una promesa. La
+recuperación de firmantes se ejecuta en un hilo (es CPU y bloquearía el event
+loop) y hay un tope de 5000 papeletas por auditoría, declarado en `truncated`.
+
+### Dos cosas que quedaron mintiendo, corregidas
+
+- **Contadores muertos.** Las propuestas seguían guardando `votes_for: 0` y
+  compañía al crearse, aunque los totales ya se derivaban. Un `0` con pinta de
+  dato autoritativo que nadie actualiza es la divergencia que esta fase
+  elimina, solo que en diferido. Se dejaron de persistir.
+- **Bloqueante obsoleto de readiness.** `deployment_blockers()` afirmaba
+  incondicionalmente que "el recuento de elecciones aún no es transaccional ni
+  reconstruible desde las papeletas". Ya no es cierto; lo que sigue bloqueando
+  es publicar resultados sin exigir firmas, y de eso ya se encarga el
+  bloqueante de `SIGNED_BALLOTS_REQUIRED`.
+
+414 tests (402 antes).

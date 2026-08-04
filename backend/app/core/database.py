@@ -96,6 +96,13 @@ class Database:
             await cls.get_db()["election_votes"].create_index(
                 [("election_id", 1), ("voter_address", 1)], unique=True
             )
+            # Un escaño por (elección, persona). Es lo que hace converger a dos
+            # finalizaciones simultáneas en vez de duplicar representantes, y
+            # lo que permite que `finalize_election` sea un upsert idempotente
+            # reejecutable tras una caída (ROADMAP 3.10).
+            await cls.get_db()["representatives"].create_index(
+                [("election_id", 1), ("address", 1)], unique=True
+            )
             await cls.get_db()["delegations"].create_index("delegator", unique=True)
             await cls.get_db()["delegations"].create_index("delegate")
             # Índices ciegos de usuarios (app/core/identity.lookup_key): el

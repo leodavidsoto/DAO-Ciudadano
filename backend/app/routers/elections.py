@@ -31,7 +31,7 @@ from ..core.database import (
     representatives_collection,
 )
 from ..core.security_middleware import fraud_detector, verify_eth_address
-from ..services import ballot_service
+from ..services import ballot_service, tally_service
 from ..services.governance_service import governance_service
 from .deps import current_address, ensure_active_member, ensure_acts_as_self
 
@@ -613,6 +613,17 @@ async def get_election_results(election_id: str):
             for r in results
         ],
     )
+
+
+@router.get("/elections/{election_id}/audit")
+async def audit_election_tally(election_id: str):
+    """Recuenta la elección desde sus papeletas, verificando cada firma.
+
+    Mismo contrato que el de propuestas y por el mismo motivo: el resultado
+    debe poder recomputarlo cualquiera, no solo el servidor que lo publica.
+    """
+    await _get_election_or_404(election_id)
+    return await tally_service.audit_election(election_id)
 
 
 @router.get("/representatives", response_model=List[RepresentativeResponse])

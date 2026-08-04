@@ -29,7 +29,7 @@ from ..core.security_middleware import (
 )
 from ..core.config import settings
 from ..services.governance_service import MAX_DELEGATION_DEPTH, governance_service
-from ..services import ballot_service, treasury_service
+from ..services import ballot_service, tally_service, treasury_service
 from ..services.membership_verifier import MembershipVerificationUnavailable
 from .deps import (
     MEMBERSHIP_UNAVAILABLE_DETAIL,
@@ -208,10 +208,10 @@ async def create_proposal(
             "category": request.category,
             "creator_address": request.creator_address,
             "status": "active",
-            "votes_for": 0,
-            "votes_against": 0,
-            "votes_abstain": 0,
-            "total_votes": 0,
+            # Los totales NO se persisten: se derivan de las papeletas al
+            # leerlos (ROADMAP 3.10). Guardarlos aquí dejaría en la base un
+            # `votes_for: 0` con pinta de dato autoritativo que ya nadie
+            # actualiza — justo la divergencia que esta fase elimina.
             "quorum_required": 10,
             "created_at": now,
             "ends_at": now + timedelta(days=request.duration_days)
@@ -304,6 +304,23 @@ async def get_ballot_schema():
         "domain": ballot_service.domain(),
         "signed_ballots_required": settings.SIGNED_BALLOTS_REQUIRED,
     }
+
+
+@router.get("/proposals/{proposal_id}/audit")
+async def audit_proposal_tally(proposal_id: str):
+    """Recuenta la propuesta desde sus papeletas, verificando cada firma.
+
+    Público y sin autenticación a propósito: un resultado que solo puede
+    comprobar quien tiene sesión no es verificable, es una promesa.
+
+    Devuelve el recuento recomputado, el que publica la API y si coinciden.
+    `rejected` enumera cada papeleta descartada con su motivo, así que una
+    divergencia se puede investigar sin acceso a la base de datos.
+    """
+    proposal = await proposals_collection().find_one({"id": proposal_id})
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Propuesta no encontrada")
+    return await tally_service.audit_proposal(proposal_id)
 
 
 @router.get("/proposals/{proposal_id}", response_model=ProposalResponse)

@@ -221,13 +221,14 @@ def deployment_blockers() -> list[str]:
             "SESSION_COOKIE_SECURE debe ser true en producción: sin él la "
             "cookie de sesión viaja en claro"
         )
-    # Las papeletas de elecciones ya implementan EIP-712 con nonce único
-    # (ROADMAP 3.2/3.3). Lo que queda bloqueando es el tally transaccional:
-    # papeleta y recuento siguen siendo dos escrituras separadas.
-    blockers.append(
-        "el recuento de elecciones aún no es transaccional ni reconstruible "
-        "desde las papeletas (ROADMAP 3.5)"
-    )
+    # El recuento dejó de ser un bloqueante incondicional (ROADMAP 3.10):
+    # los totales se derivan de las papeletas al leerlos, votar es UNA
+    # escritura de un documento, la finalización de elecciones se reconcilia
+    # hasta dejar su marca `finalized_at`, y `/audit` recomputa el resultado
+    # verificando cada firma. Lo que sí sigue bloqueando es publicar un
+    # resultado que nadie puede verificar criptográficamente: sin firmas
+    # obligatorias, la auditoría solo puede decir "esto es lo que hay
+    # guardado", y eso ya lo cubre el bloqueante de SIGNED_BALLOTS_REQUIRED.
     if settings.MEMBERSHIP_SOURCE == "mongo":
         blockers.append(
             "MEMBERSHIP_SOURCE=mongo sigue provisional hasta reconciliar "

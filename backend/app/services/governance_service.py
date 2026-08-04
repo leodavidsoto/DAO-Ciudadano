@@ -282,8 +282,17 @@ class GovernanceService:
                 {"$set": {"status": derived}}
             )
             election["status"] = derived
-            if derived == "closed":
-                await cls.finalize_election(election)
+
+        # La finalización se reintenta hasta que deja su marca, no solo en la
+        # transición de estado. Antes se llamaba ÚNICAMENTE al pasar a
+        # `closed`: si el proceso moría a mitad de escribir los escaños, esa
+        # transición ya no volvía a ocurrir y el parlamento se quedaba
+        # incompleto para siempre. `finalized_at` se escribe al final, después
+        # de reconciliar, así que su ausencia significa exactamente "esto no
+        # terminó" (ROADMAP 3.10).
+        if derived == "closed" and not election.get("finalized_at"):
+            await cls.finalize_election(election)
+            election["finalized_at"] = datetime.now(timezone.utc)
         return election
 
     @classmethod
@@ -324,43 +333,76 @@ class GovernanceService:
 
     @classmethod
     async def finalize_election(cls, election: dict) -> None:
-        """Write Representative records for the top `seats` candidates.
+        """Reconcilia los escaños con el resultado derivado de las papeletas.
 
-        Idempotent: skips if representatives for this election already exist.
-        Candidates with zero votes do not get a seat — an election nobody
-        voted in elects nobody (no fabricated legitimacy).
+        Antes: si ya existía CUALQUIER representante de esta elección, se
+        salía sin hacer nada. `insert_many` no es atómico entre documentos, así
+        que una caída a mitad de la escritura dejaba un parlamento incompleto
+        —tres escaños de cinco— y ese `return` temprano impedía completarlo
+        para siempre. Nadie lo habría notado: la lista de representantes se ve
+        perfectamente normal, solo que le faltan personas.
+
+        Ahora es una reconciliación idempotente contra el resultado calculado:
+        cada ganador se hace `upsert` por (election_id, address) y se borra
+        cualquier representante que ya no salga elegido. Reejecutarla no
+        cambia nada; ejecutarla tras una caída la termina. No hace falta una
+        transacción de MongoDB —que exigiría replica set y no existe en el
+        despliegue actual— porque el estado correcto se puede recalcular
+        entero desde las papeletas cuantas veces haga falta (ROADMAP 3.10).
         """
-        existing = await representatives_collection().count_documents(
-            {"election_id": election["id"]}
-        )
-        if existing > 0:
-            return
-
         results = await cls.compute_results(election["id"])
         winners = [r for r in results if r["votes"] > 0][: election["seats"]]
-        if not winners:
-            logger.info(f"Election {election['id']} closed with no votes; no seats filled")
-            return
 
         term_start = election["voting_end_at"]
         if term_start.tzinfo is None:
             term_start = term_start.replace(tzinfo=timezone.utc)
         term_end = add_months(term_start, election["term_months"])
 
-        docs = [
-            {
-                "election_id": election["id"],
-                "address": w["candidate_address"],
-                "votes": w["votes"],
-                "term_start": term_start,
-                "term_end": term_end,
-            }
-            for w in winners
-        ]
-        await representatives_collection().insert_many(docs)
-        logger.info(
-            f"Election {election['id']} finalized: {len(docs)} representative(s) seated"
+        elected = []
+        for winner in winners:
+            address = winner["candidate_address"]
+            elected.append(address)
+            # Upsert por (election_id, address): con el índice único, dos
+            # finalizaciones simultáneas convergen al mismo estado en vez de
+            # duplicar escaños.
+            await representatives_collection().update_one(
+                {"election_id": election["id"], "address": address},
+                {"$set": {
+                    "election_id": election["id"],
+                    "address": address,
+                    "votes": winner["votes"],
+                    "term_start": term_start,
+                    "term_end": term_end,
+                }},
+                upsert=True,
+            )
+
+        # Cualquier representante que ya no salga elegido sobra: puede venir de
+        # una finalización previa interrumpida o de un recuento que cambió al
+        # anularse una papeleta. El estado publicado debe ser el derivado.
+        removed = await representatives_collection().delete_many({
+            "election_id": election["id"],
+            "address": {"$nin": elected},
+        })
+
+        # ÚLTIMA escritura, y por eso es la que vale: si el proceso muere en
+        # cualquier punto anterior, la marca no está y la siguiente lectura
+        # vuelve a reconciliar. Escribirla antes convertiría una finalización
+        # a medias en una finalización "hecha".
+        await elections_collection().update_one(
+            {"id": election["id"]},
+            {"$set": {"finalized_at": datetime.now(timezone.utc)}},
         )
+
+        if not elected:
+            logger.info(
+                f"Election {election['id']} closed with no votes; no seats filled"
+            )
+        else:
+            logger.info(
+                f"Election {election['id']} reconciled: {len(elected)} seat(s), "
+                f"{removed.deleted_count} stale record(s) removed"
+            )
 
 
 governance_service = GovernanceService()

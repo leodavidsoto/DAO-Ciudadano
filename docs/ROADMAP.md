@@ -159,7 +159,7 @@ Objetivo: cerrar C-3, A-4, A-5, A-9 y M-10.
 | 3.7 | ✅ **Enrutado y montaje de la UI de gobernanza**: `/` (landing), `/unete` (onboarding) y `/dashboard/{propuestas,elecciones,delegacion,tesoreria}` | Las secciones de gobernanza son alcanzables |
 | 3.8 | ✅ **Completada** (02-08-2026). Rate limiter y antifraude sobre Redis | Ventana deslizante atómica en Lua, historial de votos y penalización progresiva compartidos. Ya no queda estado en memoria de proceso. Degradación a memoria **visible** en `/health/ready`. Verificado con `fakeredis[lua]`, **no** contra un Redis real |
 | 3.9 | ✅ **Hecho (julio 2026)** — el middleware usa `asyncio.sleep`; el event loop ya no se bloquea | Sin bloqueo del event loop bajo carga |
-| 3.10 | **Tally transaccional o derivado**: evitar que una caída entre insertar la papeleta y sumar el resultado produzca divergencia | El resultado siempre puede reconstruirse desde papeletas válidas |
+| 3.10 | ✅ **Completada** (04-08-2026). Los totales se derivan de las papeletas al leerlos, así que votar es UNA escritura de UN documento y no queda contador que pueda divergir. La finalización de elecciones se reconcilia por `upsert` hasta escribir su marca `finalized_at`, que es la última escritura: una caída antes de ella se repara en la siguiente lectura. `GET /governance/proposals/{id}/audit` y `/elections/{id}/audit` recomputan el resultado verificando cada firma EIP-712 y el peso contra sus delegantes, y declaran si coincide con lo publicado. | El resultado siempre puede reconstruirse desde papeletas válidas |
 
 ---
 
