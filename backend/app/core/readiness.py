@@ -124,16 +124,32 @@ def requirement_is_valid(key: str) -> bool:
     return True
 
 
+def _pii_key_is_usable() -> bool:
+    """Hay al menos una llave de PII válida, venga de donde venga.
+
+    Se comprueba contra `crypto.key_status()` y no solo contra
+    `PII_ENCRYPTION_KEY`: desde la rotación (1.3) las llaves pueden declararse
+    en `PII_ENCRYPTION_KEYS`, y un despliegue que solo use esa variable estaba
+    perfectamente configurado pero se reportaba como incompleto.
+    """
+    from . import crypto
+
+    return crypto.key_status()["usable"] > 0
+
+
 def missing_requirements() -> List[Requirement]:
     # Los requisitos `production_only` se omiten fuera de producción: el
     # fallback local sigue siendo útil para desarrollo, pero nunca debe hacer
     # que un despliegue de producción parezca configurado.
-    return [
-        req
-        for req in REQUIREMENTS
-        if (not req.production_only or settings.is_production)
-        and not requirement_is_valid(req.key)
-    ]
+    missing = []
+    for req in REQUIREMENTS:
+        if req.production_only and not settings.is_production:
+            continue
+        if req.key == "PII_ENCRYPTION_KEY" and _pii_key_is_usable():
+            continue
+        if not requirement_is_valid(req.key):
+            missing.append(req)
+    return missing
 
 
 def deployment_blockers() -> list[str]:
@@ -265,9 +281,24 @@ def feature_status() -> dict:
     real, no intención.
     """
     from ..services import chain_service, paymaster_service, treasury_service
+    from . import crypto, retention
 
     erc4337 = paymaster_service.status()
+    keys = crypto.key_status()
     return {
+        "pii_protection": {
+            # Huellas, nunca las llaves: este objeto va a /health/ready.
+            "keys_usable": keys["usable"],
+            "primary_key": keys["primary"],
+            "rotation_in_progress": keys["rotation_in_progress"],
+            "pepper_rotation_in_progress": bool(
+                settings.IDENTITY_PEPPER_PREVIOUS.strip()
+            ),
+            # Custodia: honestidad explícita. Las llaves viven en variables de
+            # entorno, no en un KMS; la rotación existe, la custodia no.
+            "key_custody": "environment",
+            "retention_policy": retention.describe(),
+        },
         "treasury": {
             # Configuración, no sonda: el health check no debe golpear el RPC
             # ni la API de precios en cada llamada.

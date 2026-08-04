@@ -994,3 +994,80 @@ como mitigación de rotación **tampoco existe todavía** en el backend.
 | **iOS: PACE** | ❌ no implementado; falta la librería eMRTD |
 
 Nada de esto acredita todavía una identidad civil: 4.2 sigue 🟡.
+
+---
+
+## Octava pasada (03-08-2026) — ciclo de vida de la PII (1.3, 1.4, 1.11)
+
+### 1.11 — unicidad por PERSONA, no solo por wallet
+
+`backend/app/core/database.py` — el índice único de `members.wallet_address`
+impedía dos membresías para la misma wallet, pero nada impedía que **la misma
+persona minteara con dos wallets distintas**. Desde D-2 el valor que identifica
+a una persona es el nullifier del circuito (se deriva de su secreto de
+identidad y del scope del contrato), así que se añade un índice único sobre
+`members.nullifier_hash`.
+
+Es **parcial** (`{"nullifier_hash": {"$type": "string"}}`), no `sparse`: las
+filas demo/legacy tienen `null` y varios `null` colisionarían en un índice
+único normal, impidiendo incluso crearlo. Comprobado quitando el índice: el
+test correspondiente falla.
+
+### 1.3 — la llave que no se podía rotar
+
+`backend/app/core/crypto.py` — había **una** `PII_ENCRYPTION_KEY`. Si se
+filtraba, la única salida era descifrar y volver a cifrar todo a mano con la
+aplicación parada; en la práctica, eso significa no rotarla nunca.
+
+Ahora `PII_ENCRYPTION_KEYS` acepta varias llaves (MultiFernet): se cifra con la
+primera y se descifra con cualquiera, así que publicar una llave nueva no
+invalida ni un registro. `scripts/pii_maintenance.py rotate-pii` los reescribe
+en caliente y `status` dice cuántos faltan antes de poder retirar la vieja.
+
+El pepper es peor que la llave y merece mención aparte: los índices ciegos
+(`rut_key`, `email_key`) son derivaciones determinísticas suyas, así que
+cambiarlo **deja a todo el mundo fuera de sesión al instante**.
+`IDENTITY_PEPPER_PREVIOUS` abre una ventana en la que las consultas prueban con
+ambos (`lookup_key_candidates`), cubierta por un test extremo a extremo que
+registra con un pepper y entra con el siguiente.
+
+**Lo que NO se hizo: KMS.** Las llaves siguen en variables de entorno; quien
+pueda leer el entorno del proceso puede leerlas. Lo resuelto es la *mecánica*
+de rotación, que era el bloqueo real para adoptar un KMS. `crypto._load_keys()`
+es el único punto que materializa llaves y es donde entraría. `/health/ready`
+lo declara con `"key_custody": "environment"` en vez de dejar creer que la
+custodia está resuelta.
+
+### 1.4 — política de retención declarada, y qué NO se borra
+
+`backend/app/core/retention.py` — cifrar responde a "si roban el volcado, ¿qué
+ven?", no a "¿por qué seguimos guardando esto?". La política vive ahora en un
+solo módulo, como datos auditables, y los índices TTL se derivan de ella en vez
+de estar repartidos a mano por `ensure_indexes`.
+
+Dos reglas que no conviene revertir sin pensarlo:
+
+- **Los registros de ciudadanos no se borran automáticamente.**
+  `INACTIVE_USER_RETENTION_DAYS` viene en 0. Eliminar el registro civil de una
+  persona es una decisión de gobernanza, no el efecto secundario de un TTL que
+  alguien configuró un martes. La regla existe y el script la ejecuta, pero hay
+  que activarla explícitamente.
+- **`ballot_nonces` y `mint_operations` no caducan.** Son justamente la memoria
+  de "esto ya pasó": purgarlos por antigüedad reabre la ventana de repetición
+  que cierran. Hay un test que lo fija.
+
+### La herramienta de migración está probada, no solo escrita
+
+La lógica vive en `app/services/pii_maintenance.py` y no dentro del script,
+para poder ejecutarla en los tests. Una herramienta que reescribe PII de
+ciudadanos y que nadie ejecutó nunca es exactamente lo que este repositorio no
+permite; el momento de descubrir que rota mal es antes de tocar producción.
+
+Todos los subcomandos van **en seco por defecto** y solo escriben con
+`--apply`. Cubierto por tests: que el modo seco no escribe, que la rotación
+alcanza los cuatro campos cifrados sin alterar el contenido, que la PII legacy
+en texto plano se cifra, que un documento ilegible **se reporta en vez de
+saltarse en silencio** (perder eso pierde datos para siempre) y que reindexar
+cierra una rotación de pepper.
+
+385 tests (362 antes).

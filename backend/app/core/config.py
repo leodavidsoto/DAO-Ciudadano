@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     # Llave Fernet para cifrar PII en reposo (app/core/crypto.py).
     # Generar con: python -c "from app.core.crypto import generate_key; print(generate_key())"
     PII_ENCRYPTION_KEY: str = os.environ.get('PII_ENCRYPTION_KEY', '')
+    # Rotación (ROADMAP 1.3/1.4): lista separada por comas, de la más NUEVA a
+    # la más vieja. Se cifra con la primera y se descifra con cualquiera, así
+    # que publicar una llave nueva no invalida lo ya guardado. Ver
+    # scripts/pii_maintenance.py para reescribir los registros pendientes.
+    PII_ENCRYPTION_KEYS: str = os.environ.get('PII_ENCRYPTION_KEYS', '')
+    # Pepper anterior durante una rotación de IDENTITY_PEPPER. Solo se usa
+    # para BUSCAR registros aún no reindexados; nunca para escribir. Retirar
+    # en cuanto `pii_maintenance.py status` reporte 0 pendientes.
+    IDENTITY_PEPPER_PREVIOUS: str = os.environ.get('IDENTITY_PEPPER_PREVIOUS', '')
 
     # Segundos de validez de una sesión de wallet (JWT emitido tras SIWE).
     SESSION_TOKEN_EXPIRE_SECONDS: int = int(os.environ.get('SESSION_TOKEN_EXPIRE_SECONDS', '3600'))
@@ -120,6 +129,19 @@ class Settings(BaseSettings):
     # Segundos de validez de un grant civil de un solo uso. Corto a propósito:
     # es la ventana en la que una verificación civil puede canjearse.
     IDENTITY_GRANT_TTL_SECONDS: int = int(os.environ.get('IDENTITY_GRANT_TTL_SECONDS', '300'))
+
+    # === Retención de datos (ROADMAP 1.4, app/core/retention.py) ===
+    # Días que se conserva el digest de un grant DESPUÉS de expirar, para
+    # poder investigar un canje anómalo. 0 = conservar indefinidamente.
+    IDENTITY_GRANT_RETENTION_DAYS: int = int(
+        os.environ.get('IDENTITY_GRANT_RETENTION_DAYS', '30')
+    )
+    # Borrado de registros de ciudadanos inactivos. 0 = DESACTIVADO, y es el
+    # valor correcto por defecto: eliminar el registro civil de una persona es
+    # una decisión de gobernanza, no un TTL que alguien configuró de paso.
+    INACTIVE_USER_RETENTION_DAYS: int = int(
+        os.environ.get('INACTIVE_USER_RETENTION_DAYS', '0')
+    )
 
     # === Transporte ERC-4337 (ADR-001, D-1) ===
     # Apagado por defecto: mientras no se decida la implementacion de cuenta

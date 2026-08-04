@@ -21,7 +21,7 @@ from ..core import readiness
 from ..core.config import settings
 from ..core.crypto import encrypt, decrypt
 from ..core.database import users_collection
-from ..core.identity import lookup_key
+from ..core.identity import lookup_key, lookup_key_candidates
 from ..core.security import generate_short_hash
 
 logger = logging.getLogger(__name__)
@@ -322,12 +322,21 @@ async def register_user(request: UserRegisterRequest):
         email_key = lookup_key(normalized_email, domain="email")
 
         # Check if RUT already registered (por índice ciego, no por el
-        # valor cifrado -- dos cifrados del mismo RUT no son iguales)
-        existing = await users_collection().find_one({"rut_key": rut_key})
+        # valor cifrado -- dos cifrados del mismo RUT no son iguales).
+        #
+        # Se buscan también las claves derivadas del pepper anterior: durante
+        # una rotación, mirar solo la vigente daría "no existe" para alguien ya
+        # registrado y crearía un duplicado que el índice único rechazaría con
+        # un error opaco.
+        existing = await users_collection().find_one(
+            {"rut_key": {"$in": lookup_key_candidates(formatted_rut, domain="rut")}}
+        )
         if existing:
             return UserResponse(ok=False, error="Este RUT ya está registrado")
 
-        existing_email = await users_collection().find_one({"email_key": email_key})
+        existing_email = await users_collection().find_one(
+            {"email_key": {"$in": lookup_key_candidates(normalized_email, domain="email")}}
+        )
         if existing_email:
             return UserResponse(ok=False, error="Este email ya está registrado")
 
@@ -378,12 +387,14 @@ async def login_user(request: UserLoginRequest):
 
         formatted_rut = format_rut(request.rut)
         normalized_email = request.email.lower()
-        rut_key = lookup_key(formatted_rut, domain="rut")
-        email_key = lookup_key(normalized_email, domain="email")
 
+        # `$in` con las claves del pepper vigente y del anterior: durante una
+        # rotación, un usuario aún no reindexado tiene que poder entrar. Fuera
+        # de una rotación la lista tiene un solo elemento y la consulta es la
+        # misma de siempre.
         user_doc = await users_collection().find_one({
-            "rut_key": rut_key,
-            "email_key": email_key,
+            "rut_key": {"$in": lookup_key_candidates(formatted_rut, domain="rut")},
+            "email_key": {"$in": lookup_key_candidates(normalized_email, domain="email")},
         })
 
         if not user_doc:
@@ -392,7 +403,9 @@ async def login_user(request: UserLoginRequest):
         if user_doc.get("status") != "active":
             return UserResponse(ok=False, error="Cuenta desactivada")
 
-        logger.info(f"User logged in (rut_key={rut_key[:8]}...)")
+        # Se registra la clave REAL del documento, no la recalculada: durante
+        # una rotación pueden diferir, y la útil para rastrear es la guardada.
+        logger.info(f"User logged in (rut_key={str(user_doc.get('rut_key'))[:8]}...)")
 
         try:
             nombre = decrypt(user_doc.get("nombre"))

@@ -60,6 +60,27 @@ class Database:
         try:
             await cls.get_db()["members"].create_index("wallet_address", unique=True)
             await cls.get_db()["members"].create_index("token_id", unique=True)
+            # ROADMAP 1.11 — unicidad por PERSONA, no solo por wallet.
+            #
+            # El índice de wallet_address impide dos membresías para la misma
+            # wallet, pero nada impedía que la misma persona minteara con dos
+            # wallets distintas. Desde D-2 el valor que identifica a una
+            # persona es el nullifier del circuito: se deriva del secreto de
+            # identidad y del scope del contrato, así que dos credenciales de
+            # la misma persona en el mismo scope producen el MISMO nullifier
+            # (y el contrato ya rechaza el segundo minteo por eso).
+            #
+            # Este índice replica esa regla en la base: sin él, un fallo de
+            # reconciliación podía dejar dos filas activas para una persona.
+            #
+            # Parcial y no `sparse`: las filas demo/legacy tienen
+            # nullifier_hash = None y varios `null` colisionarían en un índice
+            # único normal, impidiendo incluso crearlo.
+            await cls.get_db()["members"].create_index(
+                "nullifier_hash",
+                unique=True,
+                partialFilterExpression={"nullifier_hash": {"$type": "string"}},
+            )
             # Governance: the application-level "already voted" lookup gives
             # a friendly response, but only this compound unique index closes
             # the race between simultaneous requests from the same member.
@@ -84,9 +105,6 @@ class Database:
             await cls.get_db()["users"].create_index("email_key", unique=True)
             # Sesiones SIWE: nonce de un solo uso.
             await cls.get_db()["siwe_nonces"].create_index("nonce", unique=True)
-            await cls.get_db()["siwe_nonces"].create_index(
-                "created_at", expireAfterSeconds=600
-            )
             # Papeletas EIP-712: un nonce no se puede reutilizar por votante.
             await cls.get_db()["ballot_nonces"].create_index(
                 [("voter_address", 1), ("nonce", 1)], unique=True
@@ -128,6 +146,16 @@ class Database:
             await cls.get_db()["maci_messages"].create_index(
                 [("poll_id", 1), ("idempotency_key", 1)], unique=True, sparse=True
             )
+            # Retención (ROADMAP 1.4): los TTL salen de la política declarada
+            # en app/core/retention.py, no de números repartidos por aquí. Si
+            # alguien cambia la política, el índice cambia con ella.
+            from . import retention
+
+            for rule in retention.automatic_rules():
+                await cls.get_db()[rule.collection].create_index(
+                    rule.field, expireAfterSeconds=rule.ttl_seconds
+                )
+
             cls.indexes_ready = True
         except Exception as e:
             # A pre-existing duplicate in the collection blocks unique index
