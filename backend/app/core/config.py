@@ -99,6 +99,14 @@ class Settings(BaseSettings):
     # RPC propio de la tesorería. Vacío = se reutiliza SEPOLIA_RPC_URL. Se
     # separa porque el Safe puede vivir en otra red que el contrato del SBT.
     TREASURY_RPC_URL: str = os.environ.get('TREASURY_RPC_URL', '')
+    # Tokens ERC-20 del Safe que se consultan, por dirección de contrato y
+    # separados por comas. Vacío = solo se lee el ETH nativo, y la respuesta
+    # lo declara en `assets_covered` para que el total no parezca completo.
+    # Los decimales y el símbolo se leen de la cadena, nunca se suponen.
+    TREASURY_TOKENS: str = os.environ.get('TREASURY_TOKENS', '')
+    # Tope de tokens consultados por foto: cada uno son 3 llamadas al RPC y el
+    # endpoint es público. Una lista larga lo convertiría en un amplificador.
+    TREASURY_MAX_TOKENS: int = int(os.environ.get('TREASURY_MAX_TOKENS', '20'))
     # El endpoint es público: sin caché, refrescar el dashboard en bucle
     # convierte a cualquier visitante en un amplificador contra el RPC.
     TREASURY_CACHE_TTL_SECONDS: int = int(

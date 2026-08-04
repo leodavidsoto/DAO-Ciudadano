@@ -145,8 +145,8 @@ Objetivo: cerrar C-3, A-4, A-5, A-9 y M-10.
 > despliegue sigue en `mongo` hasta que el contrato tenga membresías reales
 > (`totalSupply()` = 0), con cuarentena demo/legacy en producción. Votar en
 > producción exige `SIGNED_BALLOTS_REQUIRED=true` en ambos módulos; si no, 503.
-> **Pendiente de la fase: los balances ERC-20 de 3.6.** El balance nativo, su
-> precio y el recuento dinámico (3.10) ya están.
+> **Fase 3 completa** salvo lo que depende de terceros. Balance nativo y ERC-20,
+> precios reales, recuento dinámico (3.10) y antifraude verificado.
 
 | # | Tarea | Criterio de aceptación |
 |---|---|---|
@@ -155,7 +155,7 @@ Objetivo: cerrar C-3, A-4, A-5, A-9 y M-10.
 | 3.3 | ✅ **Completada** (02-08-2026). Nonce único compartido por propuestas y elecciones sobre el mismo índice | Reenviar un voto firmado da 409 |
 | 3.4 | ✅ **Completada** (03-08-2026). `check_rapid_voting` se llama desde propuestas y elecciones y falla cerrado sin almacén. `check_delegation_chain` **ya no existe**: se eliminó en 3.8 porque duplicaba el grafo de MongoDB, y su única heurística propia (profundidad máxima) vive en `delegation_block_reason`, que ahora distingue ciclo de cadena profunda en vez de llamar "circular" a ambos. Cubierto por `tests/test_antifraud.py` (9 tests por HTTP). | Los tests de patrones sospechosos pasan |
 | 3.5 | ✅ **Completada** (03-08-2026). El peso aplicado sale de `contest_vote_weight`, que descuenta a los delegantes que ya votaron por su cuenta en esa consulta, y la papeleta persiste `delegators` para que el peso sea recomputable. Cierra el doble conteo P-61 en sus dos órdenes. | Delegar cambia el resultado de forma medible |
-| 3.6 | 🟡 **Balance y precio reales** (03-08-2026). `treasury_service.py` lee el balance nativo del Safe con `eth_getBalance` (`TREASURY_SAFE_ADDRESS`) y el precio de ETH de CoinGecko o Binance (`ETH_PRICE_PROVIDER`), ambos cacheados. Fuera de mainnet el valor en USD es `null` a propósito. **Falta:** balances ERC-20 — la respuesta declara `assets_covered: ["ETH"]` para no dar el total por completo. | Ningún número de tesorería es una constante en el código |
+| 3.6 | ✅ **Completada** (04-08-2026). `treasury_service.py` lee el balance nativo del Safe y los ERC-20 declarados en `TREASURY_TOKENS` (decimales y símbolo leídos de la cadena, nunca supuestos), con precios de CoinGecko por contrato. Verificado contra mainnet: ETH + USDC + DAI consolidados en un total real. Fuera de mainnet el USD es `null`; un activo con saldo y sin precio anula el total en vez de sumar parcial; un token ilegible deja `balances: null` en vez de publicar cero. | Ningún número de tesorería es una constante en el código |
 | 3.7 | ✅ **Enrutado y montaje de la UI de gobernanza**: `/` (landing), `/unete` (onboarding) y `/dashboard/{propuestas,elecciones,delegacion,tesoreria}` | Las secciones de gobernanza son alcanzables |
 | 3.8 | ✅ **Completada** (02-08-2026). Rate limiter y antifraude sobre Redis | Ventana deslizante atómica en Lua, historial de votos y penalización progresiva compartidos. Ya no queda estado en memoria de proceso. Degradación a memoria **visible** en `/health/ready`. Verificado con `fakeredis[lua]`, **no** contra un Redis real |
 | 3.9 | ✅ **Hecho (julio 2026)** — el middleware usa `asyncio.sleep`; el event loop ya no se bloquea | Sin bloqueo del event loop bajo carga |

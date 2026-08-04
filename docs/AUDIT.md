@@ -1132,3 +1132,69 @@ producción se sirve sin token con un aviso en los logs.
   100% de las transacciones es caro y ruidoso.
 
 391 tests (385 antes).
+
+---
+
+## Décima pasada (04-08-2026) — balances ERC-20 de la tesorería (3.6b)
+
+Cierra el hueco declarado en la sexta pasada: `assets_covered` ya no dice
+`["ETH"]` mientras el Safe puede tener la mitad del patrimonio en tokens.
+
+### Lo que se lee y lo que no
+
+Se consultan el ETH nativo y **solo** los ERC-20 declarados en
+`TREASURY_TOKENS`. `assets_covered` enumera exactamente eso: si el Safe tiene
+otro token que nadie configuró, no aparece y el total no lo incluye. No se
+descubren tokens automáticamente — hacerlo exigiría indexar transferencias y
+abriría la puerta a que cualquiera "regale" un token de humo al Safe para
+inflar la cifra que ve el ciudadano.
+
+`decimals()` y `symbol()` se leen de la cadena, nunca se suponen: USDC tiene 6
+decimales y asumir 18 mostraría el saldo un billón de veces menor. Si un token
+antiguo devuelve `symbol()` como bytes32 y la llamada falla, el saldo se
+conserva y la etiqueta pasa a derivarse de la dirección con
+`symbol_source: "address"`, para que quede claro que es una etiqueta nuestra y
+no lo que declara el contrato.
+
+### Un activo sin precio no vale cero
+
+Es la decisión de diseño de esta entrega. Si algún activo **con saldo** no
+tiene precio conocido, `total_usd_value` es `null` con
+`total_usd_unavailable_reason`, en vez de sumar solo lo que sí tiene precio y
+llamarlo total. Un total parcial presentado como total hace parecer la
+tesorería más pequeña de lo que es, que es la misma clase de mentira que
+inflarla. Un saldo cero sin precio no anula nada: aporta cero valga lo que
+valga.
+
+### P-68 (media, corregida antes de commitear): CoinGecko admite un contrato por petición
+
+La primera implementación agrupaba las direcciones en una sola llamada
+(`contract_addresses=a,b`). Contra mainnet devuelve **400 con
+`error_code 10012`**: el plan gratuito permite una única dirección por
+petición. Se descubrió ejecutando contra la red real, no leyendo la
+documentación; con dobles de test habría pasado inadvertido y el panel habría
+mostrado el total en `null` para siempre sin motivo aparente.
+
+Ahora se consulta un token por petición, un fallo individual no arrastra a los
+demás y solo se recurre a la caché obsoleta si fallan todos.
+
+### Verificación contra la cadena real
+
+Sobre una dirección pública de mainnet, con USDC y DAI reales:
+
+| Activo | Saldo leído | Decimales | Precio | Valor |
+|---|---|---|---|---|
+| ETH | 6,632333 | 18 | 1862,36 | 12 351,79 |
+| USDC | 37,192124 | 6 | 0,99953 | 37,17 |
+| DAI | 4,572078 | 18 | 0,999878 | 4,57 |
+| **Total** | | | | **12 393,54 USD** |
+
+Los decimales distintos (6 y 18) confirman que se leen de cada contrato.
+
+Cubierto además por 11 tests nuevos: total consolidado, activo sin precio que
+anula el total, saldo cero que no lo anula, token ilegible que deja
+`balances: null` en vez de cero, decimales absurdos rechazados, token sin
+símbolo, tokens de testnet sin precio, dirección inválida y exceso de tokens
+como error de configuración visible en `/health/ready`.
+
+402 tests (391 antes).

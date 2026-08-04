@@ -31,11 +31,47 @@ def _clean_caches():
     treasury_service.clear_caches()
 
 
-def _configure(monkeypatch, chain_id=MAINNET, wei=None, code=b"\x60\x60", fail=False):
-    """Sustituye la cadena por un doble y devuelve el balance esperado."""
+def _configure(monkeypatch, chain_id=MAINNET, wei=None, code=b"\x60\x60", fail=False,
+               tokens=None, token_fails=False):
+    """Sustituye la cadena por un doble y devuelve el balance esperado.
+
+    `tokens` es {direccion: (symbol, decimals, raw_balance)}; se declara
+    además en TREASURY_TOKENS para que el servicio los consulte.
+    """
     monkeypatch.setattr(settings, "TREASURY_SAFE_ADDRESS", SAFE)
     monkeypatch.setattr(settings, "TREASURY_RPC_URL", "https://rpc.example/treasury")
+    monkeypatch.setattr(settings, "TREASURY_TOKENS", ",".join(tokens or {}))
     wei = 2_500_000_000_000_000_000 if wei is None else wei  # 2.5 ETH
+
+    class _Call:
+        def __init__(self, value):
+            self._value = value
+
+        def call(self):
+            if token_fails:
+                raise ConnectionError("el nodo no respondió a la llamada del token")
+            if isinstance(self._value, Exception):
+                raise self._value
+            return self._value
+
+    class _TokenFunctions:
+        def __init__(self, symbol, decimals, balance):
+            self._symbol = symbol
+            self._decimals = decimals
+            self._balance = balance
+
+        def balanceOf(self, holder):
+            return _Call(self._balance)
+
+        def decimals(self):
+            return _Call(self._decimals)
+
+        def symbol(self):
+            return _Call(self._symbol)
+
+    class _Contract:
+        def __init__(self, functions):
+            self.functions = functions
 
     class _Eth:
         chain_id = None
@@ -45,6 +81,10 @@ def _configure(monkeypatch, chain_id=MAINNET, wei=None, code=b"\x60\x60", fail=F
 
         def get_code(self, address):
             return code
+
+        def contract(self, address=None, abi=None):
+            symbol, decimals, balance = (tokens or {})[address.lower()]
+            return _Contract(_TokenFunctions(symbol, decimals, balance))
 
     class _Web3Double:
         def __init__(self):
@@ -326,3 +366,159 @@ async def test_mixed_currencies_do_not_get_an_invented_conversion(client, monkey
 
     assert analytics["runway_months"] is None
     assert "USDC" in analytics["runway_unavailable_reason"]
+
+
+# === Balances ERC-20 (ROADMAP 3.6b) ===
+
+USDC = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+DAI = "0x6b175474e89094c44da98b954eedeac495271d0f"
+
+
+def _token_prices(monkeypatch, **by_address):
+    """Sustituye la consulta de precios por contrato."""
+    monkeypatch.setattr(
+        treasury_service,
+        "_fetch_token_prices_usd",
+        lambda addresses: {
+            a.lower(): Decimal(str(p)) for a, p in by_address.items()
+        },
+    )
+
+
+async def test_token_balances_are_read_with_their_real_decimals(client, monkeypatch):
+    """USDC tiene 6 decimales: suponer 18 mostraría un billón de veces menos."""
+    _configure(monkeypatch, tokens={USDC: ("USDC", 6, 1_500_000_000)})  # 1.500 USDC
+    _price(monkeypatch, "2000")
+    _token_prices(monkeypatch, **{USDC: "1.0"})
+
+    body = (await client.get("/api/governance/treasury")).json()
+
+    assert body["balances"]["USDC"] == 1500.0
+    assert body["assets_covered"] == ["ETH", "USDC"]
+    usdc = next(a for a in body["assets"] if a["symbol"] == "USDC")
+    assert usdc["decimals"] == 6
+    assert usdc["address"] == USDC
+
+
+async def test_the_usd_total_consolidates_every_priced_asset(client, monkeypatch):
+    expected_eth = _configure(monkeypatch, tokens={USDC: ("USDC", 6, 1_000_000_000)})
+    _price(monkeypatch, "2000")
+    _token_prices(monkeypatch, **{USDC: "1.0"})
+
+    body = (await client.get("/api/governance/treasury")).json()
+
+    # 2,5 ETH x 2000 + 1000 USDC x 1
+    assert body["total_usd_value"] == pytest.approx(float(expected_eth) * 2000 + 1000)
+    assert body["total_usd_unavailable_reason"] is None
+    # total_eth_value sigue siendo el ETH nativo, no el patrimonio convertido.
+    assert body["total_eth_value"] == float(expected_eth)
+
+
+async def test_an_unpriced_token_voids_the_total_instead_of_counting_zero(
+    client, monkeypatch
+):
+    """El fallo tentador: sumar solo lo que tiene precio y llamarlo total."""
+    _configure(monkeypatch, tokens={DAI: ("DAI", 18, 500 * 10**18)})
+    _price(monkeypatch, "2000")
+    _token_prices(monkeypatch)  # ningún precio para DAI
+
+    body = (await client.get("/api/governance/treasury")).json()
+
+    assert body["balances"]["DAI"] == 500.0  # el saldo sí se conoce
+    assert body["total_usd_value"] is None
+    assert "DAI" in body["total_usd_unavailable_reason"]
+
+
+async def test_an_unpriced_token_with_zero_balance_does_not_void_the_total(
+    client, monkeypatch
+):
+    """Un saldo cero aporta cero valga lo que valga: no debe anular el total."""
+    expected_eth = _configure(monkeypatch, tokens={DAI: ("DAI", 18, 0)})
+    _price(monkeypatch, "2000")
+    _token_prices(monkeypatch)
+
+    body = (await client.get("/api/governance/treasury")).json()
+
+    assert body["balances"]["DAI"] == 0.0
+    assert body["total_usd_value"] == pytest.approx(float(expected_eth) * 2000)
+
+
+async def test_a_failing_token_read_is_not_a_zero_balance(client, monkeypatch):
+    """Todo o nada: un token ilegible no puede publicarse como saldo cero."""
+    _configure(monkeypatch, tokens={USDC: ("USDC", 6, 1_000_000)}, token_fails=True)
+    _price(monkeypatch, "2000")
+
+    body = (await client.get("/api/governance/treasury")).json()
+
+    assert body["configured"] is True
+    assert body["balances"] is None  # tampoco se publica el ETH suelto
+    assert body["total_usd_value"] is None
+    assert USDC in body["error"].lower()
+
+
+async def test_absurd_token_decimals_are_rejected(client, monkeypatch):
+    """Un contrato que declara 200 decimales no da un saldo, da un disparate."""
+    _configure(monkeypatch, tokens={USDC: ("USDC", 200, 1_000_000)})
+    _price(monkeypatch, "2000")
+
+    body = (await client.get("/api/governance/treasury")).json()
+
+    assert body["balances"] is None
+    assert "decimales" in body["error"]
+
+
+async def test_a_token_without_symbol_is_labelled_by_address(client, monkeypatch):
+    """Algunos tokens antiguos devuelven symbol() como bytes32 y la llamada
+    falla. Eso no invalida el saldo, pero la etiqueta es nuestra, no suya."""
+    _configure(monkeypatch, tokens={USDC: (ValueError("bytes32"), 6, 2_000_000)})
+    _price(monkeypatch, "2000")
+    _token_prices(monkeypatch, **{USDC: "1.0"})
+
+    body = (await client.get("/api/governance/treasury")).json()
+
+    asset = next(a for a in body["assets"] if a["address"] == USDC)
+    assert asset["symbol_source"] == "address"
+    assert asset["amount"] == 2.0
+
+
+async def test_testnet_tokens_are_never_priced(client, monkeypatch):
+    _configure(monkeypatch, chain_id=SEPOLIA, tokens={USDC: ("USDC", 6, 1_000_000)})
+    _price(monkeypatch, "2000")
+    _token_prices(monkeypatch, **{USDC: "1.0"})
+
+    body = (await client.get("/api/governance/treasury")).json()
+
+    assert body["balances"]["USDC"] == 1.0
+    assert body["total_usd_value"] is None
+
+
+async def test_an_invalid_token_address_is_a_configuration_error(client, monkeypatch):
+    _configure(monkeypatch)
+    monkeypatch.setattr(settings, "TREASURY_TOKENS", "0xno-es-una-direccion")
+
+    body = (await client.get("/api/governance/treasury")).json()
+
+    assert body["configured"] is False
+    assert "TREASURY_TOKENS" in body["error"]
+
+
+async def test_too_many_tokens_are_refused(client, monkeypatch):
+    """El endpoint es público: cada token son tres llamadas al RPC."""
+    _configure(monkeypatch)
+    monkeypatch.setattr(settings, "TREASURY_MAX_TOKENS", 2)
+    monkeypatch.setattr(
+        settings, "TREASURY_TOKENS", ",".join([USDC, DAI, "0x" + "11" * 20])
+    )
+
+    body = (await client.get("/api/governance/treasury")).json()
+
+    assert body["configured"] is False
+    assert "máximo" in body["error"]
+
+
+def test_binance_does_not_price_tokens_by_symbol(monkeypatch):
+    """Dos tokens distintos pueden llamarse igual: emparejar por símbolo
+    falsearía el patrimonio, así que con Binance quedan sin precio."""
+    monkeypatch.setattr(settings, "ETH_PRICE_PROVIDER", "binance")
+
+    assert treasury_service.token_prices_usd([USDC], MAINNET) == {}

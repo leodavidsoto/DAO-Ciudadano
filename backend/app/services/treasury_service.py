@@ -19,10 +19,16 @@ Tres reglas que este módulo no rompe
 2. **Un fallo de lectura no es un balance de cero.** Si el RPC no responde, la
    respuesta dice que no se pudo leer; nunca devuelve 0.
 
-3. **Solo se reporta lo que se sabe.** Este servicio lee ETH nativo. Los
-   tokens ERC-20 que pueda tener el Safe NO se leen todavía, y por eso la
-   respuesta declara `assets_covered: ["ETH"]` en vez de dejar creer que el
-   total incluye todo lo que hay dentro.
+3. **Solo se reporta lo que se consultó.** Se lee el ETH nativo y los ERC-20
+   declarados en `TREASURY_TOKENS` — ni uno más. `assets_covered` enumera
+   exactamente eso: si el Safe tiene otro token que nadie configuró, no
+   aparece y el total no lo incluye. Los decimales y el símbolo se leen de la
+   cadena; suponer 18 decimales mostraría el saldo de USDC un billón de veces
+   mal.
+
+4. **Un activo sin precio no vale cero.** Si algún activo con saldo no tiene
+   precio conocido, `total_usd_value` es `null` con motivo, en vez de publicar
+   una suma parcial que haría parecer la tesorería más pequeña de lo que es.
 
 Las llamadas son bloqueantes (web3 y requests son síncronos): los llamadores
 las ejecutan con `asyncio.to_thread`.
@@ -48,6 +54,32 @@ WEI_PER_ETH = Decimal(10) ** 18
 # no publicar precio a publicar uno absurdo multiplicado por el balance.
 MIN_PLAUSIBLE_ETH_USD = Decimal("1")
 MAX_PLAUSIBLE_ETH_USD = Decimal("1000000")
+
+# ABI mínima: solo lo que se consulta. No se usa la ABI completa de ERC-20
+# para que quede explícito que este servicio LEE y nunca transfiere nada.
+_ERC20_ABI = [
+    {
+        "inputs": [{"name": "account", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [{"name": "", "type": "uint8"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [{"name": "", "type": "string"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
 
 _PRICE_PROVIDERS = {
     "coingecko": (
@@ -97,6 +129,21 @@ def configuration_errors() -> dict[str, str]:
     elif settings.is_production and parsed.scheme != "https":
         errors["TREASURY_RPC_URL"] = "debe usar HTTPS en producción"
 
+    # Los tokens se validan aquí y no solo al leer: una dirección con un typo
+    # debe verse en /health/ready, no descubrirse cuando el panel deje de
+    # mostrar la tesorería.
+    declared = [t.strip() for t in settings.TREASURY_TOKENS.split(",") if t.strip()]
+    invalid = [t for t in declared if not Web3.is_address(t)]
+    if invalid:
+        errors["TREASURY_TOKENS"] = (
+            "contiene direcciones inválidas: " + ", ".join(invalid[:3])
+        )
+    elif len(declared) > max(0, settings.TREASURY_MAX_TOKENS):
+        errors["TREASURY_TOKENS"] = (
+            f"declara {len(declared)} tokens y el máximo es "
+            f"{settings.TREASURY_MAX_TOKENS}"
+        )
+
     return errors
 
 
@@ -133,6 +180,8 @@ def read_balance() -> dict:
             "No se pudo consultar el balance on-chain de la tesorería."
         ) from exc
 
+    tokens = read_token_balances(w3, address)
+
     return {
         "eth": Decimal(wei) / WEI_PER_ETH,
         "wei": wei,
@@ -142,7 +191,97 @@ def read_balance() -> dict:
         # tesorería puede empezar en una EOA mientras se despliega el Safe;
         # lo que no se puede es callarlo.
         "is_contract": has_code,
+        "tokens": tokens,
     }
+
+
+def token_addresses() -> list[str]:
+    """Direcciones ERC-20 configuradas, validadas y sin repetir.
+
+    Una dirección inválida NO se ignora en silencio: eso publicaría un total
+    al que le falta un activo sin que nadie se entere. Se rechaza la foto
+    entera para que el operador lo arregle.
+    """
+    from web3 import Web3
+
+    raw = [t.strip() for t in settings.TREASURY_TOKENS.split(",") if t.strip()]
+    seen: list[str] = []
+    for candidate in raw:
+        if not Web3.is_address(candidate):
+            raise TreasuryUnavailable(
+                f"TREASURY_TOKENS contiene una dirección inválida: {candidate}"
+            )
+        checksummed = Web3.to_checksum_address(candidate)
+        if checksummed not in seen:
+            seen.append(checksummed)
+
+    limit = max(0, settings.TREASURY_MAX_TOKENS)
+    if len(seen) > limit:
+        raise TreasuryUnavailable(
+            f"TREASURY_TOKENS declara {len(seen)} tokens y el máximo es {limit}. "
+            "Cada token son tres llamadas al RPC en un endpoint público."
+        )
+    return seen
+
+
+def read_token_balances(w3, holder: str) -> list[dict]:
+    """Balance de cada ERC-20 configurado. Bloqueante.
+
+    Todo o nada: si UN token no se puede leer, se lanza `TreasuryUnavailable`
+    y la respuesta entera queda sin balances. Devolver los que sí se leyeron
+    daría un total silenciosamente incompleto, que es peor que no dar ninguno.
+
+    `decimals()` se lee de la cadena y jamás se supone 18: USDC tiene 6, y
+    asumir 18 mostraría un saldo un billón de veces menor.
+    """
+    addresses = token_addresses()
+    if not addresses:
+        return []
+
+    balances = []
+    for address in addresses:
+        try:
+            contract = w3.eth.contract(address=address, abi=_ERC20_ABI)
+            raw_balance = int(contract.functions.balanceOf(holder).call())
+            decimals = int(contract.functions.decimals().call())
+        except Exception as exc:
+            logger.error(
+                "No se pudo leer el token %s (%s)", address, type(exc).__name__
+            )
+            raise TreasuryUnavailable(
+                f"No se pudo consultar el balance del token {address}."
+            ) from exc
+
+        if not 0 <= decimals <= 36:
+            raise TreasuryUnavailable(
+                f"El token {address} declara {decimals} decimales, fuera de rango."
+            )
+
+        # `symbol()` es opcional en la práctica: algunos tokens antiguos lo
+        # devuelven como bytes32 y la llamada falla. No es motivo para tirar la
+        # lectura del saldo, que es el dato que importa; se etiqueta con la
+        # dirección abreviada y se deja constancia de que es una etiqueta
+        # nuestra y no lo que declara el contrato.
+        try:
+            symbol = str(contract.functions.symbol().call()).strip()
+            symbol_source = "contract"
+        except Exception:
+            symbol = ""
+            symbol_source = "address"
+        if not symbol:
+            symbol = f"{address[:6]}…{address[-4:]}"
+            symbol_source = "address"
+
+        balances.append({
+            "address": address,
+            "symbol": symbol,
+            "symbol_source": symbol_source,
+            "decimals": decimals,
+            "raw": raw_balance,
+            "amount": Decimal(raw_balance) / (Decimal(10) ** decimals),
+        })
+
+    return balances
 
 
 def _fetch_price_usd() -> Decimal:
@@ -208,6 +347,140 @@ class _PriceCache:
 _price_cache = _PriceCache()
 
 
+class _TokenPriceCache:
+    """Último precio conocido por dirección de token."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict = {}
+
+    def get(self, address: str):
+        with self._lock:
+            return self._entries.get(address.lower())
+
+    def set(self, address: str, price: Decimal) -> None:
+        with self._lock:
+            self._entries[address.lower()] = (price, time.time())
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_token_price_cache = _TokenPriceCache()
+
+COINGECKO_TOKEN_PRICE_URL = (
+    "https://api.coingecko.com/api/v3/simple/token_price/ethereum"
+)
+
+
+def _fetch_token_prices_usd(addresses: list[str]) -> dict:
+    """Precios USD por contrato. Una petición POR TOKEN.
+
+    El plan gratuito de CoinGecko admite **una sola dirección por petición**:
+    agrupar varias devuelve 400 (`error_code 10012`). Se descubrió probando
+    contra mainnet, no leyendo la documentación.
+
+    Un token que falle no arrastra a los demás: queda sin precio, y el total
+    consolidado ya sabe qué hacer con eso. Solo se propaga la excepción si
+    fallan TODOS, para que el llamador pueda recurrir a la caché obsoleta.
+
+    Solo CoinGecko: su endpoint indexa por dirección de contrato de mainnet.
+    Binance publica pares de su propio mercado, no precios por contrato, así
+    que con ese proveedor los tokens quedan sin precio en vez de emparejarlos
+    por símbolo — dos tokens distintos pueden llamarse igual, y confundirlos
+    falsearía el patrimonio.
+    """
+    import requests
+
+    prices: dict = {}
+    failures = 0
+    for address in addresses:
+        try:
+            response = requests.get(
+                COINGECKO_TOKEN_PRICE_URL,
+                params={"contract_addresses": address, "vs_currencies": "usd"},
+                timeout=5,
+                headers={"Accept": "application/json"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            logger.warning(
+                "Sin precio para el token %s (%s)", address, type(exc).__name__
+            )
+            failures += 1
+            continue
+
+        for key, quote in (payload or {}).items():
+            raw = (quote or {}).get("usd")
+            if raw is None:
+                continue
+            price = Decimal(str(raw))
+            # Misma cota de cordura que el ETH: un feed roto no debe
+            # multiplicar un saldo por un número cualquiera.
+            if price <= 0 or price > MAX_PLAUSIBLE_ETH_USD:
+                continue
+            prices[key.lower()] = price
+
+    if failures and not prices:
+        raise RuntimeError("ningún precio de token pudo obtenerse")
+    return prices
+
+
+def token_prices_usd(addresses: list[str], chain_id: Optional[int]) -> dict:
+    """Precios por token. Nunca lanza: lo que no tenga precio, no lo tiene.
+
+    Devuelve `{direccion_minuscula: Decimal}`. Un token ausente del resultado
+    es un token sin precio conocido, y el total consolidado lo tratará como
+    tal en vez de contarlo como cero.
+    """
+    if not addresses:
+        return {}
+
+    provider = (settings.ETH_PRICE_PROVIDER or "coingecko").strip().lower()
+    if provider != "coingecko":
+        return {}
+    if chain_id != MAINNET_CHAIN_ID:
+        # Mismo motivo que con el ETH nativo: un token de testnet no tiene
+        # precio de mercado, y su dirección ni siquiera existe en mainnet.
+        return {}
+
+    ttl = max(0, settings.ETH_PRICE_CACHE_TTL_SECONDS)
+    now = time.time()
+    resolved: dict = {}
+    missing: list[str] = []
+    for address in addresses:
+        entry = _token_price_cache.get(address)
+        if entry and now - entry[1] < ttl:
+            resolved[address.lower()] = entry[0]
+        else:
+            missing.append(address)
+
+    if not missing:
+        return resolved
+
+    try:
+        fetched = _fetch_token_prices_usd(missing)
+    except Exception as exc:
+        logger.warning(
+            "No se pudieron obtener precios de tokens (%s)", type(exc).__name__
+        )
+        # Degradación marcada, igual que con el ETH: se sirve lo último
+        # conocido dentro de la ventana de obsolescencia admitida.
+        stale_window = max(0, settings.ETH_PRICE_STALE_MAX_SECONDS)
+        for address in missing:
+            entry = _token_price_cache.get(address)
+            if entry and now - entry[1] < stale_window:
+                resolved[address.lower()] = entry[0]
+        return resolved
+
+    for address, price in fetched.items():
+        _token_price_cache.set(address, price)
+        resolved[address] = price
+    return resolved
+
+
 def eth_price_usd(chain_id: Optional[int] = None) -> PriceQuote:
     """Precio de ETH en USD. Bloqueante. Nunca lanza: informa por qué falta.
 
@@ -268,7 +541,11 @@ def build_snapshot() -> dict:
             "balances": None,
             "total_eth_value": None,
             "total_usd_value": None,
-            "assets_covered": ["ETH"],
+            "total_usd_unavailable_reason": None,
+            # No se consultó nada, así que no se cubrió nada. Decir ["ETH"]
+            # aquí insinuaría una lectura que no ocurrió.
+            "assets_covered": [],
+            "assets": [],
             "source": None,
             "price": None,
             "as_of": datetime.now(timezone.utc).isoformat(),
@@ -286,7 +563,9 @@ def build_snapshot() -> dict:
             "balances": None,
             "total_eth_value": None,
             "total_usd_value": None,
-            "assets_covered": ["ETH"],
+            "total_usd_unavailable_reason": None,
+            "assets_covered": [],
+            "assets": [],
             "source": {
                 "safe_address": settings.TREASURY_SAFE_ADDRESS.strip().lower(),
                 "chain_id": None,
@@ -299,16 +578,71 @@ def build_snapshot() -> dict:
 
     quote = eth_price_usd(balance["chain_id"])
     eth_amount = balance["eth"]
-    total_usd = float(eth_amount * quote.usd) if quote.usd is not None else None
+    tokens = balance["tokens"]
+    prices = token_prices_usd([t["address"] for t in tokens], balance["chain_id"])
+
+    # Un activo cuenta para el total solo si tiene precio. Los que no lo
+    # tienen no valen cero: valen "no lo sabemos", y esa diferencia decide si
+    # el total consolidado se puede publicar.
+    assets = [{
+        "symbol": "ETH",
+        "address": None,
+        "decimals": 18,
+        "amount": float(eth_amount),
+        "usd_price": float(quote.usd) if quote.usd is not None else None,
+        "usd_value": float(eth_amount * quote.usd) if quote.usd is not None else None,
+    }]
+    for token in tokens:
+        price = prices.get(token["address"].lower())
+        assets.append({
+            "symbol": token["symbol"],
+            "symbol_source": token["symbol_source"],
+            "address": token["address"].lower(),
+            "decimals": token["decimals"],
+            "amount": float(token["amount"]),
+            "usd_price": float(price) if price is not None else None,
+            "usd_value": float(token["amount"] * price) if price is not None else None,
+        })
+
+    # Solo estorba para el total un activo SIN precio y CON saldo: si el saldo
+    # es cero, aporta cero valor lo valga lo que valga.
+    unpriced = [
+        a["symbol"] for a in assets
+        if a["usd_price"] is None and a["amount"] > 0
+    ]
+    if unpriced:
+        total_usd = None
+        total_usd_reason = (
+            "no hay precio para " + ", ".join(unpriced)
+            + "; publicar un total que los ignora daría una tesorería más "
+            "pequeña de lo que es"
+        )
+    else:
+        total_usd = float(sum(Decimal(str(a["usd_value"] or 0)) for a in assets))
+        total_usd_reason = None
+
+    balances = {"ETH": float(eth_amount)}
+    for token in tokens:
+        symbol = token["symbol"]
+        # Dos tokens pueden declarar el mismo símbolo. Machacar la clave
+        # perdería un saldo en silencio, así que se desambigua.
+        if symbol in balances:
+            symbol = f"{symbol} ({token['address'][:6]}…)"
+        balances[symbol] = float(token["amount"])
 
     return {
         "configured": True,
-        "balances": {"ETH": float(eth_amount)},
+        "balances": balances,
+        # Sigue siendo el ETH NATIVO, no el patrimonio convertido a ETH: es lo
+        # que el panel muestra junto al total en dólares.
         "total_eth_value": float(eth_amount),
         "total_usd_value": total_usd,
-        # Declarar el alcance evita que el total se lea como "todo lo que hay
-        # en el Safe": los ERC-20 todavía no se consultan (ROADMAP 3.6b).
-        "assets_covered": ["ETH"],
+        "total_usd_unavailable_reason": total_usd_reason,
+        # Exactamente lo que se consultó, ni más ni menos: si el Safe tuviera
+        # otro token no declarado en TREASURY_TOKENS, no está aquí y el total
+        # no lo incluye.
+        "assets_covered": list(balances),
+        "assets": assets,
         "source": {
             "safe_address": balance["safe_address"].lower(),
             "chain_id": balance["chain_id"],
