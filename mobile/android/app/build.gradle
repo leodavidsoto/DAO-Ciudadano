@@ -1,4 +1,10 @@
 apply plugin: "com.android.application"
+// SIN este plugin, los .kt de la app NO se compilan y el APK sale sin
+// MainActivity, MainApplication ni PassportReaderModule. Gradle no avisa: la
+// build pasa en verde y la app muere al arrancar con
+// ClassNotFoundException: com.daociudadanaapp.MainApplication.
+// Quitarlo fue la causa de que el APK instalado se cerrara solo.
+apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
 /**
