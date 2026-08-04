@@ -129,7 +129,7 @@ jobs:
       - name: Install pinned toolchain
         run: |
           npm ci
-          sdkmanager \
+          ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager \
             'platforms;android-36' \
             'build-tools;36.0.0' \
             'ndk;27.1.12297006' \
@@ -255,6 +255,22 @@ jobs:
           npm run config:release
           xcodebuild -version | grep -qx 'Xcode 16.4'
           xcodebuild -version | grep -qx 'Build version 16F6'
+      - name: Provision pinned Chilean CSCA Master List
+        env:
+          IOS_CSCA_MASTER_LIST_BASE64: ${{ secrets.IOS_CSCA_MASTER_LIST_BASE64 }}
+          IOS_CSCA_MASTER_LIST_SHA256: ${{ secrets.IOS_CSCA_MASTER_LIST_SHA256 }}
+        run: |
+          set -euo pipefail
+          : "${IOS_CSCA_MASTER_LIST_BASE64:?Missing authorized CSCA Master List}"
+          : "${IOS_CSCA_MASTER_LIST_SHA256:?Missing expected CSCA Master List SHA-256}"
+
+          CSCA_MASTER_LIST="$RUNNER_TEMP/cscaMasterList.pem"
+          printf '%s' "$IOS_CSCA_MASTER_LIST_BASE64" | base64 --decode > "$CSCA_MASTER_LIST"
+          chmod 0600 "$CSCA_MASTER_LIST"
+          {
+            echo "DAO_CSCA_MASTER_LIST_PATH=$CSCA_MASTER_LIST"
+            echo "DAO_CSCA_MASTER_LIST_SHA256=$IOS_CSCA_MASTER_LIST_SHA256"
+          } >> "$GITHUB_ENV"
       - name: Import certificate and provisioning profile
         env:
           IOS_CERTIFICATE_SHA256: ${{ secrets.IOS_CERTIFICATE_SHA256 }}
@@ -408,6 +424,11 @@ jobs:
           plutil -lint "$APP/Info.plist" "$APP/PrivacyInfo.xcprivacy"
           APP_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
           /usr/bin/lipo -verify_arch arm64 "$APP/$APP_EXECUTABLE"
+          test -s "$APP/cscaMasterList.pem"
+          EXPECTED_CSCA_SHA256="$(printf '%s' "$DAO_CSCA_MASTER_LIST_SHA256" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          ACTUAL_CSCA_SHA256="$(shasum -a 256 "$APP/cscaMasterList.pem" | awk '{print $1}')"
+          test "$ACTUAL_CSCA_SHA256" = "$EXPECTED_CSCA_SHA256"
+          /usr/bin/nm -gj "$APP/$APP_EXECUTABLE" | grep -Fqx '_OBJC_CLASS_$_PassportReader'
           codesign --verify --deep --strict "$APP"
           CODESIGN_DETAILS="$(codesign -dv --verbose=4 "$APP" 2>&1)"
           printf '%s\n' "$CODESIGN_DETAILS"
@@ -472,4 +493,5 @@ jobs:
             "$RUNNER_TEMP/mobile-release.mobileprovision" \
             "$RUNNER_TEMP/mobile-release-profile.plist" \
             "$RUNNER_TEMP/mobile-release-certificate.pem" \
-            "$RUNNER_TEMP/ExportOptions.plist"
+            "$RUNNER_TEMP/ExportOptions.plist" \
+            "$RUNNER_TEMP/cscaMasterList.pem"
