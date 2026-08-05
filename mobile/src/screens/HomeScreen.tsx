@@ -34,26 +34,32 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             <View style={styles.content}>
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🪪</Text>
-                    <Text style={styles.featureTitle}>Autenticación eMRTD Segura</Text>
-                    <Text style={styles.featureDesc}>
-                        Verificación criptográfica del chip de tu cédula nacional (PACE + Autenticación Pasiva).
-                    </Text>
+                    <View style={styles.featureTextContainer}>
+                        <Text style={styles.featureTitle}>Autenticación eMRTD Segura</Text>
+                        <Text style={styles.featureDesc}>
+                            Verificación criptográfica del chip de tu cédula nacional (PACE + Autenticación Pasiva).
+                        </Text>
+                    </View>
                 </View>
 
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🔗</Text>
-                    <Text style={styles.featureTitle}>Generación ZK Local</Text>
-                    <Text style={styles.featureDesc}>
-                        Las pruebas Zero-Knowledge se computan íntegramente en tu dispositivo. El Estado no rastrea tu actividad.
-                    </Text>
+                    <View style={styles.featureTextContainer}>
+                        <Text style={styles.featureTitle}>Generación ZK Local</Text>
+                        <Text style={styles.featureDesc}>
+                            Las pruebas Zero-Knowledge se computan íntegramente en tu dispositivo. El Estado no rastrea tu actividad.
+                        </Text>
+                    </View>
                 </View>
 
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🗳️</Text>
-                    <Text style={styles.featureTitle}>Gobernanza Anónima</Text>
-                    <Text style={styles.featureDesc}>
-                        Voto electrónico inviolable con pruebas MACI integradas.
-                    </Text>
+                    <View style={styles.featureTextContainer}>
+                        <Text style={styles.featureTitle}>Gobernanza Anónima</Text>
+                        <Text style={styles.featureDesc}>
+                            Voto electrónico inviolable con pruebas MACI integradas.
+                        </Text>
+                    </View>
                 </View>
             </View>
 
@@ -133,13 +139,15 @@ const styles = StyleSheet.create({
         fontSize: 32,
         marginRight: 16,
     },
-    featureTitle: {
+    featureTextContainer: {
         flex: 1,
+    },
+    featureTitle: {
         ...theme.typography.body,
         fontWeight: 'bold',
+        marginBottom: 4,
     },
     featureDesc: {
-        flex: 2,
         ...theme.typography.caption,
     },
     buttonContainer: {

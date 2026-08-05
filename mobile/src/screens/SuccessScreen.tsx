@@ -236,6 +236,9 @@ const styles = StyleSheet.create({
     dataValue: {
         ...theme.typography.body,
         fontWeight: '600',
+        flex: 1,
+        textAlign: 'right',
+        marginLeft: 10,
     },
     evidenceContainer: {
         marginTop: 16,

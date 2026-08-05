@@ -562,7 +562,14 @@ const styles = StyleSheet.create({
         borderBottomColor: theme.colors.borderLight,
     },
     dataLabel: { color: theme.colors.textSoft, fontSize: 14 },
-    dataValue: { color: theme.colors.ink, fontSize: 14, fontWeight: '600' },
+    dataValue: {
+        color: theme.colors.ink,
+        fontSize: 14,
+        fontWeight: '600',
+        flex: 1,
+        textAlign: 'right',
+        marginLeft: 10,
+    },
     dataValueSmall: {
         color: theme.colors.ink,
         fontSize: 11,
