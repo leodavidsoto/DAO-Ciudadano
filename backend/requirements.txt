@@ -30,7 +30,7 @@ python-multipart==0.0.20
 pillow==11.0.0             # validación de imágenes en el flujo de liveness
 
 # === Autenticación e identidad (tarea 1.1 del ROADMAP) ===
-cryptography==44.0.0       # Fernet: cifrado de PII en reposo (app/core/crypto.py)
+cryptography==50.0.0       # Fernet: cifrado de PII en reposo (app/core/crypto.py)
 PyJWT==2.10.1               # JWT de sesión emitido tras verificar SIWE
 eth-account==0.13.7        # recuperar firmante de personal_sign y de firmas EIP-712
 web3==7.16.0                # minteo real on-chain (app/services/chain_service.py)
