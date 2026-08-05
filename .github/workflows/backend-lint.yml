@@ -27,6 +27,6 @@ jobs:
       - name: Check code formatting (Black)
         run: black --check app tests
       - name: Lint (Flake8)
-        run: flake8 app tests --max-line-length=88
+        run: flake8 app tests
       - name: Type Check (Mypy)
         run: mypy app
