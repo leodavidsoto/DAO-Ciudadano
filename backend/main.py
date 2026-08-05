@@ -229,11 +229,12 @@ app.include_router(governance_router, prefix="/api")
 app.include_router(elections_router, prefix="/api")
 app.include_router(maci_router, prefix="/api")
 app.include_router(erc4337_router, prefix="/api")
-# Sin prefijo /api: los scrapers de Prometheus esperan /metrics en la raíz.
 if settings.ENABLE_METRICS:
     from app.routers.metrics import router as metrics_router
-
     app.include_router(metrics_router)
+
+from app.routers.analytics import router as analytics_router
+app.include_router(analytics_router, prefix="/api")
 
 
 # Process liveness: no external dependency checks. Orchestrators can use this
