@@ -127,7 +127,7 @@ const styles = StyleSheet.create({
     featureCard: {
         backgroundColor: theme.colors.surface,
         borderRadius: theme.radius.md,
-        padding: 20,
+        padding: 16,
         marginBottom: 12,
         borderWidth: 1,
         borderColor: theme.colors.borderLight,
@@ -136,8 +136,8 @@ const styles = StyleSheet.create({
         ...theme.shadows.light,
     },
     featureIcon: {
-        fontSize: 32,
-        marginRight: 16,
+        fontSize: 24,
+        marginRight: 12,
     },
     featureTextContainer: {
         flex: 1,

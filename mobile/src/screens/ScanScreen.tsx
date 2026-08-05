@@ -271,17 +271,17 @@ const styles = StyleSheet.create({
         textAlign: 'center',
     },
     scanCircle: {
-        width: 250,
-        height: 250,
-        borderRadius: 125,
+        width: 180,
+        height: 180,
+        borderRadius: 90,
         borderWidth: 2,
         justifyContent: 'center',
         alignItems: 'center',
     },
     innerCircle: {
-        width: 180,
-        height: 180,
-        borderRadius: 90,
+        width: 130,
+        height: 130,
+        borderRadius: 65,
         backgroundColor: theme.colors.surface,
         borderWidth: 1,
         borderColor: theme.colors.borderLight,
@@ -290,7 +290,7 @@ const styles = StyleSheet.create({
         ...theme.shadows.light,
     },
     nfcIcon: {
-        fontSize: 48,
+        fontSize: 36,
         marginBottom: 10,
     },
     scanText: {

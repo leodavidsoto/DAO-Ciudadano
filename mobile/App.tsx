@@ -4,10 +4,11 @@
  */
 
 import React from 'react';
-import { DarkTheme, NavigationContainer } from '@react-navigation/native';
+import { DefaultTheme, NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar, View, Text, ScrollView } from 'react-native';
+import { theme } from './src/styles/theme';
 
 // Screens
 import HomeScreen from './src/screens/HomeScreen';
@@ -59,11 +60,11 @@ class CrashScreenBoundary extends React.Component<
     if (this.state.error) {
       return (
         <ScrollView
-          style={{ flex: 1, backgroundColor: '#1a0000' }}
+          style={{ flex: 1, backgroundColor: theme.colors.background }}
           contentContainerStyle={{ padding: 20, paddingTop: 60 }}>
           <Text
             style={{
-              color: '#ff5555',
+              color: theme.colors.danger,
               fontSize: 18,
               fontWeight: 'bold',
               marginBottom: 12,
@@ -71,21 +72,21 @@ class CrashScreenBoundary extends React.Component<
             La app encontró un error al abrir
           </Text>
           <View style={{ marginBottom: 16 }}>
-            <Text selectable style={{ color: '#fff', fontSize: 13 }}>
+            <Text selectable style={{ color: theme.colors.ink, fontSize: 13 }}>
               {String(this.state.error?.name || 'Error')}:{' '}
               {String(this.state.error?.message || this.state.error)}
             </Text>
           </View>
-          <Text style={{ color: '#888', fontSize: 11, marginBottom: 6 }}>
+          <Text style={{ color: theme.colors.textSoft, fontSize: 11, marginBottom: 6 }}>
             Stack:
           </Text>
-          <Text selectable style={{ color: '#aaa', fontSize: 10 }}>
+          <Text selectable style={{ color: theme.colors.ink, fontSize: 10 }}>
             {String(this.state.error?.stack || 'sin stack')}
           </Text>
-          <Text style={{ color: '#888', fontSize: 11, marginTop: 16, marginBottom: 6 }}>
+          <Text style={{ color: theme.colors.textSoft, fontSize: 11, marginTop: 16, marginBottom: 6 }}>
             Componentes:
           </Text>
-          <Text selectable style={{ color: '#aaa', fontSize: 10 }}>
+          <Text selectable style={{ color: theme.colors.ink, fontSize: 10 }}>
             {this.state.info}
           </Text>
         </ScrollView>
@@ -97,16 +98,16 @@ class CrashScreenBoundary extends React.Component<
 
 const screenOptions = {
   headerStyle: {
-    backgroundColor: '#0a0a1a',
+    backgroundColor: theme.colors.primary,
   },
-  headerTintColor: '#00FFFF',
+  headerTintColor: '#FFFFFF',
   headerTitleStyle: {
     fontWeight: 'bold' as const,
     letterSpacing: 1,
   },
   headerBackTitleVisible: false,
   contentStyle: {
-    backgroundColor: '#0a0a1a',
+    backgroundColor: theme.colors.background,
   },
 };
 
@@ -114,25 +115,20 @@ function App(): React.JSX.Element {
   return (
     <CrashScreenBoundary>
       <SafeAreaProvider>
-      <StatusBar barStyle="light-content" backgroundColor="#0a0a1a" />
+      <StatusBar barStyle="light-content" backgroundColor={theme.colors.primary} />
       <NavigationContainer
         theme={{
-          ...DarkTheme,
-          dark: true,
+          ...DefaultTheme,
+          dark: false,
           colors: {
-            ...DarkTheme.colors,
-            primary: '#00FFFF',
-            background: '#0a0a1a',
-            card: '#0a0a2a',
-            text: '#ffffff',
-            border: '#00FFFF30',
-            notification: '#FF00FF',
+            ...DefaultTheme.colors,
+            primary: theme.colors.primary,
+            background: theme.colors.background,
+            card: theme.colors.primary,
+            text: '#FFFFFF',
+            border: theme.colors.borderDark,
+            notification: theme.colors.secondary,
           },
-          // React Navigation v7 exige 'fonts' en el theme (useHeaderConfigProps
-          // lee fonts.regular/medium/bold/heavy). Como este theme es un objeto
-          // literal completo y no un merge parcial, sin esto 'fonts' queda
-          // undefined y la app crashea apenas monta la primera pantalla con
-          // header -- esta fue la causa real del cierre inmediato en release.
         }}
       >
         <Stack.Navigator
