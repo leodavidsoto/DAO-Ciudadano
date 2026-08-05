@@ -77,9 +77,9 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
     }, [isScanning, pulseAnim, startPulseAnimation]);
 
     const handleStartScan = async () => {
-        const normalizedCan = can.trim();
-        if (!/^\d{6}$/.test(normalizedCan)) {
-            setError('El CAN debe contener exactamente los 6 dígitos impresos en la cédula.');
+        const normalizedCan = can.trim().toUpperCase();
+        if (!/^[A-Z0-9]{6}$/.test(normalizedCan)) {
+            setError('El CAN debe contener exactamente los 6 caracteres impresos en la cédula.');
             return;
         }
 
@@ -136,10 +136,11 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                             placeholderTextColor="#555"
                             value={can}
                             onChangeText={setCan}
-                            keyboardType="number-pad"
+                            keyboardType="default"
+                            autoCapitalize="characters"
                             maxLength={6}
                         />
-                        <Text style={styles.inputHint}>Ingresa los 6 dígitos impresos en el frente de tu cédula.</Text>
+                        <Text style={styles.inputHint}>Ingresa los 6 caracteres impresos en el frente de tu cédula.</Text>
                     </View>
                 )}
 

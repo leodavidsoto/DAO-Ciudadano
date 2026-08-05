@@ -120,14 +120,13 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
     fun startPACESession(can: String, promise: Promise) {
         val once = SingleShotPromise(promise)
 
-        val normalizedCan = can.trim()
-        if (normalizedCan.length != 6 || !normalizedCan.all { it in '0'..'9' }) {
-            // El CAN impreso en la cédula es numérico. Un valor con letras es
-            // un error de captura, no un fallo criptográfico: distinguirlo
-            // evita que la UI culpe al chip.
+        val normalizedCan = can.trim().uppercase()
+        if (normalizedCan.length != 6 || !normalizedCan.all { it.isLetterOrDigit() }) {
+            // El CAN impreso en la cédula usualmente es numérico, pero puede 
+            // contener letras. 
             once.reject(
                 "E_INVALID_CAN",
-                "El CAN debe contener exactamente los 6 dígitos impresos en la cédula."
+                "El CAN debe contener exactamente los 6 caracteres impresos en la cédula."
             )
             return
         }
@@ -165,7 +164,7 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
                 once.resolve(result)
             } catch (e: PassportReadError) {
                 once.reject(e.code, e.message ?: "Error leyendo la cédula.")
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 once.reject("E_PACE_FAILED", describeFailure(e))
             } finally {
                 timer.cancel()
@@ -525,7 +524,7 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
      * Mensaje de diagnóstico sin datos del titular ni el CAN: los errores
      * acaban en logs y en pantallas de soporte.
      */
-    private fun describeFailure(e: Exception): String {
+    private fun describeFailure(e: Throwable): String {
         val type = e.javaClass.simpleName
         val detail = e.message
         return if (detail.isNullOrBlank()) type else "$type: $detail"
