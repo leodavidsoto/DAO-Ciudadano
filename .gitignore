@@ -112,3 +112,6 @@ contracts/cache/
 # Salida de solidity-coverage (regenerable con `npx hardhat coverage`)
 contracts/coverage/
 contracts/coverage.json
+
+# Local Netlify folder
+.netlify

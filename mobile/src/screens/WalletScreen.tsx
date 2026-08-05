@@ -30,6 +30,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Wallet as EthersWallet } from 'ethers';
 import apiService from '../services/apiService';
 import walletService, { GeneratedWallet } from '../services/walletService';
+import { theme } from '../styles/theme';
 
 interface MemberInfo {
     token_id: number;
@@ -173,7 +174,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
         return (
             <SafeAreaView style={styles.container}>
                 <View style={styles.centered}>
-                    <ActivityIndicator size="large" color="#00FFFF" />
+                    <ActivityIndicator size="large" color={theme.colors.primary} />
                     <Text style={styles.loadingText}>{label}</Text>
                 </View>
             </SafeAreaView>
@@ -370,7 +371,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
                     disabled={lookupLoading}
                 >
                     {lookupLoading ? (
-                        <ActivityIndicator color="#000" />
+                        <ActivityIndicator color="#FFFFFF" />
                     ) : (
                         <Text style={styles.buttonText}>CONSULTAR</Text>
                     )}
@@ -418,101 +419,100 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
 };
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#0a0a1a' },
+    container: { flex: 1, backgroundColor: theme.colors.background },
     content: { padding: 20 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    loadingText: { color: '#00FFFF', marginTop: 16, fontSize: 13, letterSpacing: 1 },
+    loadingText: { color: theme.colors.primary, marginTop: 16, fontSize: 13, letterSpacing: 1 },
     title: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: '#00FFFF',
-        letterSpacing: 2,
+        ...theme.typography.title,
         textAlign: 'center',
         marginTop: 20,
     },
     subtitle: {
-        fontSize: 13,
-        color: '#888',
+        ...theme.typography.caption,
         textAlign: 'center',
         marginTop: 8,
         marginBottom: 24,
     },
     input: {
-        backgroundColor: '#0a0a2a',
-        borderRadius: 12,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.sm,
         borderWidth: 1,
-        borderColor: '#00FFFF30',
-        color: '#fff',
+        borderColor: theme.colors.borderDark,
+        color: theme.colors.ink,
         paddingHorizontal: 16,
         paddingVertical: 14,
         fontSize: 14,
         marginBottom: 16,
     },
     button: {
-        backgroundColor: '#00FFFF',
+        backgroundColor: theme.colors.primary,
         paddingVertical: 16,
-        borderRadius: 12,
+        borderRadius: theme.radius.md,
         alignItems: 'center',
         marginTop: 12,
+        ...theme.shadows.light,
     },
     buttonDisabled: { opacity: 0.4 },
     buttonDisabledOutline: {
         borderWidth: 1,
-        borderColor: '#ffffff20',
+        borderColor: theme.colors.borderLight,
+        backgroundColor: theme.colors.surface,
         paddingVertical: 16,
-        borderRadius: 12,
+        borderRadius: theme.radius.md,
         alignItems: 'center',
         marginTop: 12,
     },
     buttonDisabledText: {
-        color: '#666',
+        color: theme.colors.textSoft,
         fontSize: 15,
         fontWeight: 'bold',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
     buttonText: {
-        color: '#000',
+        color: '#FFFFFF',
         fontSize: 15,
         fontWeight: 'bold',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
     hint: {
+        ...theme.typography.caption,
         fontSize: 11,
-        color: '#666',
         marginTop: 8,
         marginBottom: 8,
         textAlign: 'center',
     },
     linkButton: { marginTop: 24, alignItems: 'center' },
-    linkButtonText: { color: '#00FFFF', fontSize: 13, textDecorationLine: 'underline' },
+    linkButtonText: { color: theme.colors.primary, fontSize: 13, textDecorationLine: 'underline' },
     errorBox: {
         marginTop: 16,
         padding: 12,
-        backgroundColor: '#FF073A15',
-        borderRadius: 8,
+        backgroundColor: theme.colors.dangerSoft,
+        borderRadius: theme.radius.sm,
         borderWidth: 1,
-        borderColor: '#FF073A50',
+        borderColor: theme.colors.danger,
     },
-    errorText: { color: '#FF6B81', fontSize: 13 },
+    errorText: { color: theme.colors.danger, fontSize: 13 },
     warningBox: {
-        backgroundColor: '#FFA50015',
+        backgroundColor: theme.colors.warningSoft,
         borderWidth: 1,
-        borderColor: '#FFA50050',
-        borderRadius: 12,
+        borderColor: theme.colors.warning,
+        borderRadius: theme.radius.md,
         padding: 16,
         marginBottom: 16,
     },
-    warningText: { color: '#FFCC80', fontSize: 13, lineHeight: 19 },
+    warningText: { color: theme.colors.warning, fontSize: 13, lineHeight: 19 },
     mnemonicBox: {
-        backgroundColor: '#0a0a2a',
-        borderRadius: 12,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.md,
         borderWidth: 1,
-        borderColor: '#00FFFF30',
+        borderColor: theme.colors.borderLight,
         padding: 20,
         marginBottom: 16,
+        ...theme.shadows.light,
     },
     mnemonicText: {
-        color: '#00FFFF',
+        color: theme.colors.ink,
         fontSize: 16,
         lineHeight: 26,
         fontWeight: '600',
@@ -529,40 +529,42 @@ const styles = StyleSheet.create({
         height: 22,
         borderRadius: 6,
         borderWidth: 2,
-        borderColor: '#00FFFF60',
+        borderColor: theme.colors.borderDark,
         marginRight: 12,
         justifyContent: 'center',
         alignItems: 'center',
     },
-    checkboxChecked: { backgroundColor: '#00FFFF', borderColor: '#00FFFF' },
-    checkboxMark: { color: '#000', fontWeight: 'bold', fontSize: 14 },
-    checkboxLabel: { color: '#ccc', fontSize: 13, flex: 1 },
+    checkboxChecked: { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
+    checkboxMark: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
+    checkboxLabel: { ...theme.typography.body, fontSize: 13, flex: 1 },
     resultCard: {
         marginTop: 24,
-        backgroundColor: '#0a0a2a',
-        borderRadius: 16,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.md,
         padding: 20,
         borderWidth: 1,
-        borderColor: '#00FF0030',
+        borderColor: theme.colors.success,
+        ...theme.shadows.light,
     },
     resultTitle: {
         fontSize: 13,
-        color: '#00FF00',
+        color: theme.colors.success,
         letterSpacing: 1,
         marginBottom: 12,
         textAlign: 'center',
+        fontWeight: 'bold',
     },
     dataRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         paddingVertical: 8,
         borderBottomWidth: 1,
-        borderBottomColor: '#ffffff10',
+        borderBottomColor: theme.colors.borderLight,
     },
-    dataLabel: { color: '#666', fontSize: 14 },
-    dataValue: { color: '#fff', fontSize: 14, fontWeight: '600' },
+    dataLabel: { color: theme.colors.textSoft, fontSize: 14 },
+    dataValue: { color: theme.colors.ink, fontSize: 14, fontWeight: '600' },
     dataValueSmall: {
-        color: '#fff',
+        color: theme.colors.ink,
         fontSize: 11,
         fontWeight: '600',
         flexShrink: 1,
@@ -570,30 +572,32 @@ const styles = StyleSheet.create({
     },
     emptyCard: {
         marginTop: 24,
-        backgroundColor: '#0a0a2a',
-        borderRadius: 16,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.md,
         padding: 20,
         borderWidth: 1,
-        borderColor: '#ffffff15',
+        borderColor: theme.colors.borderLight,
         alignItems: 'center',
+        ...theme.shadows.light,
     },
-    emptyTitle: { fontSize: 13, color: '#888', letterSpacing: 1, marginBottom: 8 },
-    emptyText: { fontSize: 13, color: '#666', textAlign: 'center', marginBottom: 16 },
+    emptyTitle: { ...theme.typography.title, fontSize: 15, marginBottom: 8 },
+    emptyText: { ...theme.typography.caption, textAlign: 'center', marginBottom: 16 },
     secondaryButton: {
         borderWidth: 1,
-        borderColor: '#00FFFF50',
-        borderRadius: 12,
+        borderColor: theme.colors.borderDark,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.md,
         paddingVertical: 12,
         paddingHorizontal: 24,
     },
     secondaryButtonText: {
-        color: '#00FFFF',
+        color: theme.colors.primary,
         fontSize: 13,
         fontWeight: '600',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
     blockedHint: {
-        color: '#777',
+        color: theme.colors.textSoft,
         fontSize: 11,
         marginTop: 10,
         textAlign: 'center',

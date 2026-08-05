@@ -45,12 +45,7 @@
   54%,
   56%,
   100% {
-    text-shadow:
-      0 0 4px #fff,
-      0 0 11px #fff,
-      0 0 19px #fff,
-      0 0 40px var(--cyber-primary),
-      0 0 80px var(--cyber-primary);
+    text-shadow: none;
   }
 
   20%,
@@ -791,7 +786,7 @@
   -webkit-text-fill-color: transparent;
   background-clip: text;
   animation: tokenIdGradient 4s ease infinite;
-  text-shadow: 0 0 30px var(--cyber-primary);
+  text-shadow: none;
 }
 
 @keyframes tokenIdGradient {
@@ -825,7 +820,7 @@
   padding: 4px 10px;
   border: 1px solid var(--cyber-accent);
   border-radius: 12px;
-  text-shadow: 0 0 10px var(--cyber-accent);
+  text-shadow: none;
   animation: statusPulse 2s ease-in-out infinite;
 }
 

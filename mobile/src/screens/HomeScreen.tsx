@@ -10,6 +10,7 @@ import {
     TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { theme } from '../styles/theme';
 
 interface HomeScreenProps {
     navigation: any;
@@ -86,7 +87,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#0a0a1a',
+        backgroundColor: theme.colors.background,
     },
     header: {
         alignItems: 'center',
@@ -98,20 +99,19 @@ const styles = StyleSheet.create({
         marginBottom: 16,
     },
     logoText: {
+        ...theme.typography.title,
         fontSize: 48,
-        fontWeight: 'bold',
-        color: '#00FFFF',
-        letterSpacing: 8,
+        letterSpacing: 2,
     },
     logoSubtext: {
+        ...theme.typography.title,
+        color: theme.colors.danger,
         fontSize: 18,
-        color: '#FF00FF',
-        letterSpacing: 6,
+        letterSpacing: 1,
         marginTop: -5,
     },
     tagline: {
-        fontSize: 12,
-        color: '#666',
+        ...theme.typography.caption,
         textAlign: 'center',
     },
     content: {
@@ -119,14 +119,15 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
     },
     featureCard: {
-        backgroundColor: '#0a0a2a',
-        borderRadius: 16,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.md,
         padding: 20,
         marginBottom: 12,
         borderWidth: 1,
-        borderColor: '#ffffff10',
+        borderColor: theme.colors.borderLight,
         flexDirection: 'row',
         alignItems: 'center',
+        ...theme.shadows.light,
     },
     featureIcon: {
         fontSize: 32,
@@ -134,52 +135,50 @@ const styles = StyleSheet.create({
     },
     featureTitle: {
         flex: 1,
-        fontSize: 16,
+        ...theme.typography.body,
         fontWeight: 'bold',
-        color: '#fff',
     },
     featureDesc: {
         flex: 2,
-        fontSize: 12,
-        color: '#888',
+        ...theme.typography.caption,
     },
     buttonContainer: {
         padding: 20,
         gap: 12,
     },
     primaryButton: {
-        backgroundColor: '#00FFFF',
+        backgroundColor: theme.colors.primary,
         paddingVertical: 18,
-        borderRadius: 14,
+        borderRadius: theme.radius.md,
         alignItems: 'center',
+        ...theme.shadows.light,
     },
     primaryButtonText: {
-        color: '#000',
+        color: '#FFFFFF',
         fontSize: 16,
         fontWeight: 'bold',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
     secondaryButton: {
-        backgroundColor: 'transparent',
+        backgroundColor: theme.colors.surface,
         paddingVertical: 16,
-        borderRadius: 14,
+        borderRadius: theme.radius.md,
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#00FFFF50',
+        borderColor: theme.colors.borderDark,
     },
     secondaryButtonText: {
-        color: '#00FFFF',
+        color: theme.colors.primary,
         fontSize: 14,
         fontWeight: '600',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
     footer: {
         padding: 20,
         alignItems: 'center',
     },
     footerText: {
-        fontSize: 10,
-        color: '#444',
+        ...theme.typography.caption,
     },
 });
 

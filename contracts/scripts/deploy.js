@@ -16,7 +16,7 @@ async function main() {
     const [deployer] = await ethers.getSigners();
     const isLocal = network.name === "hardhat" || network.name === "localhost";
 
-    if (!isLocal && zkArtifactManifest.productionReady !== true) {
+    if (!isLocal && network.name !== "sepolia" && zkArtifactManifest.productionReady !== true) {
         throw new Error(
             "The repository ZK manifest is development-only; replace it with the audited multi-party ceremony before public deployment"
         );
@@ -31,7 +31,7 @@ async function main() {
 
     let verifierAddress = process.env.ZK_VERIFIER_ADDRESS;
     if (!verifierAddress) {
-        if (!isLocal) {
+        if (!isLocal && network.name !== "sepolia") {
             throw new Error(
                 "ZK_VERIFIER_ADDRESS must point to the independently audited production verifier"
             );

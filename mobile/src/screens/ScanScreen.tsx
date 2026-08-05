@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import nfcService, { isVerifiedNFCReadResult } from '../services/nfcService';
+import { theme } from '../styles/theme';
 
 interface ScanScreenProps {
     navigation: any;
@@ -149,8 +150,8 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                         styles.scanCircle,
                         {
                             transform: [{ scale: pulseAnim }],
-                            backgroundColor: isScanning ? '#00FFFF30' : '#00FFFF10',
-                            borderColor: isScanning ? '#00FFFF' : '#00FFFF50',
+                            backgroundColor: isScanning ? theme.colors.primarySoft : '#FFFFFF',
+                            borderColor: isScanning ? theme.colors.primary : theme.colors.borderDark,
                             marginTop: isScanning ? 0 : 20,
                         },
                     ]}
@@ -209,7 +210,7 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                 <View
                     style={[
                         styles.statusIndicator,
-                        { backgroundColor: nfcEnabled ? '#00FF00' : '#FF0000' },
+                        { backgroundColor: nfcEnabled ? theme.colors.success : theme.colors.danger },
                     ]}
                 />
                 <Text style={styles.statusText}>
@@ -223,21 +224,18 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#0a0a1a',
+        backgroundColor: theme.colors.background,
     },
     header: {
         padding: 20,
         alignItems: 'center',
     },
     title: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: '#00FFFF',
-        letterSpacing: 2,
+        ...theme.typography.title,
+        letterSpacing: 0,
     },
     subtitle: {
-        fontSize: 14,
-        color: '#888',
+        ...theme.typography.caption,
         marginTop: 8,
         textAlign: 'center',
     },
@@ -252,24 +250,23 @@ const styles = StyleSheet.create({
         marginBottom: 20,
     },
     inputLabel: {
-        color: '#00FFFF',
-        fontSize: 14,
+        ...theme.typography.body,
+        fontWeight: 'bold',
         marginBottom: 8,
     },
     input: {
-        backgroundColor: '#0a0a2a',
+        backgroundColor: theme.colors.surface,
         borderWidth: 1,
-        borderColor: '#00FFFF50',
-        borderRadius: 8,
-        color: '#FFF',
+        borderColor: theme.colors.borderDark,
+        borderRadius: theme.radius.sm,
+        color: theme.colors.ink,
         fontSize: 24,
         padding: 15,
         textAlign: 'center',
         letterSpacing: 4,
     },
     inputHint: {
-        color: '#888',
-        fontSize: 12,
+        ...theme.typography.caption,
         marginTop: 8,
         textAlign: 'center',
     },
@@ -277,7 +274,7 @@ const styles = StyleSheet.create({
         width: 250,
         height: 250,
         borderRadius: 125,
-        borderWidth: 3,
+        borderWidth: 2,
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -285,66 +282,74 @@ const styles = StyleSheet.create({
         width: 180,
         height: 180,
         borderRadius: 90,
-        backgroundColor: '#0a0a1a',
-        borderWidth: 2,
-        borderColor: '#00FFFF30',
+        backgroundColor: theme.colors.surface,
+        borderWidth: 1,
+        borderColor: theme.colors.borderLight,
         justifyContent: 'center',
         alignItems: 'center',
+        ...theme.shadows.light,
     },
     nfcIcon: {
         fontSize: 48,
         marginBottom: 10,
     },
     scanText: {
-        color: '#00FFFF',
+        color: theme.colors.primary,
         fontSize: 14,
         fontWeight: '600',
     },
     instructions: {
         padding: 20,
-        backgroundColor: '#0a0a2a',
+        backgroundColor: theme.colors.surface,
         marginHorizontal: 20,
-        borderRadius: 12,
+        borderRadius: theme.radius.md,
         borderWidth: 1,
-        borderColor: '#00FFFF20',
+        borderColor: theme.colors.borderLight,
+        ...theme.shadows.light,
     },
     instructionText: {
-        color: '#aaa',
-        fontSize: 13,
+        ...theme.typography.caption,
         marginVertical: 4,
     },
     errorContainer: {
         margin: 20,
         padding: 15,
-        backgroundColor: '#FF000020',
-        borderRadius: 8,
+        backgroundColor: theme.colors.dangerSoft,
+        borderRadius: theme.radius.sm,
         borderWidth: 1,
-        borderColor: '#FF0000',
+        borderColor: theme.colors.danger,
     },
     errorText: {
-        color: '#FF6666',
+        color: theme.colors.danger,
         textAlign: 'center',
+        fontWeight: '500',
     },
     buttonContainer: {
         padding: 20,
     },
     button: {
-        backgroundColor: '#00FFFF',
+        backgroundColor: theme.colors.primary,
         paddingVertical: 16,
-        borderRadius: 12,
+        borderRadius: theme.radius.md,
         alignItems: 'center',
+        ...theme.shadows.light,
     },
     buttonDisabled: {
-        backgroundColor: '#333',
+        backgroundColor: theme.colors.borderDark,
+        shadowOpacity: 0,
     },
     cancelButton: {
-        backgroundColor: '#FF4444',
+        backgroundColor: theme.colors.surface,
+        borderWidth: 1,
+        borderColor: theme.colors.borderDark,
+        elevation: 0,
+        shadowOpacity: 0,
     },
     buttonText: {
-        color: '#000',
+        color: '#FFFFFF',
         fontSize: 16,
         fontWeight: 'bold',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
     statusBar: {
         flexDirection: 'row',
@@ -359,7 +364,7 @@ const styles = StyleSheet.create({
         marginRight: 8,
     },
     statusText: {
-        color: '#666',
+        color: theme.colors.textSoft,
         fontSize: 12,
     },
 });
