@@ -42,7 +42,15 @@ export const setCsrfToken = (value) => {
     return csrfToken;
 };
 
-export const getCsrfToken = () => csrfToken;
+export const getCsrfToken = () => {
+    if (typeof document !== 'undefined') {
+        const match = document.cookie.match(/dao_csrf=([^;]+)/);
+        if (match && isValidCsrfToken(match[1])) {
+            return match[1];
+        }
+    }
+    return csrfToken;
+};
 
 export const clearCsrfToken = () => {
     csrfToken = null;
