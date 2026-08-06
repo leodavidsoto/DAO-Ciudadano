@@ -169,8 +169,8 @@ def issue_token(address: str) -> str:
     return jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
 
 
-def read_token(token: str) -> Optional[str]:
-    """Devuelve la dirección (lowercase) del token, o None si es inválido/expiró."""
+async def read_token(token: str) -> Optional[str]:
+    """Devuelve la dirección (lowercase) del token, o None si es inválido/expiró o fue revocado."""
     try:
         payload = jwt.decode(
             token,
@@ -179,6 +179,40 @@ def read_token(token: str) -> Optional[str]:
             audience=settings.SIWE_DOMAIN,
             issuer=settings.SIWE_URI,
         )
+        jti = payload.get("jti")
+        if jti:
+            from ..core.database import revoked_tokens_collection
+
+            revoked = await revoked_tokens_collection().find_one({"jti": jti})
+            if revoked:
+                return None
         return payload.get("sub")
     except jwt.PyJWTError:
         return None
+
+
+async def revoke_token(token: str) -> None:
+    try:
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=["HS256"],
+            audience=settings.SIWE_DOMAIN,
+            issuer=settings.SIWE_URI,
+        )
+        jti = payload.get("jti")
+        if jti:
+            from ..core.database import revoked_tokens_collection
+
+            await revoked_tokens_collection().update_one(
+                {"jti": jti},
+                {
+                    "$setOnInsert": {
+                        "jti": jti,
+                        "created_at": datetime.now(timezone.utc),
+                    }
+                },
+                upsert=True,
+            )
+    except jwt.PyJWTError:
+        pass

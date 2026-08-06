@@ -112,6 +112,15 @@ def rules() -> List[RetentionRule]:
                 "gastar gas."
             ),
         ),
+        RetentionRule(
+            collection="revoked_tokens",
+            field="created_at",
+            ttl_seconds=settings.SESSION_TOKEN_EXPIRE_SECONDS,
+            reason=(
+                "Un token revocado solo necesita ser recordado hasta su fecha "
+                "de expiración natural."
+            ),
+        ),
     ]
 
 

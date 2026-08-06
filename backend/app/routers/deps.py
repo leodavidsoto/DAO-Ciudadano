@@ -92,7 +92,7 @@ async def current_address(
     # even if an attacker already knows the repository's development key.
     readiness.require("SECRET_KEY", "validar la sesión de wallet")
     readiness.require_siwe_configuration()
-    address = siwe_service.read_token(token)
+    address = await siwe_service.read_token(token)
     if not address:
         raise HTTPException(
             status_code=401,

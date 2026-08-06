@@ -117,6 +117,8 @@ class Database:
             await cls.get_db()["ballot_nonces"].create_index(
                 [("voter_address", 1), ("nonce", 1)], unique=True
             )
+            # Revocación de JWTs (lista negra)
+            await cls.get_db()["revoked_tokens"].create_index("jti", unique=True)
             # Árbol de identidades ZK (ADR-001, D-2): una hoja por sujeto. Este
             # índice es lo que impide que un reintento del cliente le emita dos
             # credenciales a la misma persona; la comprobación en el servicio
@@ -230,3 +232,7 @@ def siwe_nonces_collection():
 
 def ballot_nonces_collection():
     return get_collection("ballot_nonces")
+
+
+def revoked_tokens_collection():
+    return get_collection("revoked_tokens")

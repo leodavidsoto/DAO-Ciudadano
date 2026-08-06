@@ -18,7 +18,7 @@ El JWT se entrega por dos vías (tarea 1.13):
   "cookie"`. La app móvil no tiene cookies de navegador y lo sigue usando.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Header
 from eth_utils import is_address
 from pydantic import BaseModel
 from typing import Literal, Optional
@@ -108,17 +108,22 @@ async def read_session(request: Request, authenticated: str = Depends(current_ad
 
 
 @router.post("/logout")
-async def logout(response: Response):
-    """Borra las cookies de sesión.
+async def logout(
+    request: Request,
+    response: Response,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Borra las cookies de sesión y revoca el token JWT activo.
 
     Deliberadamente sin autenticación: cerrar sesión con una cookie ya
-    expirada o corrupta tiene que funcionar igual, y no hay nada que
-    proteger — el único efecto es dejar de mandar credenciales.
-
-    Honestidad sobre el alcance: el JWT sigue siendo válido hasta que expire
-    (SESSION_TOKEN_EXPIRE_SECONDS). Esto cierra la sesión del navegador, no
-    revoca el token; una lista de revocación necesita almacenamiento
-    compartido y todavía no existe.
+    expirada o corrupta tiene que funcionar igual.
+    Ahora incorpora revocación real en base de datos.
     """
+    token, _ = session.token_from_request(request, authorization)
+    if token:
+        from ..services import siwe_service
+
+        await siwe_service.revoke_token(token)
+
     session.clear_session(response)
-    return {"ok": True, "message": "Sesión cerrada en este navegador."}
+    return {"ok": True, "message": "Sesión cerrada y token revocado."}
