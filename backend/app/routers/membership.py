@@ -12,15 +12,11 @@ mintear "para" otra wallet con solo ponerla en el body.
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from typing import List
-from datetime import datetime, timezone
 import asyncio
 import logging
 
-from pymongo.errors import DuplicateKeyError
-
-from ..core.database import get_collection
 from ..models import MintSBTRequest, MintSBTResponse
-from ..services import chain_service, membership_records
+from ..services import chain_service, mint_operations
 from ..services.blockchain_service import MintingUnavailable, blockchain_service
 from ..services.membership_verifier import (
     invalidate_cached_membership,
@@ -29,11 +25,10 @@ from ..services.membership_verifier import (
 )
 from .deps import current_address, ensure_acts_as_self
 
-
-def mint_operations_collection():
-    """Operaciones de minteo, para idempotencia y reconciliación."""
-    return get_collection("mint_operations")
-
+# El ciclo de vida de las operaciones vive en `services/` (regla 7 de
+# AGENTS.md). Se reexporta porque es el punto de entrada que ya usan los tests
+# y los scripts de operación.
+mint_operations_collection = mint_operations.mint_operations_collection
 
 logger = logging.getLogger(__name__)
 
@@ -182,57 +177,33 @@ async def mint_with_zk_proof(
     """
     ensure_acts_as_self(request.wallet_address, authenticated, "mintear una membresía")
 
-    # Idempotencia: un reintento tras un timeout no puede enviar otra
-    # transacción. El nullifier es el identificador natural de la operación —
-    # el contrato lo rechazaría, pero para entonces el gas ya se gastó.
-    existing = await mint_operations_collection().find_one(
-        {"nullifier_hash": request.nullifier_hash.lower()}
-    )
-    if existing and existing.get("status") == "confirmed":
-        return MintSBTResponse(
-            ok=True,
-            token_id=existing.get("token_id"),
-            tx_hash=existing.get("tx_hash"),
-        )
-    if existing and existing.get("status") == "pending":
-        raise HTTPException(
-            status_code=409,
-            detail="Ya hay un minteo en curso para esta credencial. Espera a que confirme.",
-        )
+    nullifier = request.nullifier_hash.lower()
 
-    # Reintento atómico de un intento fallido: el índice único hacía que un
-    # `failed` se convirtiera en 409 permanente y el ciudadano quedara sin
-    # forma de volver a intentarlo. La transición failed -> pending es
-    # condicional, así que dos reintentos simultáneos no envían dos veces.
-    if existing and existing.get("status") == "failed":
-        claimed = await mint_operations_collection().update_one(
-            {"nullifier_hash": request.nullifier_hash.lower(), "status": "failed"},
-            {
-                "$set": {"status": "pending", "retried_at": datetime.now(timezone.utc)},
-                "$inc": {"attempts": 1},
-            },
+    # Idempotencia y reconciliación viven en el servicio: una operación abierta
+    # se resuelve contra la cadena antes de rechazar el reintento, así que una
+    # caída del worker deja de convertir la credencial en un 409 sin salida.
+    decision = await mint_operations.begin(nullifier, request.wallet_address)
+
+    if decision.action == "confirmed":
+        return MintSBTResponse(
+            ok=True, token_id=decision.token_id, tx_hash=decision.tx_hash
         )
-        if claimed.modified_count == 0:
-            raise HTTPException(
-                status_code=409,
-                detail="Otro reintento tomó esta operación. Espera a que confirme.",
-            )
-    else:
-        try:
-            await mint_operations_collection().insert_one(
-                {
-                    "nullifier_hash": request.nullifier_hash.lower(),
-                    "wallet_address": request.wallet_address.lower(),
-                    "status": "pending",
-                    "attempts": 1,
-                    "created_at": datetime.now(timezone.utc),
-                }
-            )
-        except DuplicateKeyError:
-            raise HTTPException(
-                status_code=409,
-                detail="Ya hay un minteo en curso para esta credencial. Espera a que confirme.",
-            )
+    if decision.action == "in_flight":
+        raise HTTPException(status_code=409, detail=decision.detail)
+    if decision.action == "needs_review":
+        raise HTTPException(status_code=409, detail=decision.detail)
+
+    # El hash se persiste desde el hilo del RPC en cuanto la transacción se
+    # difunde, sin esperar el recibo: es lo único que permite reconciliar
+    # después una transacción real cuyo proceso murió durante la espera.
+    loop = asyncio.get_running_loop()
+    submitted: dict[str, str] = {}
+
+    def record_submission(tx_hash: str) -> None:
+        submitted["tx_hash"] = tx_hash
+        asyncio.run_coroutine_threadsafe(
+            mint_operations.mark_submitted(nullifier, tx_hash), loop
+        ).result(timeout=10)
 
     try:
         tx_hash, token_id = await asyncio.to_thread(
@@ -243,40 +214,39 @@ async def mint_with_zk_proof(
             proof_c=request.pC,
             nullifier_hash=request.nullifier_hash,
             identity_root=int(request.identity_root),
+            on_submitted=record_submission,
         )
     except chain_service.ChainMintError as exc:
-        # La operación queda marcada como fallida, no colgada en `pending`:
-        # de lo contrario el ciudadano no podría reintentar nunca.
-        await mint_operations_collection().update_one(
-            {"nullifier_hash": request.nullifier_hash.lower()},
-            {"$set": {"status": "failed", "error": type(exc).__name__}},
-        )
         logger.error("ZK mint failed: %s", exc)
+        if submitted:
+            # La transacción salió. Marcarla `failed` aquí es lo que hacía que
+            # el reintento enviase una segunda y quemara gas contra un revert
+            # seguro por nullifier repetido. Queda `submitted` y la resuelve la
+            # cadena, en el próximo intento o en el barrido.
+            await mint_operations.mark_submitted(nullifier, submitted["tx_hash"])
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"La transacción de minteo se envió (tx {submitted['tx_hash']}) "
+                    "pero aún no se pudo confirmar. Reintenta en unos minutos: si "
+                    "ya confirmó, recibirás tu credencial sin volver a gastar gas."
+                ),
+            ) from exc
+        # Nada se difundió: reintentable de inmediato.
+        await mint_operations.mark_failed(nullifier, type(exc).__name__)
         raise HTTPException(
             status_code=502,
             detail="No se pudo confirmar el minteo on-chain. Intenta más tarde.",
         ) from exc
 
-    await mint_operations_collection().update_one(
-        {"nullifier_hash": request.nullifier_hash.lower()},
-        {
-            "$set": {
-                "status": "confirmed",
-                "tx_hash": tx_hash,
-                "token_id": token_id,
-                "confirmed_at": datetime.now(timezone.utc),
-            }
-        },
-    )
-
-    # Reconciliar `members`: sin esto, /membership/member/{wallet} y las
-    # estadísticas no ven el SBT recién emitido, y el gate de gobernanza
-    # rechazaría a un miembro que sí tiene su credencial on-chain.
-    await membership_records.reconcile_onchain_membership(
+    # Confirmar cierra la operación y refleja el SBT en `members`: sin eso,
+    # /membership/member/{wallet} y el gate de gobernanza no ven la credencial
+    # recién emitida.
+    await mint_operations.mark_confirmed(
+        nullifier_hash=nullifier,
         wallet_address=request.wallet_address,
-        token_id=token_id,
         tx_hash=tx_hash,
-        nullifier_hash=request.nullifier_hash.lower(),
+        token_id=token_id,
     )
 
     return MintSBTResponse(ok=True, token_id=token_id, tx_hash=tx_hash)

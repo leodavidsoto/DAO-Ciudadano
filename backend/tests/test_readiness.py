@@ -167,6 +167,53 @@ async def test_onchain_mode_rejects_nonempty_malformed_configuration(
     }
 
 
+async def test_the_zk_relayer_is_reported_even_when_mint_mode_is_not_onchain(
+    client,
+    monkeypatch,
+):
+    """El minteo real no consulta `MINT_MODE`, así que su estado no puede
+    esconderse detrás de él.
+
+    `/health` solo sondeaba la cadena con `MINT_MODE=onchain`. Como el relayer
+    ZK (`/membership/mint-zk`) no mira esa variable, un despliegue con el
+    relayer inservible se anunciaba "listo".
+    """
+    monkeypatch.setattr(settings, "MINT_MODE", "disabled")
+    monkeypatch.setattr(settings, "SEPOLIA_RPC_URL", "")
+    monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "")
+    monkeypatch.setattr(settings, "MINTER_PRIVATE_KEY", "")
+
+    response = await client.get("/health/ready")
+    relayer = response.json()["configuration"]["minting"]["zk_relayer"]
+
+    assert relayer["available"] is False
+    assert any("relayer ZK no está configurado" in b for b in relayer["blockers"])
+
+
+async def test_a_relayer_without_root_manager_role_is_flagged(client, monkeypatch):
+    """Sin ROOT_MANAGER_ROLE no se aprueban raíces, y sin raíz nadie mintea.
+
+    Tiene que verse en readiness y no descubrirse cuando falle el alta de la
+    primera persona.
+    """
+    monkeypatch.setattr(settings, "SEPOLIA_RPC_URL", "https://sepolia.example/rpc")
+    monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "0x" + "11" * 20)
+    monkeypatch.setattr(settings, "MINTER_PRIVATE_KEY", "0x" + "22" * 32)
+
+    from app.services import chain_service
+
+    monkeypatch.setattr(
+        chain_service,
+        "runtime_status",
+        lambda: {"ready": True, "errors": [], "can_approve_roots": False},
+    )
+
+    response = await client.get("/health/ready")
+    relayer = response.json()["configuration"]["minting"]["zk_relayer"]
+
+    assert any("ROOT_MANAGER_ROLE" in blocker for blocker in relayer["blockers"])
+
+
 async def test_production_readiness_rejects_unsafe_cross_setting_combinations(
     client,
     monkeypatch,

@@ -1,22 +1,21 @@
 """
-Minteo real on-chain (ROADMAP tarea 1.5, D-1).
+Relevo del minteo real on-chain (ROADMAP tarea 1.5, D-1).
 
-Antes: mint_sbt() solo escribía en MongoDB y devolvía tx_hash=None siempre
--- "membership" no significaba nada fuera de esta base de datos.
+El único camino de minteo real es el ZK: `mint_with_proof` llama a
+`DAOCiudadanaSBT.mintMembership(to, pA, pB, pC, nullifierHash, identityRoot)`
+(`contracts/DAOCiudadanaSBT.sol`). La prueba Groth16 ES la autorización, así
+que la wallet del relayer no necesita ningún rol para enviarla: solo saldo
+para gas. Aprobar raíces de identidad sí exige `ROOT_MANAGER_ROLE`, y es un
+poder distinto.
 
-Ahora: si SEPOLIA_RPC_URL, SBT_CONTRACT_ADDRESS y MINTER_PRIVATE_KEY están
-configurados, mint_sbt() además envía una transacción real que llama a
-DAOCiudadanaSBT.mintMembership(...) (contratos/DAOCiudadanaSBT.sol, con
-AccessControl -- la llave del minter solo necesita MINTER_ROLE, no
-DEFAULT_ADMIN_ROLE). La selección se hace explícitamente con `MINT_MODE`;
-una configuración incompleta o inválida falla y nunca degrada a demo ni
-fabrica un `tx_hash`.
+Una configuración incompleta o inválida falla explícitamente y nunca degrada a
+demo ni fabrica un `tx_hash`.
 """
 
 import logging
 import threading
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 from urllib.parse import urlparse
 
 from ..core.config import settings
@@ -61,10 +60,21 @@ _MINT_ABI = [
         "name": "MembershipMinted",
         "type": "event",
     },
+    # `mintMembership` es `whenNotPaused`: con el contrato pausado todo minteo
+    # revierte, y eso hay que poder decirlo antes de gastar gas.
     {
         "inputs": [],
-        "name": "MINTER_ROLE",
-        "outputs": [{"name": "", "type": "bytes32"}],
+        "name": "paused",
+        "outputs": [{"name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # Fuente de verdad para reconciliar: si el nullifier ya se quemó, la
+    # credencial se emitió, pase lo que pase con nuestro registro en Mongo.
+    {
+        "inputs": [{"name": "nullifierHash", "type": "bytes32"}],
+        "name": "isNullifierUsed",
+        "outputs": [{"name": "", "type": "bool"}],
         "stateMutability": "view",
         "type": "function",
     },
@@ -223,8 +233,76 @@ def _client():
     return w3, contract, account
 
 
+def _probe_membership_contract(w3, contract, account, result: dict) -> list[str]:
+    """Comprueba lo que el contrato REALMENTE exige para relevar un minteo.
+
+    Se llama con el contrato ya localizado (red correcta y bytecode presente) y
+    rellena los campos informativos de `result`. Devuelve la lista de errores
+    que impiden relevar un minteo; una lista vacía significa que se puede.
+    """
+    errors: list[str] = []
+
+    # ABI compatible. `membershipScope()` es lo que distingue el contrato ZK
+    # actual del histórico (Ownable/`string`), y nombrar esa diferencia es más
+    # útil que un "no se pudo validar" que obliga a adivinar.
+    try:
+        scope = int(contract.functions.membershipScope().call())
+    except Exception:
+        return [
+            "la dirección configurada no expone membershipScope(): no es el "
+            "contrato DAOCiudadanaSBT actual"
+        ]
+    if scope <= 0:
+        return ["membershipScope() devolvió 0: el contrato no está inicializado"]
+    result["membership_scope"] = str(scope)
+
+    # `mintMembership` es `whenNotPaused`. Es un estado operativo, no un error
+    # de configuración, y por eso se reporta además en su propio campo.
+    try:
+        paused = bool(contract.functions.paused().call())
+        result["paused"] = paused
+        if paused:
+            errors.append("el contrato de membresía está pausado")
+    except Exception:
+        errors.append("no se pudo leer paused() del contrato")
+
+    # Saldo del relayer: lo ÚNICO que necesita para enviar el minteo. La
+    # prueba Groth16 es la autorización, así que el contrato no le pide rol
+    # alguno a quien la releva.
+    try:
+        if w3.eth.get_balance(account.address) <= 0:
+            errors.append("la wallet del relayer no tiene saldo para gas")
+    except Exception:
+        errors.append("no se pudo consultar el saldo del relayer")
+
+    # ROOT_MANAGER_ROLE es informativo y NO bloquea el relevo: hace falta para
+    # aprobar raíces (emitir credenciales), que es otro poder. Un despliegue
+    # donde el Safe admin aprueba las raíces a mano es legítimo, y exigirlo
+    # aquí dejaría ese despliegue sin poder mintear nunca. `None` = no se pudo
+    # averiguar, que no es lo mismo que "no lo tiene".
+    try:
+        role = contract.functions.ROOT_MANAGER_ROLE().call()
+        result["can_approve_roots"] = bool(
+            contract.functions.hasRole(role, account.address).call()
+        )
+    except Exception:
+        result["can_approve_roots"] = None
+
+    return errors
+
+
 def runtime_status() -> dict:
-    """Probe the selected chain, contract and minter without sending a tx.
+    """Probe the selected chain, contract and relayer without sending a tx.
+
+    Comprueba lo que el contrato exige de verdad: red correcta, bytecode
+    presente, ABI compatible, contrato no pausado y saldo para gas.
+
+    Antes se probaba `MINTER_ROLE()`, una función que `DAOCiudadanaSBT.sol` no
+    declara: la llamada revertía, se capturaba como "no se pudo validar" y
+    TODO minteo real moría en la precondición sin haber enviado nada. El suite
+    seguía verde porque el contrato falso del test sí exponía ese rol — es
+    exactamente el fallo que la regla "verifica contra la fuente, no contra la
+    documentación" existe para atrapar.
 
     Results are cached briefly because `/health/ready` may be polled often;
     an unauthenticated health check must not amplify traffic to the RPC.
@@ -250,6 +328,9 @@ def runtime_status() -> dict:
         "ready": False,
         "chain_id": None,
         "minter_address": None,
+        "membership_scope": None,
+        "paused": None,
+        "can_approve_roots": None,
         "errors": list(errors.values()),
     }
     if errors:
@@ -272,135 +353,28 @@ def runtime_status() -> dict:
             elif not w3.eth.get_code(contract.address):
                 result["errors"] = ["la dirección configurada no contiene bytecode"]
             else:
-                minter_role = contract.functions.MINTER_ROLE().call()
-                has_role = contract.functions.hasRole(
-                    minter_role,
-                    account.address,
-                ).call()
-                if not has_role:
-                    result["errors"] = ["la wallet configurada no tiene MINTER_ROLE"]
-                elif w3.eth.get_balance(account.address) <= 0:
-                    result["errors"] = ["la wallet minter no tiene saldo para gas"]
-                else:
-                    result["errors"] = []
-                    result["ready"] = True
+                result["errors"] = _probe_membership_contract(
+                    w3, contract, account, result
+                )
+                result["ready"] = not result["errors"]
     except Exception:
         logger.error("On-chain readiness probe failed", exc_info=True)
-        result["errors"] = ["no se pudo validar RPC, contrato, ABI y MINTER_ROLE"]
+        result["errors"] = ["no se pudo validar RPC, red, contrato y ABI"]
 
     _runtime_cache = (cache_key, now, result)
     return dict(result)
 
 
-def mint_sbt_onchain(
-    wallet_address: str,
-    identity_hash_hex: str,
-    assurance_level: str,
-    token_uri: str = "",
-) -> Tuple[str, Optional[int]]:
-    """Envía la transacción de minteo real. Devuelve (tx_hash, token_id).
+def tx_hash_hex(raw) -> str:
+    """Hash de transacción como `0x…`, venga de web3 o de Mongo.
 
-    token_id se lee del evento MembershipMinted en el recibo; si por algún
-    motivo no aparece (RPC raro), se devuelve None y el llamador debe
-    resolverlo vía getMembershipToken() en vez de asumir un valor.
-
-    Lanza ChainMintError con el motivo si el RPC rechaza la transacción o si
-    la transacción se revierte on-chain (revert del contrato: dirección ya
-    tiene membresía, identityHash repetido, contrato pausado, etc.) -- nunca
-    devuelve un tx_hash falso.
+    `HexBytes.hex()` dejó de incluir el prefijo en hexbytes 1.x, así que
+    guardarlo tal cual producía hashes que ningún explorador acepta. Aquí se
+    normaliza una sola vez para que ni el registro ni la respuesta al
+    ciudadano dependan de la versión de una dependencia transitiva.
     """
-    from web3 import Web3
-
-    if not is_configured():
-        raise ChainMintError(
-            "Minteo on-chain no está configurado "
-            "(SEPOLIA_RPC_URL/SBT_CONTRACT_ADDRESS/MINTER_PRIVATE_KEY)."
-        )
-
-    operational = runtime_status()
-    if not operational.get("ready"):
-        raise ChainMintError(
-            "La precondición operativa on-chain falló; revisa RPC, red, "
-            "contrato, MINTER_ROLE y saldo."
-        )
-
-    w3, contract, account = _client()
-
-    try:
-        to = Web3.to_checksum_address(wallet_address)
-        identity_hash_bytes = bytes.fromhex(identity_hash_hex.removeprefix("0x"))
-        if len(identity_hash_bytes) != 32:
-            raise ChainMintError(
-                f"identityHash debe ser bytes32 (32 bytes), recibido {len(identity_hash_bytes)}."
-            )
-
-        # Serialize nonce allocation/submission within this process. A real
-        # production release still needs a distributed nonce manager or
-        # relayer for multiple workers; readiness remains blocked until then.
-        with _nonce_lock:
-            nonce = w3.eth.get_transaction_count(account.address, "pending")
-            tx = contract.functions.mintMembership(
-                to, identity_hash_bytes, assurance_level, token_uri
-            ).build_transaction(
-                {
-                    "from": account.address,
-                    "nonce": nonce,
-                    "chainId": SEPOLIA_CHAIN_ID,
-                }
-            )
-
-            signed = account.sign_transaction(tx)
-            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-
-        if receipt.status != 1:
-            raise ChainMintError(
-                f"La transacción se revirtió on-chain (tx {tx_hash.hex()})."
-            )
-
-        token_id = None
-        try:
-            events = contract.events.MembershipMinted().process_receipt(receipt)
-            if events:
-                token_id = int(events[0]["args"]["tokenId"])
-        except Exception as e:
-            logger.warning(
-                "No se pudo leer el tokenId del recibo (tx %s, %s)",
-                tx_hash.hex(),
-                type(e).__name__,
-            )
-
-        if token_id is None:
-            # Never fabricate an off-chain id after a successful transaction.
-            # Resolve the authoritative value from contract state; if the RPC
-            # cannot do so, fail loudly so a reconciler can recover by tx hash.
-            try:
-                resolved = int(contract.functions.getMembershipToken(to).call())
-            except Exception as exc:
-                raise ChainMintError(
-                    "La transacción fue confirmada, pero no se pudo resolver "
-                    "su tokenId on-chain; requiere reconciliación."
-                ) from exc
-            if resolved <= 0:
-                raise ChainMintError(
-                    "La transacción fue confirmada sin un tokenId on-chain válido; "
-                    "requiere reconciliación."
-                )
-            token_id = resolved
-
-        return tx_hash.hex(), token_id
-
-    except ChainMintError:
-        raise
-    except Exception as e:
-        logger.error(
-            "Error minteando on-chain para %s (%s)",
-            wallet_address,
-            type(e).__name__,
-        )
-        raise ChainMintError(
-            "Fallo interno al enviar o confirmar la transacción"
-        ) from e
+    value = raw.hex() if hasattr(raw, "hex") else str(raw)
+    return value if value.startswith("0x") else f"0x{value}"
 
 
 # === Modelo ZK (ADR-001, D-2) ===================================================
@@ -456,6 +430,18 @@ def approve_identity_root(identity_root: int) -> Optional[str]:
     if already is None:
         raise ChainMintError("No se pudo comprobar si la raíz ya estaba aprobada.")
 
+    # `approveIdentityRoot` es `onlyRole(ROOT_MANAGER_ROLE)`, y el script de
+    # despliegue concede ese rol SOLO al admin. Sin esta comprobación el fallo
+    # aparecía como un revert opaco durante la estimación de gas, y el operador
+    # no tenía forma de saber que lo que faltaba era una concesión de rol.
+    operational = runtime_status()
+    if operational.get("can_approve_roots") is False:
+        raise ChainMintError(
+            "La wallet configurada no tiene ROOT_MANAGER_ROLE en el contrato: "
+            "no puede aprobar raíces de identidad. Concédeselo desde el admin "
+            "o aprueba la raíz con la wallet que sí lo tiene."
+        )
+
     try:
         w3, contract, account = _client()
         with _nonce_lock:
@@ -474,7 +460,7 @@ def approve_identity_root(identity_root: int) -> Optional[str]:
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
         if receipt.status != 1:
             raise ChainMintError("La aprobación de la raíz se revirtió on-chain.")
-        return tx_hash.hex()
+        return tx_hash_hex(tx_hash)
     except ChainMintError:
         raise
     except Exception as e:
@@ -489,12 +475,23 @@ def mint_with_proof(
     proof_c: list,
     nullifier_hash: str,
     identity_root: int,
-) -> Tuple[str, Optional[int]]:
+    on_submitted: Optional[Callable[[str], None]] = None,
+) -> Tuple[str, int]:
     """Envía el mint con la prueba ZK. Devuelve (tx_hash, token_id).
+
+    El `token_id` nunca es `None`: si no se puede resolver, se lanza
+    `ChainMintError` para que lo recoja la reconciliación. Devolver la
+    transacción sin su token dejaría al llamador inventándose el valor.
 
     El relayer paga el gas: el ciudadano no necesita ETH (D-1, ERC-4337). No
     puede alterar el destinatario, porque `recipient` está ligado dentro de la
     hoja del árbol y la prueba dejaría de verificar.
+
+    `on_submitted` recibe el hash EN CUANTO la transacción se difunde, antes de
+    esperar el recibo. Esa espera dura hasta 120 s y una caída dentro de esa
+    ventana dejaba una transacción real sin ningún rastro en la base de datos:
+    el reintento no tenía con qué reconciliar y volvía a gastar gas contra un
+    revert seguro por nullifier repetido.
     """
     from web3 import Web3
 
@@ -504,7 +501,8 @@ def mint_with_proof(
     operational = runtime_status()
     if not operational.get("ready"):
         raise ChainMintError(
-            "La precondición operativa on-chain falló; revisa RPC, red, contrato, rol y saldo."
+            "La precondición operativa on-chain falló: "
+            + "; ".join(operational.get("errors") or ["motivo no determinado"])
         )
 
     try:
@@ -532,12 +530,25 @@ def mint_with_proof(
             )
             signed = account.sign_transaction(tx)
             tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+
+        submitted = tx_hash_hex(tx_hash)
+        if on_submitted is not None:
+            # Un fallo al registrar el envío no puede anular una transacción ya
+            # difundida: se deja constancia en el log y se sigue esperando el
+            # recibo. La red no acepta un rollback.
+            try:
+                on_submitted(submitted)
+            except Exception:
+                logger.error(
+                    "No se pudo registrar el envío del minteo antes de esperar "
+                    "el recibo; la transacción ya está en la red",
+                    exc_info=True,
+                )
+
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
 
         if receipt.status != 1:
-            raise ChainMintError(
-                f"El minteo se revirtió on-chain (tx {tx_hash.hex()})."
-            )
+            raise ChainMintError(f"El minteo se revirtió on-chain (tx {submitted}).")
 
         token_id = None
         try:
@@ -563,7 +574,7 @@ def mint_with_proof(
                 )
             token_id = resolved
 
-        return tx_hash.hex(), token_id
+        return submitted, token_id
 
     except ChainMintError:
         raise
@@ -572,6 +583,77 @@ def mint_with_proof(
         raise ChainMintError(
             "Fallo interno al enviar o confirmar la transacción"
         ) from e
+
+
+# === Lecturas de reconciliación =================================================
+# La cadena es la única fuente de verdad cuando el registro en Mongo quedó a
+# medias. Todas estas devuelven `None`/"unknown" ante un RPC caído: convertir
+# "no se pudo consultar" en "no pasó nada" es lo que autoriza un segundo envío
+# de gas contra un revert seguro.
+
+
+def transaction_outcome(tx_hash: str) -> Tuple[str, Optional[int]]:
+    """Qué pasó con una transacción de minteo, según la cadena.
+
+    Devuelve `("confirmed", token_id | None)`, `("reverted", None)` o
+    `("unknown", None)`.
+
+    `unknown` cubre dos casos que no se distinguen desde fuera —sigue en el
+    mempool, o se cayó de él— y por eso nunca se traduce a un veredicto: quien
+    llama debe decidir consultando el nullifier, no suponiendo.
+    """
+    if not can_read_chain() or not tx_hash:
+        return ("unknown", None)
+
+    from eth_typing import HexStr
+    from web3 import Web3
+
+    try:
+        w3 = Web3(
+            Web3.HTTPProvider(settings.SEPOLIA_RPC_URL, request_kwargs={"timeout": 10})
+        )
+        receipt = w3.eth.get_transaction_receipt(HexStr(tx_hash))
+    except Exception:
+        # Incluye TransactionNotFound: ausencia de recibo no es un veredicto.
+        return ("unknown", None)
+
+    if receipt is None:
+        return ("unknown", None)
+    if int(receipt["status"]) != 1:
+        return ("reverted", None)
+
+    token_id = None
+    try:
+        contract = _read_only_contract()
+        events = contract.events.MembershipMinted().process_receipt(receipt)
+        if events:
+            token_id = int(events[0]["args"]["tokenId"])
+    except Exception:
+        logger.warning("No se pudo leer el tokenId de un recibo reconciliado")
+
+    return ("confirmed", token_id)
+
+
+def nullifier_is_used(nullifier_hash: str) -> Optional[bool]:
+    """`isNullifierUsed(bytes32)` del contrato. `None` si no se pudo consultar.
+
+    `None` no es `False`: es lo que impide que un RPC caído se lea como "no
+    pasó nada on-chain" y habilite un reintento que quemaría gas.
+    """
+    if not can_read_chain():
+        return None
+    try:
+        raw = bytes.fromhex(nullifier_hash.removeprefix("0x"))
+    except (AttributeError, ValueError):
+        return None
+    if len(raw) != 32:
+        return None
+    try:
+        contract = _read_only_contract()
+        return bool(contract.functions.isNullifierUsed(raw).call())
+    except Exception as exc:
+        logger.error("No se pudo consultar isNullifierUsed() (%s)", type(exc).__name__)
+        return None
 
 
 def has_membership(wallet_address: str) -> bool:

@@ -58,25 +58,58 @@ def test_production_onchain_rpc_requires_https(monkeypatch):
     )
 
 
-def test_runtime_status_checks_chain_contract_role_and_balance(monkeypatch):
+class Call:
+    def __init__(self, value):
+        self.value = value
+
+    def call(self):
+        return self.value
+
+
+class Reverts:
+    """Una función que el contrato desplegado NO expone."""
+
+    def call(self):
+        raise ValueError("execution reverted")
+
+
+ROOT_MANAGER_ROLE = b"r" * 32
+
+
+def _fake_chain(
+    monkeypatch,
+    *,
+    scope=12345,
+    paused=False,
+    balance=1,
+    has_root_role=True,
+    exposes_scope=True,
+):
+    """Contrato de mentira que imita a DAOCiudadanaSBT.sol, no a un contrato ideal.
+
+    Deliberadamente NO tiene `MINTER_ROLE()`: el contrato real tampoco. Un
+    doble más permisivo que el original es cómo el sondeo llegó a producción
+    exigiendo un rol inexistente con el suite en verde.
+    """
     monkeypatch.setattr(settings, "SEPOLIA_RPC_URL", "https://sepolia.example/rpc")
     monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "0x" + "11" * 20)
     monkeypatch.setattr(settings, "MINTER_PRIVATE_KEY", "0x" + "22" * 32)
     monkeypatch.setattr(chain_service, "_runtime_cache", None)
 
-    class Call:
-        def __init__(self, value):
-            self.value = value
-
-        def call(self):
-            return self.value
-
     class Functions:
-        def MINTER_ROLE(self):
-            return Call(b"m" * 32)
+        def membershipScope(self):
+            return Call(scope) if exposes_scope else Reverts()
+
+        def paused(self):
+            return Call(paused)
+
+        def ROOT_MANAGER_ROLE(self):
+            return Call(ROOT_MANAGER_ROLE)
 
         def hasRole(self, role, account):
-            return Call(role == b"m" * 32 and account == "0xminter")
+            return Call(
+                has_root_role and role == ROOT_MANAGER_ROLE and account == "0xminter"
+            )
 
     class Contract:
         address = "0x" + "11" * 20
@@ -91,7 +124,7 @@ def test_runtime_status_checks_chain_contract_role_and_balance(monkeypatch):
 
         @staticmethod
         def get_balance(address):
-            return 1 if address == "0xminter" else 0
+            return balance if address == "0xminter" else 0
 
     class Web3Client:
         eth = Eth()
@@ -104,16 +137,81 @@ def test_runtime_status_checks_chain_contract_role_and_balance(monkeypatch):
         address = "0xminter"
 
     monkeypatch.setattr(
-        chain_service,
-        "_client",
-        lambda: (Web3Client(), Contract(), Account()),
+        chain_service, "_client", lambda: (Web3Client(), Contract(), Account())
     )
+
+
+def test_runtime_status_is_ready_against_the_real_contract_abi(monkeypatch):
+    """El relevo del minteo no exige ningún rol: la prueba ES la autorización.
+
+    Regresión del P0: el sondeo llamaba a `MINTER_ROLE()`, que
+    `DAOCiudadanaSBT.sol` no declara. La llamada revertía, se capturaba como
+    "no se pudo validar" y todo minteo real moría en la precondición.
+    """
+    _fake_chain(monkeypatch)
 
     result = chain_service.runtime_status()
 
     assert result["ready"] is True
-    assert result["chain_id"] == chain_service.SEPOLIA_CHAIN_ID
     assert result["errors"] == []
+    assert result["chain_id"] == chain_service.SEPOLIA_CHAIN_ID
+    assert result["membership_scope"] == "12345"
+    assert result["paused"] is False
+
+
+def test_runtime_status_rejects_a_contract_without_membership_scope(monkeypatch):
+    """La dirección histórica de Sepolia tiene otra ABI: hay que decirlo."""
+    _fake_chain(monkeypatch, exposes_scope=False)
+
+    result = chain_service.runtime_status()
+
+    assert result["ready"] is False
+    assert any("membershipScope()" in error for error in result["errors"])
+
+
+def test_runtime_status_reports_a_paused_contract(monkeypatch):
+    """`mintMembership` es `whenNotPaused`: minteo pausado, no "fallo de red"."""
+    _fake_chain(monkeypatch, paused=True)
+
+    result = chain_service.runtime_status()
+
+    assert result["ready"] is False
+    assert result["paused"] is True
+    assert any("pausado" in error for error in result["errors"])
+
+
+def test_runtime_status_requires_gas_but_not_a_role(monkeypatch):
+    _fake_chain(monkeypatch, balance=0)
+
+    result = chain_service.runtime_status()
+
+    assert result["ready"] is False
+    assert any("saldo" in error for error in result["errors"])
+
+
+def test_root_manager_role_is_reported_without_blocking_minting(monkeypatch):
+    """Sin ROOT_MANAGER_ROLE no se aprueban raíces, pero sí se releva un minteo.
+
+    Un despliegue donde el Safe admin aprueba las raíces a mano es legítimo;
+    exigir el rol al relayer lo dejaría sin poder mintear nunca.
+    """
+    _fake_chain(monkeypatch, has_root_role=False)
+
+    result = chain_service.runtime_status()
+
+    assert result["ready"] is True
+    assert result["can_approve_roots"] is False
+
+
+def _proof_args():
+    return {
+        "wallet_address": "0x" + "ab" * 20,
+        "proof_a": ["1", "2"],
+        "proof_b": [["1", "2"], ["3", "4"]],
+        "proof_c": ["5", "6"],
+        "nullifier_hash": "0x" + "cd" * 32,
+        "identity_root": 123,
+    }
 
 
 def test_mint_raises_when_not_configured(monkeypatch):
@@ -123,7 +221,7 @@ def test_mint_raises_when_not_configured(monkeypatch):
     monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "")
     monkeypatch.setattr(settings, "MINTER_PRIVATE_KEY", "")
     with pytest.raises(chain_service.ChainMintError):
-        chain_service.mint_sbt_onchain("0x" + "ab" * 20, "0x" + "00" * 32, "AL2")
+        chain_service.mint_with_proof(**_proof_args())
 
 
 def test_mint_never_uses_client_when_runtime_precondition_fails(monkeypatch):
@@ -144,11 +242,39 @@ def test_mint_never_uses_client_when_runtime_precondition_fails(monkeypatch):
     monkeypatch.setattr(chain_service, "_client", unexpected_client)
 
     with pytest.raises(chain_service.ChainMintError, match="precondición operativa"):
-        chain_service.mint_sbt_onchain(
-            "0x" + "ab" * 20,
-            "0x" + "00" * 32,
-            "AL2",
-        )
+        chain_service.mint_with_proof(**_proof_args())
+
+
+def test_the_failed_precondition_says_what_actually_failed(monkeypatch):
+    """El motivo llega al log en vez de un "revisa RPC, red, contrato y rol"."""
+    import pytest
+
+    monkeypatch.setattr(settings, "SEPOLIA_RPC_URL", "https://sepolia.example/rpc")
+    monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "0x" + "11" * 20)
+    monkeypatch.setattr(settings, "MINTER_PRIVATE_KEY", "0x" + "22" * 32)
+    monkeypatch.setattr(
+        chain_service,
+        "runtime_status",
+        lambda: {"ready": False, "errors": ["el contrato de membresía está pausado"]},
+    )
+
+    with pytest.raises(chain_service.ChainMintError, match="pausado"):
+        chain_service.mint_with_proof(**_proof_args())
+
+
+def test_tx_hash_is_normalized_to_the_0x_prefix():
+    """hexbytes 1.x dejó de prefijar `.hex()`, y un hash sin `0x` no es un hash.
+
+    Ningún explorador lo acepta y el ciudadano no puede seguir su transacción.
+    """
+
+    class FakeHexBytes:
+        @staticmethod
+        def hex():
+            return "ab" * 32
+
+    assert chain_service.tx_hash_hex(FakeHexBytes()).startswith("0x")
+    assert chain_service.tx_hash_hex("0x" + "ab" * 32) == "0x" + "ab" * 32
 
 
 # === Lecturas sin llave privada ===

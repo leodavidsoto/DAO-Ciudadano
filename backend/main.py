@@ -231,9 +231,11 @@ app.include_router(maci_router, prefix="/api")
 app.include_router(erc4337_router, prefix="/api")
 if settings.ENABLE_METRICS:
     from app.routers.metrics import router as metrics_router
+
     app.include_router(metrics_router)
 
 from app.routers.analytics import router as analytics_router
+
 app.include_router(analytics_router, prefix="/api")
 
 
@@ -260,12 +262,16 @@ async def health_check():
     """
     from fastapi.responses import JSONResponse
 
+    # El sondeo NO depende de MINT_MODE: el minteo real va por el relayer ZK
+    # (/membership/mint-zk), que nunca lo consulta. Condicionarlo a
+    # MINT_MODE=onchain dejaba el estado del relayer invisible justo en el
+    # despliegue que lo usa. El propio sondeo cachea 30 s, así que esto no
+    # convierte /health en un amplificador contra el RPC.
     onchain_runtime = None
-    if settings.MINT_MODE == "onchain":
-        from app.services import chain_service
+    from app.services import chain_service
 
-        if chain_service.is_configured():
-            onchain_runtime = await asyncio.to_thread(chain_service.runtime_status)
+    if chain_service.is_configured():
+        onchain_runtime = await asyncio.to_thread(chain_service.runtime_status)
     configuration = readiness.status(onchain_runtime)
     db_healthy = True
     try:

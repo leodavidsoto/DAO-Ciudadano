@@ -265,3 +265,4 @@ Las reglas completas están en [`AGENTS.md`](../AGENTS.md). Las tres que más im
 2. **No marques nada como completo si no ejecutaste el camino real.** El precedente aquí es un `test_result.md` que documentaba un protocolo de testing elaborado sin un solo resultado registrado.
 
 3. **Verifica contra la fuente, no contra la documentación.** El README de este repositorio llegó a afirmar cosas que el código contradecía. Si algo es on-chain, consúltalo por RPC antes de darlo por cierto.
+· [`CLAUDE_REPORT.md`](./CLAUDE_REPORT.md) — Últimas tareas y refactorizaciones realizadas por Claude

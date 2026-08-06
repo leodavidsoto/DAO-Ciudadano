@@ -466,6 +466,48 @@ def onchain_minting_status(runtime: dict | None = None) -> dict:
     }
 
 
+def zk_relayer_status(runtime: dict | None = None) -> dict:
+    """Estado del ÚNICO camino de minteo real: el relayer ZK.
+
+    Va separado de `MINT_MODE` porque son cosas distintas: `MINT_MODE` gobierna
+    el registro local en Mongo (`/membership/mint`), y el minteo real vive en
+    `/membership/mint-zk`, que no lo consulta.
+
+    Antes esto no se reportaba en ninguna parte —`/health` solo sondeaba la
+    cadena con `MINT_MODE=onchain`—, así que un despliegue con el relayer
+    inservible se anunciaba "listo".
+    """
+    onchain = onchain_minting_status(runtime)
+    blockers: list[str] = []
+
+    if not onchain["configured"]:
+        affected = onchain["missing"] + list(onchain["invalid"])
+        blockers.append(
+            "el relayer ZK no está configurado: " + ", ".join(sorted(affected))
+        )
+    elif runtime is None:
+        blockers.append("sondeo operativo del relayer ZK pendiente")
+    elif not runtime.get("ready"):
+        blockers.extend(runtime.get("errors") or ["el sondeo del relayer ZK falló"])
+
+    # Sin ROOT_MANAGER_ROLE no se pueden aprobar raíces, y sin raíz aprobada el
+    # contrato rechaza TODOS los minteos. No bloquea el relevo en sí —el Safe
+    # admin puede aprobarlas a mano—, pero un despliegue que espera que lo haga
+    # el backend tiene que enterarse aquí y no cuando falle la primera alta.
+    if runtime is not None and runtime.get("can_approve_roots") is False:
+        blockers.append(
+            "la wallet del relayer no tiene ROOT_MANAGER_ROLE: el backend no "
+            "puede aprobar raíces de identidad y ninguna credencial nueva "
+            "podrá mintear"
+        )
+
+    return {
+        "available": not blockers,
+        "blockers": blockers,
+        "onchain": onchain,
+    }
+
+
 def minting_status(onchain_runtime: dict | None = None) -> dict:
     """Operational state of the explicitly selected membership mode.
 
@@ -481,19 +523,12 @@ def minting_status(onchain_runtime: dict | None = None) -> dict:
     elif settings.MINT_MODE == "demo" and settings.is_production:
         blockers.append("MINT_MODE=demo no está permitido con APP_ENV=production")
     elif settings.MINT_MODE == "onchain":
-        if not onchain["configured"]:
-            invalid_keys = list(onchain["invalid"])
-            affected = onchain["missing"] + invalid_keys
-            blockers.append(
-                "configuración on-chain ausente o inválida: " + ", ".join(affected)
-            )
-        elif not onchain_runtime:
-            blockers.append("validación operativa on-chain pendiente")
-        elif not onchain_runtime.get("ready"):
-            blockers.extend(
-                onchain_runtime.get("errors")
-                or ["la validación operativa on-chain falló"]
-            )
+        # Este endpoint dejó de poder mintear on-chain: el contrato actual solo
+        # emite contra una prueba Groth16 y la firma antigua ya no existe.
+        blockers.append(
+            "MINT_MODE=onchain ya no existe en /membership/mint; el minteo real "
+            "va por /membership/mint-zk"
+        )
 
     if settings.is_production:
         blockers.append(
@@ -505,6 +540,7 @@ def minting_status(onchain_runtime: dict | None = None) -> dict:
         "available": not blockers,
         "blockers": blockers,
         "onchain": onchain,
+        "zk_relayer": zk_relayer_status(onchain_runtime),
     }
 
 

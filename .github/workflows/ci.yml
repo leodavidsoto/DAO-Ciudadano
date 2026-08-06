@@ -9,6 +9,45 @@ permissions:
   contents: read
 
 jobs:
+  # Paso 4 del runbook de seguridad: escanear HEAD, ramas, tags e historial.
+  # El incidente P0 (una EMERGENT_LLM_KEY commiteada en 8d66b97/6202a9f/9977a2f)
+  # no lo detectó nada automático — se encontró leyendo el historial a mano.
+  # Este job existe para que el segundo no dependa de que alguien mire.
+  #
+  # Escanea el historial COMPLETO, no solo el diff del PR: un secreto que entró
+  # hace un año y sigue en un blob alcanzable sigue estando publicado.
+  secrets:
+    name: Seguridad · secret scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Binario oficial fijado por versión Y checksum, en vez de una acción de
+      # terceros: es una dependencia más en la cadena de suministro del CI, y
+      # esta corre sobre todo el historial del repositorio.
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0   # historial completo: sin esto solo se ve el último commit
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+      # Solo el escaneo de historial: cubre cada archivo rastreado en cada
+      # commit, HEAD incluido. Un `gitleaks dir` adicional miraría exactamente
+      # el mismo contenido en un checkout limpio, y se rompería en cuanto
+      # alguien añadiera un paso de build al job (los artefactos de
+      # frontend/build y mobile/android/build disparan el detector).
+      #
+      # --redact: los hallazgos van a un log público. Sin esto, el propio job
+      # que denuncia una filtración la volvería a publicar.
+      - name: Scan full git history
+        run: ./gitleaks git . -c .gitleaks.toml --redact --no-banner --exit-code 1
+
   backend:
     name: Backend · pytest
     runs-on: ubuntu-latest

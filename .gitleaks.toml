@@ -1,0 +1,65 @@
+# Configuración de secret scanning (docs/SECURITY_RUNBOOK.md, paso 4).
+#
+# El escaneo corre sobre el HISTORIAL COMPLETO en cada PR. Como el repositorio
+# ya arrastra un incidente conocido, sin esta configuración el job estaría rojo
+# de forma permanente y en dos semanas nadie lo miraría — que es peor que no
+# tenerlo.
+#
+# Cada excepción de aquí abajo está anclada a un commit y una ruta concretos.
+# Ninguna es un patrón amplio: un secreto nuevo en cualquier otro sitio, o en
+# los mismos archivos en un commit distinto, sigue rompiendo el build.
+
+[extend]
+useDefault = true
+
+# === Incidente P0: NO es un cierre, es un reconocimiento ======================
+#
+# `backend/.env` con una EMERGENT_LLM_KEY real entró en el historial público el
+# 15-09-2025. Silenciarlo aquí NO lo resuelve: borrar blobs no vuelve segura una
+# llave que ya fue pública. La acción obligatoria sigue siendo revocarla en el
+# proveedor y auditar su uso y facturación — paso 1 y 2 del runbook.
+#
+# Esta excepción existe solo para que el detector empiece a proteger de los
+# secretos FUTUROS mientras la rotación y la posible reescritura de historial
+# se coordinan con todos los colaboradores.
+#
+# Quítala en cuanto se reescriba el historial.
+[[allowlists]]
+description = "P0 histórico ya documentado en docs/SECURITY_RUNBOOK.md — pendiente de rotación"
+condition = "AND"
+commits = [
+  "8d66b97",
+  "6202a9f60415723b46d5cd219e429b30a75f1cb7",
+  "9977a2f",
+]
+paths = ['''^backend/\.env$''']
+
+# === Falsos positivos ==========================================================
+#
+# Fixtures de test cuyos valores son deliberadamente falsos y están en el
+# repositorio a propósito: la suite tiene que ser hermética y no puede depender
+# de secretos reales (ver la cabecera de backend/tests/conftest.py).
+#
+# Se listan los valores UNO A UNO en vez de eximir `backend/tests/` entero. Es
+# más trabajo, y es el punto: añadir a este archivo algo que parece un secreto
+# obliga a justificarlo en la revisión, que es exactamente la fricción que se
+# quiere en ese momento.
+[[allowlists]]
+description = "Valores de prueba fijos y públicos de la suite del backend"
+condition = "AND"
+paths = ['''^backend/tests/.*\.py$''']
+regexes = [
+  '''test-only-''',
+  '''pDWj9oG8D2Ms2dcHjTCiLsQM5raWlXfiINYLooDS4Q0=''',
+  # Dirección inválida a propósito, para probar el error de configuración.
+  '''0xno-es-una-direccion''',
+  # Clave de idempotencia fija de un fixture MACI.
+  '''idem-0123456789''',
+]
+
+# Los lockfiles de CocoaPods llevan hashes de integridad de cada dependencia.
+# Son checksums públicos, no credenciales, y su ausencia rompería la build.
+[[allowlists]]
+description = "Checksums de integridad de CocoaPods"
+condition = "AND"
+paths = ['''^mobile/ios/Podfile\.lock$''']

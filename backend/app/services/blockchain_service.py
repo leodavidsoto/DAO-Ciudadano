@@ -2,13 +2,21 @@
 Blockchain Service
 Handles Web3 operations, wallet connections, and SBT minting
 
-`MINT_MODE` makes the behavior explicit: disabled, demo (Mongo only) or
-onchain. There is no automatic fallback from onchain to demo. Production is
-blocked until a one-time identity verification grant is bound to the wallet.
+`MINT_MODE` gobierna ÚNICAMENTE el registro local: `disabled` o `demo` (solo
+Mongo). El minteo real vive en `/membership/mint-zk`, porque el contrato actual
+solo emite contra una prueba Groth16 y este endpoint no la tiene.
+
+`MINT_MODE=onchain` se rechaza explícitamente. Antes intentaba llamar a
+`mintMembership(to, identityHash, assuranceLevel, uri)`, una firma que dejó de
+existir al migrar al modelo ZK: el resultado era siempre un fallo genérico
+("no se pudo confirmar el minteo on-chain") que parecía un problema de red.
+Falla con su motivo real en vez de aparentar un camino que no existe.
+
+Producción sigue bloqueada aquí: SIWE prueba control de una wallet, no que la
+persona completó una verificación civil.
 """
 
 from typing import Optional, Tuple
-import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -17,9 +25,7 @@ from pymongo.errors import DuplicateKeyError
 from ..core.config import settings
 from ..core.database import members_collection
 from ..core.security_middleware import verify_eth_address
-from ..core.identity import document_identity_hash_hex
 from ..models import Member
-from . import chain_service
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +65,11 @@ class BlockchainService:
                 "La creación de membresías está deshabilitada en este entorno."
             )
 
-        if settings.MINT_MODE == "onchain" and not chain_service.is_configured():
+        if settings.MINT_MODE == "onchain":
             raise MintingUnavailable(
-                "El modo on-chain requiere SEPOLIA_RPC_URL, SBT_CONTRACT_ADDRESS "
-                "y MINTER_PRIVATE_KEY."
+                "Este endpoint no puede mintear on-chain: el contrato actual "
+                "solo emite contra una prueba Groth16. Usa "
+                "POST /api/membership/mint-zk."
             )
 
         try:
@@ -95,9 +102,7 @@ class BlockchainService:
                 token_id=None,
                 doc_hash=doc_hash,
                 assurance_level=assurance_level,
-                issuance_mode=(
-                    "onchain" if settings.MINT_MODE == "onchain" else "demo"
-                ),
+                issuance_mode="demo",
                 status="pending",
                 identity_verified=False,
             )
@@ -107,65 +112,22 @@ class BlockchainService:
             except DuplicateKeyError:
                 return (False, None, None, "Ya existe un SBT para esta wallet")
 
-            if settings.MINT_MODE == "onchain":
-                try:
-                    identity_hash_hex = document_identity_hash_hex(doc_hash)
-                    tx_hash, onchain_token_id = await asyncio.to_thread(
-                        chain_service.mint_sbt_onchain,
-                        wallet_address=address,
-                        identity_hash_hex=identity_hash_hex,
-                        assurance_level=assurance_level,
-                    )
-                    if onchain_token_id is None:
-                        raise MintingUnavailable(
-                            "El minteo on-chain no devolvió un tokenId verificable."
-                        )
+            # Demo mode: el único que llega aquí. `tx_hash` se queda en None a
+            # propósito — no hay transacción, y fabricar una sería exactamente
+            # el dato inventado que este repositorio ya quitó una vez.
+            last = await members_collection().find_one(
+                {"token_id": {"$ne": None}}, sort=[("token_id", -1)]
+            )
+            token_id = (last["token_id"] + 1) if last else 1
 
-                    token_id = onchain_token_id
-                    await members_collection().update_one(
-                        {"wallet_address": address},
-                        {
-                            "$set": {
-                                "status": "active",
-                                "token_id": token_id,
-                                "tx_hash": tx_hash,
-                            }
-                        },
-                    )
-                    logger.info(
-                        f"Membership minted on-chain: Token #{token_id} "
-                        f"for {address} (tx {tx_hash})"
-                    )
-                    return (True, token_id, tx_hash, None)
-
-                except Exception as e:
-                    logger.error(f"On-chain mint failed for {address}: {e}")
-                    await members_collection().update_one(
-                        {"wallet_address": address}, {"$set": {"status": "failed"}}
-                    )
-                    if isinstance(e, MintingUnavailable):
-                        raise
-                    return (
-                        False,
-                        None,
-                        None,
-                        "No se pudo confirmar el minteo on-chain. Intenta más tarde.",
-                    )
-            else:
-                # Demo mode
-                last = await members_collection().find_one(
-                    {"token_id": {"$ne": None}}, sort=[("token_id", -1)]
-                )
-                token_id = (last["token_id"] + 1) if last else 1
-
-                await members_collection().update_one(
-                    {"wallet_address": address},
-                    {"$set": {"status": "active", "token_id": token_id}},
-                )
-                logger.info(
-                    f"Membership registered (off-chain demo): Token #{token_id} for {address}"
-                )
-                return (True, token_id, None, None)
+            await members_collection().update_one(
+                {"wallet_address": address},
+                {"$set": {"status": "active", "token_id": token_id}},
+            )
+            logger.info(
+                f"Membership registered (off-chain demo): Token #{token_id} for {address}"
+            )
+            return (True, token_id, None, None)
 
         except MintingUnavailable:
             # Reaches the router as a 503 with its specific reason instead of

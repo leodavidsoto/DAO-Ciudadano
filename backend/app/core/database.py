@@ -133,6 +133,12 @@ class Database:
             await cls.get_db()["mint_operations"].create_index(
                 "nullifier_hash", unique=True
             )
+            # Barrido de reconciliación: busca operaciones abiertas por
+            # antigüedad. Sin este índice recorrería la colección entera cada
+            # vez que se ejecuta.
+            await cls.get_db()["mint_operations"].create_index(
+                [("status", 1), ("created_at", 1)]
+            )
             # MACI: una llave vigente por wallet. El historial NO es unico:
             # cambiar de llave es el mecanismo anti-coercion del protocolo.
             await cls.get_db()["maci_keys"].create_index("wallet_address", unique=True)

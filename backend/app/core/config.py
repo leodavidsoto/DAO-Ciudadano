@@ -99,6 +99,15 @@ class Settings(BaseSettings):
     SBT_CONTRACT_ADDRESS: str = os.environ.get("SBT_CONTRACT_ADDRESS", "")
     MINTER_PRIVATE_KEY: str = os.environ.get("MINTER_PRIVATE_KEY", "")
 
+    # Cuánto puede llevar abierta una operación de minteo antes de ir a
+    # preguntarle a la cadena qué pasó (app/services/mint_operations.py). Por
+    # debajo de este umbral, un reintento recibe un 409 local e inmediato sin
+    # golpear el RPC. Mayor que la espera de recibo (120 s) a propósito: dentro
+    # de esa ventana la transacción todavía puede confirmarse sola.
+    MINT_PENDING_STALE_SECONDS: int = int(
+        os.environ.get("MINT_PENDING_STALE_SECONDS", "180")
+    )
+
     # === Tesorería real (ROADMAP 3.6, app/services/treasury_service.py) ===
     # Dirección del Safe cuyo balance se lee. Vacía = la tesorería se reporta
     # como no configurada, nunca con números inventados.
@@ -193,6 +202,17 @@ class Settings(BaseSettings):
     # emisión de credenciales falla cerrado en producción. Los simuladores de
     # ClaveÚnica/NFC/liveness NUNCA deben emitir grants.
     IDENTITY_PROVIDER: str = os.environ.get("IDENTITY_PROVIDER", "")
+
+    # === Autenticación Pasiva del eMRTD (ICAO 9303-11, ROADMAP 5.8) ===
+    # Trust store de CSCA del Registro Civil, extraído del PKD de la ICAO con
+    # `backend/scripts/extract_csca_from_ldif.py`. Vacío = se usa el archivo
+    # versionado junto al código (app/certs/csca_chile.pem), que es lo
+    # correcto por defecto: en qué se confía forma parte del artefacto
+    # desplegado, no de un volumen que alguien pueda reescribir. La variable
+    # existe para poder apuntar a otro archivo en una prueba o durante una
+    # rotación de master list, nunca para desactivar la verificación: no hay
+    # valor que la desactive.
+    CSCA_TRUST_STORE_PATH: str = os.environ.get("CSCA_TRUST_STORE_PATH", "")
 
     # === ClaveÚnica / OIDC (ROADMAP 4.1) ===
     # NINGÚN valor por defecto, tampoco los endpoints: los entrega la División

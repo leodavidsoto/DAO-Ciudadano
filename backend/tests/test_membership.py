@@ -86,6 +86,33 @@ async def test_mint_is_unavailable_when_mode_is_disabled(client, monkeypatch):
     assert "deshabilitada" in response.json()["detail"]
 
 
+async def test_onchain_mode_points_at_the_zk_endpoint_instead_of_failing_opaquely(
+    client, monkeypatch
+):
+    """`MINT_MODE=onchain` ya no puede mintear aquí, y lo dice.
+
+    Este endpoint llamaba a `mintMembership(to, identityHash, assuranceLevel,
+    uri)`, una firma que dejó de existir al migrar al modelo ZK. El resultado
+    era siempre "No se pudo confirmar el minteo on-chain": un fallo que parecía
+    de red y mandaba a revisar el RPC en vez del código.
+    """
+    monkeypatch.setattr(settings, "MINT_MODE", "onchain")
+
+    response = await _mint(client)
+
+    assert response.status_code == 503
+    assert "/api/membership/mint-zk" in response.json()["detail"]
+
+
+async def test_demo_mode_never_fabricates_a_transaction_hash(client, monkeypatch):
+    monkeypatch.setattr(settings, "MINT_MODE", "demo")
+
+    body = (await _mint(client)).json()
+
+    assert body["ok"] is True
+    assert body["tx_hash"] is None
+
+
 async def test_mint_fails_closed_in_production(client, monkeypatch):
     monkeypatch.setattr(settings, "APP_ENV", "production")
     monkeypatch.setattr(settings, "MINT_MODE", "onchain")
