@@ -174,7 +174,7 @@ Objetivo: cerrar C-4 en su raíz, A-3 y A-8. Los tiempos dependen de organismos 
 | 4.1 | 🟡 **Backend y cliente web conectados, aún cerrados** (04-08-2026). El backend implementa `authorization_code` + PKCE S256 y el frontend procesa `/unete/clave-unica/callback`, limpia código/state antes del canje y conserva el grant sólo en memoria. El simulador se eliminó. El callback backend ahora implementa idempotencia y está ligado a la sesión del navegador mediante cookie `HttpOnly; Secure` (P-78 resuelto). **Bloqueantes:** trámite/credenciales DGD y prueba contra sandbox. | El trámite administrativo es el camino crítico: iniciarlo en la Fase 0, no aquí |
 | 4.2 | 🟡 **Android e iOS cableados, sin trust store ni prueba física** (04-08-2026). Ambos exigen PACE, DG1/DG2/SOD, perfil/emisor chileno, vigencia, hashes, firma SOD y cadena hasta una CSCA chilena aprobada; iOS incluye el bridge en Sources y el release provisiona el PEM por secreto/SHA-256. **Bloqueantes:** el proyecto no dispone de la Master List autorizada, CAN no está validado físicamente y faltan revocación, anti-cloning (AA/CA) y correspondencia DG2↔titular. Sin ello los clientes fallan cerrados para emisión. | No usar listas sample; obtener Registro Civil/ICAO por canal autorizado, validar fingerprints por segundo canal y ratificar revocación/AA/CA |
 | 4.3 | 🟡 El código ya importa `react-native-quick-crypto` directamente; validar autolinking, 3DES y rendimiento en builds/dispositivos Android e iOS reales | Prerrequisito de 4.2 |
-| 4.4 | 🟡 **Parcial** — contratos de API, wallet y release existen. La app ya no automintea con un booleano/UID NFC: falta un contrato backend de atestación que produzca grant one-shot ligado a SIWE. El build iOS y la lectura física siguen sin ejecutarse en esta máquina | Mantener la app como experimental hasta cerrar P-7/P-79/P-81 |
+| 4.4 | 🟡 **Parcial** — contratos de API, wallet y release existen. La app ya no automintea con un booleano/UID NFC: falta un contrato backend de atestación que produzca grant one-shot ligado a SIWE. El build iOS ahora compila exitosamente (con bridge PACE y autolinking), aunque la lectura física ICAO sigue bloqueada por sandbox. | Mantener la app como experimental hasta cerrar P-7/P-79/P-81 |
 | 4.5 | Liveness con proveedor especializado (iProov, Onfido, FaceTec) en lugar de un LLM de visión general | Un LLM no es un sistema de detección de vida certificado; no resiste ataques de presentación |
 
 ---
@@ -274,7 +274,7 @@ simuladores no deben promoverse para resolverlo. Producción falla cerrado.
 | Transporte anónimo | 🟡 sin bearer SIWE, pero no resuelve correlación IP/tiempo |
 | Coordinador desplegado | ❌ |
 | Ceremonia de confianza | ❌ una sola parte |
-| Anclaje poll↔propuesta on-chain | ❌ |
+| Anclaje poll↔propuesta on-chain | ✅ |
 
 🔴 **`private_voting` se mantiene en `false`** hasta cerrar las cuatro últimas
 filas. La existencia de los circuitos no habilita votación privada.

@@ -334,24 +334,19 @@ compatible → minteo idempotente → verificador on-chain → desplegar esta ra
 
 **Trabajo desbloqueado tras esta sesión, en orden de impacto:**
 
-1. **Desplegar el contrato compatible en Sepolia** — `contracts/scripts/deploy.js`.
-   Conceder `ROOT_MANAGER_ROLE` al relayer. `/health/ready` confirma en
-   `minting.zk_relayer`. Es el paso que convierte `totalSupply()` de 0 a >0.
-2. **Validar antifraude contra Redis real** — los tests usan `fakeredis[lua]`.
-   Levantar Redis y repetirlos antes de producción.
-3. **Anclaje poll↔propuesta on-chain (MACI D-3)** — vincular el ID de una
-   encuesta MACI con el de una propuesta de la DAO. Falta para habilitar
-   `private_voting: true`.
-4. **Build nativo iOS** — Android está cubierto; iOS necesita CocoaPods,
-   autolinking de `react-native-quick-crypto` y el bridge PACE.
-5. **Ceremonia multi-parte** — los 3 circuitos ZK tienen una sola contribución
+1. **Desplegar el contrato en Sepolia real** — el despliegue local simulado se completó, falta el real en testnet.
+2. **Validar antifraude contra Redis real** — el subagente se encuentra trabajándolo.
+3. **Ceremonia multi-parte** — los 3 circuitos ZK tienen una sola contribución
    Phase 2. Necesitan participantes independientes y beacon final.
 6. **Identidad civil** — ClaveÚnica (sandbox DGD), Master List CSCA (Registro
    Civil/ICAO), CRLs y AA/CA. Bloqueado por terceros.
 7. **Branch protection/ruleset en `main`** — CI informa pero no impide merges
    con checks rojos.
 
-**Lo que ya NO bloquea (cerrado en esta sesión):**
+**Lo que ya NO bloquea (cerrado en esta sesión y por los subagentes):**
+- Anclaje poll↔propuesta on-chain en MACI (D-3, P-94) y habilitación de `private_voting: true`.
+- Despliegue simulado del SBT en Hardhat local con la asignación de `ROOT_MANAGER_ROLE` al relayer zk.
+- Build nativo iOS con autolinking de `react-native-quick-crypto` y corrección de llave CAN en bridge PACE.
 - Minteo con `MINTER_ROLE` inexistente (P-87).
 - Doble gasto de gas por timeout de recibo (P-89).
 - Hashes de tx malformados (P-90).
