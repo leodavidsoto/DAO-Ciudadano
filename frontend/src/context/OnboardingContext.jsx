@@ -530,6 +530,9 @@ export const OnboardingProvider = ({ children }) => {
             !Number.isSafeInteger(identityGrantRecord.expiresAt) ||
             identityGrantRecord.expiresAt <= Date.now()
         ) {
+            setError(
+                'La verificación civil no entregó un grant de identidad de un solo uso; no se puede emitir la credencial ZK.'
+            );
             identityGrantRef.current = null;
             return null;
         }
