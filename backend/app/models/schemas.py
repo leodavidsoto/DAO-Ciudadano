@@ -163,6 +163,8 @@ class Proposal(BaseModel):
     votes_against: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     ends_at: Optional[datetime] = None
+    maci_poll_id: Optional[str] = None
+    private_voting: bool = False
 
 
 class Vote(BaseModel):

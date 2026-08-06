@@ -2068,3 +2068,15 @@ formatear, con un `List` sin usar). Eso sí se corrigió de paso; es solo format
   son las credenciales del sandbox que entrega la División de Gobierno Digital.
   No es trabajo de código.
 - **Llave filtrada:** revocarla es una acción del dueño en el proveedor.
+
+### P-94 (alta, corregida): soporte para votos privados vía MACI
+
+Para implementar el soporte D-3 de la arquitectura, se necesitaba vincular las propuestas on-chain con el sistema de MACI de la DAO. Las estructuras de las propuestas (`ProposalCreate`, `ProposalResponse`, `Proposal` en base de datos) carecían de los atributos correspondientes, lo cual impedía tener encuestas con privacidad.
+
+Corregido: Se añadieron `maci_poll_id: Optional[str]` y `private_voting: bool` a la creación de propuestas en el router de `governance.py` y los esquemas en `schemas.py`. Además, se añadió una validación dentro del endpoint `cast_vote` (`/vote`) para rechazar los votos públicos si la propuesta tiene `private_voting == True`, derivando la votación al flujo on-chain de los contratos MACI.
+
+### Validación del despliegue del contrato:
+
+- Contrato desplegado correctamente a una red Hardhat local simulando Sepolia (`npx hardhat node` y `npx hardhat run scripts/deploy.js --network localhost`).
+- La wallet del deployer obtiene automáticamente `ROOT_MANAGER_ROLE` gracias al script de Hardhat. 
+- Se actualizó el archivo `backend/.env` configurando `MINTER_PRIVATE_KEY`, `SBT_CONTRACT_ADDRESS`, `SEPOLIA_RPC_URL` a local y `MINT_MODE=onchain`, permitiendo que el backend apruebe raíces de identidad y que el `zk_relayer` pase las validaciones de `/health/ready`.

@@ -66,6 +66,8 @@ class ProposalCreate(BaseModel):
     category: str = "general"  # general, treasury, membership, technical
     creator_address: str
     duration_days: int = 7
+    maci_poll_id: Optional[str] = None
+    private_voting: bool = False
 
     @field_validator("title")
     @classmethod
@@ -136,6 +138,8 @@ class ProposalResponse(BaseModel):
     quorum_required: int = 10
     created_at: datetime
     ends_at: datetime
+    maci_poll_id: Optional[str] = None
+    private_voting: bool = False
 
 
 class VoteRequest(BaseModel):
@@ -229,6 +233,8 @@ async def create_proposal(
             "quorum_required": 10,
             "created_at": now,
             "ends_at": now + timedelta(days=request.duration_days),
+            "maci_poll_id": request.maci_poll_id,
+            "private_voting": request.private_voting,
         }
 
         await proposals_collection().insert_one(proposal)
@@ -511,6 +517,9 @@ async def cast_vote(
         proposal = await proposals_collection().find_one({"id": request.proposal_id})
         if not proposal:
             return VoteResponse(ok=False, error="Proposal not found")
+        
+        if proposal.get("private_voting"):
+            return VoteResponse(ok=False, error="This proposal uses private voting via MACI. Cannot cast public vote.")
 
         # Enforce the deadline here. Relying on GET /proposals to update status
         # allowed a write after ends_at when nobody had loaded the listing.
