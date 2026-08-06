@@ -97,7 +97,7 @@ Objetivo: cerrar C-1, C-2 y C-6. Al terminar, un SBT existe de verdad y solo lo 
 | 1.10 | **Proveedor real de identidad/liveness + grant** | Sustituir las demos por un proveedor adecuado, aplicar sus garantías y emitir un permiso de alta de un solo uso. La heurística visual demo no debe promoverse a acreditación. | Sin proveedor o evidencia válida, producción falla cerrado y no puede mintear |
 | 1.11 | ✅ **Completada** (03-08-2026). Índice único en `members.wallet_address` y en `members.nullifier_hash` (parcial: solo cuando es string, para que las filas demo/legacy con `null` convivan). El nullifier es el identificador de PERSONA que fijó D-2, así que cierra el hueco de una misma persona con dos wallets. | migración MongoDB | Imposible crear dos membresías para la misma wallet |
 | 1.12 | ✅ Reemplazar `token_id = count + 1` por el `tokenId` del evento o la lectura del contrato | `blockchain_service.py` | El camino on-chain nunca inventa un ID local |
-| 1.13 | 🟡 **Migrar la sesión web fuera de `localStorage`** | Backend listo (02-08-2026): `/wallet/verify` fija `dao_session` HttpOnly + cookie CSRF de doble envío, `/wallet/session` y `/wallet/logout` existen y CORS acepta credenciales con orígenes exactos. Falta que el frontend deje de leer el `token` del body y que exista revocación real del JWT. | Un XSS del frontend no puede extraer el JWT SIWE |
+| 1.13 | ✅ **Completada** (06-08-2026). Backend revoca JWTs en Mongo (`revoked_tokens` con TTL). Frontend usa `HttpOnly` cookie para el transporte de sesión y borra sesión en logout. | Un XSS del frontend no puede extraer el JWT SIWE |
 
 ---
 
