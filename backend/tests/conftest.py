@@ -32,7 +32,6 @@ for _external in (
     "ERC4337_PAYMASTER_ADDRESS",
     "SAFE_4337_MODULE_ADDRESS",
     "SAFE_OWNER_PRIVATE_KEY",
-    "REDIS_URL",
     "SEPOLIA_RPC_URL",
     "SBT_CONTRACT_ADDRESS",
     "MINTER_PRIVATE_KEY",
@@ -46,6 +45,25 @@ for _external in (
     "ETH_PRICE_API_URL",
 ):
     os.environ[_external] = ""
+
+# Redis va aparte del resto de integraciones externas (ROADMAP 3.8).
+#
+# Por defecto se apaga igual que las demás y la suite corre sobre el almacén en
+# memoria: hermética, sin servicios levantados, y CI no depende de nadie. Pero
+# el limitador y el antifraude son el ÚNICO módulo cuya implementación real es
+# un script Lua que se ejecuta dentro de Redis. Probarlo solo contra fakeredis
+# valida la lógica de Python y da por bueno el Lua sin haberlo ejecutado nunca
+# en el intérprete que lo correrá en producción.
+#
+# `TEST_REDIS_URL` es la vía explícita para apuntar la suite ENTERA a un Redis
+# real. Sin ella, nada cambia:
+#
+#     TEST_REDIS_URL=redis://localhost:6379/15 pytest tests/test_antifraud.py
+#
+# Usa una base dedicada (aquí la 15): la suite la vacía entre tests, y hacerlo
+# sobre la 0 borraría lo que alguien tuviera en su Redis de desarrollo.
+_test_redis_url = os.environ.get("TEST_REDIS_URL", "").strip()
+os.environ["REDIS_URL"] = _test_redis_url
 
 # El proveedor de precio se apaga por defecto en la suite: un test que quiera
 # precio lo activa y sustituye la llamada de red explícitamente.

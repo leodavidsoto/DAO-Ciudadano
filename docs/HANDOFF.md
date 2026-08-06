@@ -14,9 +14,12 @@ versión anterior a los guardrails de esta rama.
 
 Los cuatro hechos que tienes que interiorizar antes de tocar una línea:
 
-1. **`totalSupply()` del contrato histórico de Sepolia sigue devolviendo 0.**
-   Esa dirección usa Ownable/`string` y es incompatible con el contrato actual
-   AccessControl/`bytes32`; sirve solo como evidencia histórica y no debe configurarse.
+1. **Ya existe un despliegue compatible, y `totalSupply()` sigue en 0.** El
+   `DAOCiudadanaSBT` del modelo ZK vive en
+   `0x6C6C7D0ceC1b7267cB2fa146519FBF9ef6319d56` (Sepolia), verificado en
+   Sourcify y con el relayer ya en `ROOT_MANAGER_ROLE`. Nadie ha minteado
+   todavía. La dirección **histórica** `0x813fd3…` usa Ownable/`string`, es
+   incompatible y no debe configurarse.
 2. **Minteo y acciones mutantes de gobernanza exigen una sesión EIP-4361 y actuar
    como la misma wallet.** Producción también rechaza miembros demo/legacy, pero falta integrar
    la verificación civil de un solo uso antes de habilitar nuevas membresías.
@@ -178,19 +181,41 @@ DAO-Ciudadano/
 
 ## Datos operativos
 
+### Inventario on-chain (Sepolia, comprobado el 06-08-2026)
+
 | Elemento | Valor |
 |---|---|
+| **`DAOCiudadanaSBT` vigente** | `0x6C6C7D0ceC1b7267cB2fa146519FBF9ef6319d56` |
+| **`Groth16Verifier`** | `0x179e2bbfBe6dCFA610a5a30B81d5A6C0eb19dDd7` |
+| `membershipScope()` | `6514418762376236255077166818315585639416036470302962028908681129483188802648` |
+| `totalSupply()` / `totalIssued()` | **0** / **0** — aún no se ha minteado ninguno |
+| `paused()` | `false` |
+| Admin / relayer / minter | `0x118d2C9eec35bdfc2C84B5A33299AcCc16Ed60d4` (EOA, **una sola** para los cuatro roles) |
+| Emisor de credenciales | `0x178b15422116bCD1b9682FF311F7FA0389186Ba6` |
+| Verificación del código | Sourcify `exact_match` en creación y runtime, ambos contratos |
 | Contrato histórico incompatible (solo evidencia) | `0x813fd379F715107b2451553d97f29408d8185f0e` — **no configurar** |
-| Owner del contrato | `0x154484aff9f6864db17141c6eec62568b8f5ac9b` (EOA) |
-| `totalSupply()` | **0** |
-| Frontend canónico / dominio SIWE | `https://estamosdao.cl` |
-| API configurada por el frontend | `https://api.estamosdao.cl` |
-| Backend histórico sondeado | `https://dao-ciudadana-api.onrender.com` — versión anterior en Render free |
-| Base de datos | MongoDB Atlas, clúster `EstadosDaos`, DB `dao_ciudadana` |
 
-La dirección histórica no se reutiliza. El próximo despliegue debe verificar el
-código actual, separar `DEFAULT_ADMIN_ROLE`/`MINTER_ROLE`, custodiar las llaves y
-registrar direcciones/red en un ADR e inventario operativo.
+El bytecode de ambas direcciones se comparó contra los artifacts compilados
+—enmascarando los `immutable`, que se hornean al desplegar— y coincide con la
+versión vigente del repositorio.
+
+**Dos cosas que este despliegue todavía no cumple**, y que no son opcionales
+antes de admitir ciudadanía real:
+
+1. **Una sola EOA concentra `DEFAULT_ADMIN_ROLE`, `ROOT_MANAGER_ROLE`,
+   `PAUSER_ROLE` y `REVOKER_ROLE`, y además es el relayer.** El contrato está
+   escrito esperando un Safe/multisig como `admin` (lo dice su propio
+   docstring). Comprometer esa llave es comprometer el padrón entero: permite
+   aprobar raíces arbitrarias, pausar y revocar. Separar los roles exige mover
+   la custodia, no redesplegar.
+2. **La ceremonia del verificador es de una sola parte.**
+   `circuits/artifact-manifest.json` declara `productionReady: false` y
+   `trustedSetup: "single-host-development-integration"`. Quien tenga el
+   *toxic waste* puede fabricar pruebas válidas. Sirve para el piloto en
+   testnet; **no** para mainnet ni para membresías vinculantes.
+
+`membershipScope` se deriva de `address(this)`: **redesplegar cambia el scope e
+invalida toda credencial ya emitida.** No se redespliega sin migrar.
 
 ---
 

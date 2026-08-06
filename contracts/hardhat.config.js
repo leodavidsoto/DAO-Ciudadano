@@ -33,6 +33,13 @@ module.exports = {
             polygon: process.env.POLYGONSCAN_API_KEY || ""
         }
     },
+    // Sourcify no pide API key, así que la verificación del código no depende de
+    // que alguien haya cargado ETHERSCAN_API_KEY. Importa para este proyecto:
+    // un contrato de identidad civil cuyo bytecode nadie puede contrastar con
+    // su fuente es indistinguible de uno que hace otra cosa.
+    sourcify: {
+        enabled: true
+    },
     paths: {
         sources: "./contracts",
         tests: "./test",
