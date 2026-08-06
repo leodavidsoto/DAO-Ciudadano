@@ -163,7 +163,7 @@ android {
 
 gradle.taskGraph.whenReady { taskGraph ->
     def releaseTaskPresent = taskGraph.allTasks.any { task ->
-        task.project == project && task.name.toLowerCase().contains("release")
+        task.project == project && (task.name == "assembleRelease" || task.name == "bundleRelease")
     }
     if (releaseTaskPresent && (requestedVersionCode == null || requestedVersionName == null)) {
         throw new GradleException(

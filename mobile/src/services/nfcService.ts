@@ -487,13 +487,13 @@ class NFCService {
 
     /** Reads and verifies a Chilean identity document through native PACE. */
     async readChileanIDPACE(can: string): Promise<NFCReadResult> {
-        if (!/^[A-Z0-9]{6}$/i.test(can.trim())) {
+        if (!/^[A-Z0-9]{9}$/i.test(can.trim())) {
             return {
                 status: 'failed',
                 readCompleted: false,
                 identityVerified: false,
                 errorCode: 'E_INVALID_CAN',
-                error: 'El CAN debe contener exactamente 6 caracteres.',
+                error: 'El CAN debe contener exactamente 9 caracteres.',
             };
         }
 

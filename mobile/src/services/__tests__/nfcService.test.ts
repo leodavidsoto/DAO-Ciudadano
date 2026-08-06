@@ -139,7 +139,7 @@ describe('PassportReader runtime boundary', () => {
         const startPACESession = jest.fn(async () => validNativePayload());
         (NativeModules as Record<string, unknown>).PassportReader = { startPACESession };
 
-        const result = await nfcService.readChileanIDPACE('12A456');
+        const result = await nfcService.readChileanIDPACE('12345678');
         expect(result).toEqual(expect.objectContaining({
             status: 'failed',
             errorCode: 'E_INVALID_CAN',
@@ -151,15 +151,15 @@ describe('PassportReader runtime boundary', () => {
         (NativeModules as Record<string, unknown>).PassportReader = {
             startPACESession: 'not-a-function',
         };
-        await expect(nfcService.readChileanIDPACE('123456')).resolves.toEqual(
+        await expect(nfcService.readChileanIDPACE('123456789')).resolves.toEqual(
             expect.objectContaining({ status: 'failed', errorCode: 'E_MODULE_UNAVAILABLE' }),
         );
 
         const startPACESession = jest.fn(async () => validNativePayload());
         (NativeModules as Record<string, unknown>).PassportReader = { startPACESession };
-        const result = await nfcService.readChileanIDPACE('123456');
+        const result = await nfcService.readChileanIDPACE('123456789');
 
-        expect(startPACESession).toHaveBeenCalledWith('123456');
+        expect(startPACESession).toHaveBeenCalledWith('123456789');
         expect(result.status).toBe('verified');
     });
 
@@ -181,7 +181,7 @@ describe('PassportReader runtime boundary', () => {
         });
         (NativeModules as Record<string, unknown>).PassportReader = { startPACESession };
 
-        await expect(nfcService.readChileanIDPACE('123456')).resolves.toEqual({
+        await expect(nfcService.readChileanIDPACE('123456789')).resolves.toEqual({
             status: 'failed',
             readCompleted: false,
             identityVerified: false,

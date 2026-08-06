@@ -79,8 +79,8 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
 
     const handleStartScan = async () => {
         const normalizedCan = can.trim().toUpperCase();
-        if (!/^[A-Z0-9]{6}$/.test(normalizedCan)) {
-            setError('El CAN debe contener exactamente los 6 caracteres impresos en la cédula.');
+        if (!/^[A-Z0-9]{9}$/.test(normalizedCan)) {
+            setError('El CAN debe contener exactamente los 9 caracteres impresos en la cédula.');
             return;
         }
 
@@ -130,18 +130,18 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
             <View style={styles.scannerContainer}>
                 {!isScanning && (
                     <View style={styles.inputContainer}>
-                        <Text style={styles.inputLabel}>Número de Acceso a la Tarjeta (CAN)</Text>
+                        <Text style={styles.inputLabel}>Número de Documento (CAN)</Text>
                         <TextInput
                             style={styles.input}
-                            placeholder="Ej: 123456"
+                            placeholder="Ej: 123456789"
                             placeholderTextColor="#555"
                             value={can}
                             onChangeText={setCan}
                             keyboardType="default"
                             autoCapitalize="characters"
-                            maxLength={6}
+                            maxLength={9}
                         />
-                        <Text style={styles.inputHint}>Ingresa los 6 caracteres impresos en el frente de tu cédula.</Text>
+                        <Text style={styles.inputHint}>Ingresa los 9 caracteres impresos en el frente de tu cédula.</Text>
                     </View>
                 )}
 
