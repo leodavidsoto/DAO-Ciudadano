@@ -1,7 +1,7 @@
 # Handoff — DAO Ciudadana
 
 **Para:** Codex (o cualquier agente/desarrollador que retome el proyecto)
-**Actualizado:** 2 de agosto de 2026 · base `73f2985`, rama local `codex/produccion-ci`
+**Actualizado:** 6 de agosto de 2026 · base `0db034b`, rama local `codex/produccion-ci`
 **Documentos hermanos:** [`AUDIT.md`](./AUDIT.md) · [`ROADMAP.md`](./ROADMAP.md) · [`SECURITY_RUNBOOK.md`](./SECURITY_RUNBOOK.md) · [`../AGENTS.md`](../AGENTS.md)
 
 ---
@@ -64,6 +64,62 @@ credencial on-chain de producción está habilitada.
 | **App móvil** | ⚠️ Experimental | TypeScript, 15 tests, lint y auditoría npm pasan localmente y tienen un job CI. Release falla cerrado sin keystore externo; faltan PACE real y build/publicación nativos reproducibles. |
 
 ---
+
+## Sesión de orquestación 06-08-2026
+
+Cuatro agentes trabajaron en paralelo (2 instancias de Claude en terminal +
+2 subagentes headless de Antigravity). Resumen de lo logrado:
+
+### Terminal 1 — Destrabar el minteo real (Claude, rama `fix-minter-role-and-tx-hash`)
+
+Commit `58242c7`. Hallazgos P-87 a P-93 documentados en `AUDIT.md`:
+
+- **(P-87 crítica)** `chain_service.py` exigía `MINTER_ROLE` que no existe en el
+  contrato; toda llamada de minteo revertía en la precondición. Corregido.
+- **(P-88 alta)** `MINT_MODE=onchain` llamaba a firma `mintMembership` borrada al
+  migrar a ZK. Eliminado; responde 503 apuntando a `/membership/mint-zk`.
+- **(P-89 alta)** Timeout de recibo provocaba doble gasto de gas. Nuevo módulo
+  `mint_operations.py` persiste `tx_hash` al difundir y distingue
+  `pending`/`submitted`/`confirmed`/`needs_review`.
+- **(P-90)** Hashes de tx sin prefijo `0x`. Normalizado con `tx_hash_hex()`.
+- **(P-91/P-92)** Rol `ROOT_MANAGER_ROLE` y estado del relayer ZK ahora visibles
+  en `/health/ready` bajo `minting.zk_relayer`.
+- **(P-93 alta)** Job de `gitleaks` en CI (SHA fijado, historial completo).
+  Verificado: verde con el historial actual, rompe al plantar un secreto.
+
+Suite final: **524 tests verdes** (los fallos son de la pasada paralela NFC).
+
+### Terminal 2 — Autenticación pasiva ICAO (Claude, `/goal` activo ~35 min)
+
+- Implementó `passive_auth.py`, `csca_trust_store.py`, router `cedula`,
+  `extract_csca_from_ldif.py` y fixtures eMRTD.
+- Extrajo e inyectó 5 certificados CSCA chilenos (`.pem`) en backend y mobile.
+- Actualizó `.gitignore` para versionar certificados CSCA públicos del PKD.
+- Actualizó `readiness.py` para exponer `passive_authentication` en `/health/ready`.
+
+### Subagente Claude (headless) — Llave MACI en Sepolia
+
+- Ejecutó `backend/scripts/generate_maci_key.py` generando el par de llaves.
+- Llamó a `setCoordinatorPubKey` en Sepolia (contrato `0x1CC2...36a6`).
+  Tx: `0x7b847d6d56c05794e151510e228ebf76f228697e507954b2adb2636bb8e98363`.
+- Verificó que `tallyIsVerifiable()` sigue en `true` tras la actualización.
+
+### Subagente Codex (headless) — Auditoría criptográfica Mobile
+
+- Commit de 85 archivos de CI/CD móvil en `codex/produccion-ci`.
+- Confirmó que la Tarea 1.13 (sesión HttpOnly/CSRF) ya estaba implementada.
+- **Parche crítico en `bacCrypto.ts`:** `retailMac` instanciaba el cifrador JNI
+  por cada bloque de 8 bytes; con datos DG2 (~20 KB) eran miles de objetos/segundo.
+  Reescrito para delegar CBC completo a la capa nativa (1 sola instancia JNI).
+  Eliminada variable global `ZERO_IV` susceptible a mutación.
+- **Parche en `PassportReaderModule.kt`:** fuga de hilo por `Timer` sin `.cancel()`
+  cuando expiraba el timeout de lectura NFC. Corregido.
+
+### Commit consolidado
+
+`0db034b` — `feat(core): completar autenticación pasiva ICAO, parche de memoria
+JNI en Mobile y setup MACI` (30 archivos, +2377 −167).
+
 
 ## Hallazgos abiertos (de `AUDIT.md`)
 
@@ -248,23 +304,38 @@ Cuando se tomen, déjalas escritas como ADR en `docs/`.
 
 ## Por dónde seguir
 
-**Ruta crítica:** proveedor de identidad + grant de un solo uso → ratificar
-D-1/D-2 y custodiar llaves/pepper → desplegar/verificar el contrato compatible →
-minteo idempotente con reconciliación → verificador de membresía on-chain →
-desplegar los guardrails de esta rama.
+**Ruta crítica (sin cambio):** proveedor de identidad + grant → desplegar contrato
+compatible → minteo idempotente → verificador on-chain → desplegar esta rama.
 
-**Empezar hoy en paralelo:** el trámite de acceso al sandbox de ClaveÚnica. Es el único elemento cuyo plazo no controla el equipo, y bloquea toda la Fase 4.
+**Trabajo desbloqueado tras esta sesión, en orden de impacto:**
 
-**Trabajo desbloqueado que puedes tomar ya:**
+1. **Desplegar el contrato compatible en Sepolia** — `contracts/scripts/deploy.js`.
+   Conceder `ROOT_MANAGER_ROLE` al relayer. `/health/ready` confirma en
+   `minting.zk_relayer`. Es el paso que convierte `totalSupply()` de 0 a >0.
+2. **Validar antifraude contra Redis real** — los tests usan `fakeredis[lua]`.
+   Levantar Redis y repetirlos antes de producción.
+3. **Anclaje poll↔propuesta on-chain (MACI D-3)** — vincular el ID de una
+   encuesta MACI con el de una propuesta de la DAO. Falta para habilitar
+   `private_voting: true`.
+4. **Build nativo iOS** — Android está cubierto; iOS necesita CocoaPods,
+   autolinking de `react-native-quick-crypto` y el bridge PACE.
+5. **Ceremonia multi-parte** — los 3 circuitos ZK tienen una sola contribución
+   Phase 2. Necesitan participantes independientes y beacon final.
+6. **Identidad civil** — ClaveÚnica (sandbox DGD), Master List CSCA (Registro
+   Civil/ICAO), CRLs y AA/CA. Bloqueado por terceros.
+7. **Branch protection/ruleset en `main`** — CI informa pero no impide merges
+   con checks rojos.
 
-- **Identidad** — integrar proveedor real (ClaveÚnica/liveness o alternativa) y emitir un grant de verificación de un solo uso; los demos ya están bloqueados en producción.
-- **Minteo** — diseñar operación `pending`, idempotency key, reconciliador por recibos/eventos y coordinación distribuida de nonce.
-- **Elecciones** — extender EIP-712/nonce a sus votos y hacer que resultados se deriven o actualicen transaccionalmente; propuestas ya tienen papeletas firmadas.
-- **3.6** — tesorería real desde un Safe multisig. El backend ya responde `configured: false` honestamente.
-- **3.8** — mover rate limiter y antifraude a Redis: hoy viven en memoria de proceso y se pierden al reiniciar.
-- **4.2 / 4.3** — lectura PACE del chip y validación de `react-native-quick-crypto`
-  en un build/dispositivo nativo real.
-- **Legal/operación** — consentimientos versionados, privacidad/DPIA, observabilidad, backups y runbooks antes de admitir ciudadanía real.
+**Lo que ya NO bloquea (cerrado en esta sesión):**
+- Minteo con `MINTER_ROLE` inexistente (P-87).
+- Doble gasto de gas por timeout de recibo (P-89).
+- Hashes de tx malformados (P-90).
+- Secret scanning en CI (P-93).
+- Llave MACI del coordinador en Sepolia.
+- Fuga de memoria JNI en `bacCrypto.ts`.
+- Thread leak en `PassportReaderModule.kt`.
+- Autenticación pasiva ICAO (backend + mobile, sin Master List oficial).
+- Sesión HttpOnly/CSRF en el frontend (Tarea 1.13).
 
 ---
 
