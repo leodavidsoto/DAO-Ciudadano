@@ -43,7 +43,9 @@ logger = logging.getLogger(__name__)
 # del artefacto desplegado y debe versionarse con él; leerlo de un directorio
 # escribible convertiría "quien pueda escribir ahí" en "quien decida qué
 # cédulas son auténticas".
-DEFAULT_TRUST_STORE = Path(__file__).resolve().parent.parent / "certs" / "csca_chile.pem"
+DEFAULT_TRUST_STORE = (
+    Path(__file__).resolve().parent.parent / "certs" / "csca_chile.pem"
+)
 
 
 class TrustStoreError(RuntimeError):
@@ -126,7 +128,9 @@ def _parse(pem_bytes: bytes, source: Path) -> TrustStore:
     try:
         certificates = x509.load_pem_x509_certificates(pem_bytes)
     except Exception as exc:
-        raise TrustStoreError(f"{source} no es un PEM de certificados válido: {exc}") from exc
+        raise TrustStoreError(
+            f"{source} no es un PEM de certificados válido: {exc}"
+        ) from exc
 
     anchors: list[x509.Certificate] = []
     links: list[x509.Certificate] = []
@@ -141,9 +145,7 @@ def _parse(pem_bytes: bytes, source: Path) -> TrustStore:
             continue
         (anchors if _is_self_signed(certificate) else links).append(certificate)
 
-    return TrustStore(
-        anchors=tuple(anchors), links=tuple(links), source=source
-    )
+    return TrustStore(anchors=tuple(anchors), links=tuple(links), source=source)
 
 
 _lock = threading.Lock()

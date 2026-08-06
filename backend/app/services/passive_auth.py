@@ -54,7 +54,6 @@ from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
-from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
 
 from . import csca_trust_store
 
@@ -189,7 +188,9 @@ def _unwrap_ef_sod(raw: bytes) -> bytes:
     else:
         length = length_byte
     if offset + length > len(raw):
-        raise PassiveAuthError("El EF.SOD está truncado: la longitud excede el archivo.")
+        raise PassiveAuthError(
+            "El EF.SOD está truncado: la longitud excede el archivo."
+        )
     return raw[offset : offset + length]
 
 
@@ -204,7 +205,9 @@ def _load_signed_data(sod_der: bytes) -> cms.SignedData:
     except PassiveAuthError:
         raise
     except Exception as exc:
-        raise PassiveAuthError(f"El EF.SOD no se pudo interpretar como CMS: {exc}") from exc
+        raise PassiveAuthError(
+            f"El EF.SOD no se pudo interpretar como CMS: {exc}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +233,9 @@ def _find_document_signer(
     """
     certificates = signed_data["certificates"]
     if certificates is None:
-        raise PassiveAuthError("El EF.SOD no incluye el certificado del Document Signer.")
+        raise PassiveAuthError(
+            "El EF.SOD no incluye el certificado del Document Signer."
+        )
 
     sid = signer["sid"]
     for choice in certificates:
@@ -324,7 +329,8 @@ def _pss_padding(
     """
     parameters = algorithm["parameters"]
     try:
-        mgf_hash = _hash_algorithm(parameters["mask_gen_algorithm"]["parameters"]["algorithm"].native)
+        mgf_alg = parameters["mask_gen_algorithm"]["parameters"]["algorithm"]
+        mgf_hash = _hash_algorithm(mgf_alg.native)
         salt_length = parameters["salt_length"].native
     except Exception:
         # Valores por defecto de RFC 4055 cuando el certificado los omite.
@@ -333,7 +339,9 @@ def _pss_padding(
     return padding.PSS(mgf=padding.MGF1(mgf_hash), salt_length=salt_length)
 
 
-def _signed_payload(signer: cms.SignerInfo, econtent: bytes, econtent_type: str) -> bytes:
+def _signed_payload(
+    signer: cms.SignerInfo, econtent: bytes, econtent_type: str
+) -> bytes:
     """Bytes que la firma cubre realmente, y comprobación de que cubren el eContent.
 
     Si hay `signedAttrs`, la firma NO cubre el eContent directamente: cubre los
@@ -395,7 +403,9 @@ def _verify_data_groups(
         lds = _LDSSecurityObject.load(econtent)
         digest_name = lds["hash_algorithm"]["algorithm"].native
         declared = {
-            int(entry["data_group_number"].native): entry["data_group_hash_value"].native
+            int(entry["data_group_number"].native): entry[
+                "data_group_hash_value"
+            ].native
             for entry in lds["data_group_hash_values"]
         }
     except Exception as exc:
@@ -418,7 +428,9 @@ def _verify_data_groups(
             reasons.append(f"El SOD no declara ningún hash para DG{number}.")
             continue
         try:
-            actual = hashlib.new(digest_name.replace("-", ""), data_groups[number]).digest()
+            actual = hashlib.new(
+                digest_name.replace("-", ""), data_groups[number]
+            ).digest()
         except ValueError:
             raise PassiveAuthError(
                 f"El SOD declara un algoritmo de hash desconocido: {digest_name}"
@@ -482,8 +494,10 @@ def _build_chain(
             return None
         for issuer in store.issuers_of(certificate):
             # Un certificado repetido en la ruta es un ciclo entre eslabones.
-            if any(issuer.fingerprint(hashes.SHA256()) == c.fingerprint(hashes.SHA256())
-                   for c in path):
+            if any(
+                issuer.fingerprint(hashes.SHA256()) == c.fingerprint(hashes.SHA256())
+                for c in path
+            ):
                 continue
             try:
                 certificate.verify_directly_issued_by(issuer)
@@ -561,7 +575,9 @@ def verify(
     payload = _signed_payload(signer, econtent, econtent_type)
     signature_algorithm = _verify_signature(document_signer, signer, payload)
 
-    digest_algorithm, verified, hashes_by_dg = _verify_data_groups(econtent, data_groups)
+    digest_algorithm, verified, hashes_by_dg = _verify_data_groups(
+        econtent, data_groups
+    )
 
     anchor, chain = _build_chain(document_signer, store, now)
 

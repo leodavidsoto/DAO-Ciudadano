@@ -9,7 +9,6 @@ porque este apaga todos sus endpoints en producción. Lo que queda son los
 """
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
-from typing import Optional
 import logging
 import asyncio
 import re

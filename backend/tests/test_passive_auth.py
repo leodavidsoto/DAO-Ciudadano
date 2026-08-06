@@ -7,7 +7,6 @@ importa no es que diga "sí" a una cédula auténtica, sino que diga "no" a todo
 lo demás.
 """
 
-import hashlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -215,9 +214,7 @@ def test_a_link_certificate_alone_is_not_an_anchor(trust_store, csca):
 
 def test_rejects_an_expired_document_signer(trust_store, csca):
     past = datetime.now(timezone.utc) - timedelta(days=400)
-    expired = fx.make_dsc(
-        csca, not_before=past, not_after=past + timedelta(days=30)
-    )
+    expired = fx.make_dsc(csca, not_before=past, not_after=past + timedelta(days=30))
 
     with pytest.raises(passive_auth.PassiveAuthError) as exc:
         passive_auth.verify(fx.build_sod(expired, DATA_GROUPS), DATA_GROUPS)
@@ -228,7 +225,9 @@ def test_rejects_an_expired_document_signer(trust_store, csca):
 def test_rejects_an_expired_trust_anchor(trust_store):
     past = datetime.now(timezone.utc) - timedelta(days=800)
     old_csca = fx.make_csca(not_before=past, not_after=past + timedelta(days=100))
-    old_dsc = fx.make_dsc(old_csca, not_before=past, not_after=past + timedelta(days=90))
+    old_dsc = fx.make_dsc(
+        old_csca, not_before=past, not_after=past + timedelta(days=90)
+    )
     trust_store(old_csca.certificate)
 
     with pytest.raises(passive_auth.PassiveAuthError):

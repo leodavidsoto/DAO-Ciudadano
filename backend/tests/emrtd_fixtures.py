@@ -158,7 +158,9 @@ class _LDSSecurityObject(core.Sequence):
     ]
 
 
-def lds_security_object(data_groups: Mapping[int, bytes], digest: str = "sha256") -> bytes:
+def lds_security_object(
+    data_groups: Mapping[int, bytes], digest: str = "sha256"
+) -> bytes:
     """LDSSecurityObject con el hash de cada DG.
 
     Se define aquí con sus propias clases ASN.1 en vez de reutilizar las del
@@ -228,7 +230,9 @@ def build_sod(
         certificates.append(
             cms.CertificateChoices(
                 name="certificate",
-                value=a1x509.Certificate.load(extra.public_bytes(serialization.Encoding.DER)),
+                value=a1x509.Certificate.load(
+                    extra.public_bytes(serialization.Encoding.DER)
+                ),
             )
         )
 
@@ -325,15 +329,14 @@ def td1_mrz(
     composite_birth = date_of_birth + _mrz_check_digit(date_of_birth)
     composite_expiry = date_of_expiry + _mrz_check_digit(date_of_expiry)
     line2 = (
-        composite_birth
-        + "M"
-        + composite_expiry
-        + nationality.ljust(3, "<")
-        + "<" * 11
+        composite_birth + "M" + composite_expiry + nationality.ljust(3, "<") + "<" * 11
     )
     line2 += _mrz_check_digit(
-        number + _mrz_check_digit(number) + run.ljust(15, "<")
-        + composite_birth + composite_expiry
+        number
+        + _mrz_check_digit(number)
+        + run.ljust(15, "<")
+        + composite_birth
+        + composite_expiry
     )
     line3 = f"{surname}<<{given_names}".ljust(30, "<")[:30]
 
