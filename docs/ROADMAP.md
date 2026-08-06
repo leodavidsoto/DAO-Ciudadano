@@ -80,8 +80,8 @@ Objetivo: cerrar C-1, C-2 y C-6. Al terminar, un SBT existe de verdad y solo lo 
 > **Estado 01-08-2026:** SIWE, autorización self y el camino técnico de minteo
 > on-chain están implementados detrás de guardrails fail-closed. Las altas nuevas
 > usan Fernet + HMAC. Siguen bloqueando producción: proveedor civil y grant de un
-> solo uso, migración de PII legacy, ADR/KMS, despliegue compatible y reconciliación
-> idempotente cadena↔Mongo.
+> solo uso, migración de PII legacy, ADR/KMS, y reconciliación
+> idempotente cadena↔Mongo. El contrato base se encuentra desplegado y verificado en Sepolia en `0x6C6C7D0ceC1b7267cB2fa146519FBF9ef6319d56`.
 
 | # | Tarea | Detalle | Criterio de aceptación |
 |---|---|---|---|
