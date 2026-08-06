@@ -105,7 +105,7 @@ Objetivo: cerrar C-1, C-2 y C-6. Al terminar, un SBT existe de verdad y solo lo 
 
 > 🟡 **Parcial** (agosto 2026). 2.1: suite de `contracts/test/` (31 tests, incluye la
 > regresión del orden checks-effects-interactions en `mintMembership`). 2.2: suite de
-> `backend/tests/` con 247 tests, sin red ni Mongo real. 2.3:
+> `backend/tests/` con 548 tests, sin red ni Mongo real. 2.3:
 > `backend_test.py` y `test_result.md` eliminados. 2.4: `.github/workflows/ci.yml` corre
 > backend, contratos, slither, auditoría crítica de npm, `pip-audit` estricto,
 > 90 tests unitarios web, build del frontend y un flujo E2E Playwright ZK/AA/MACI
@@ -114,12 +114,10 @@ Objetivo: cerrar C-1, C-2 y C-6. Al terminar, un SBT existe de verdad y solo lo 
 > Dependabot quedó configurado para los cinco directorios/ecosistemas. Mobile pasa
 > TypeScript, 43 tests, lint y auditoría npm localmente; el workflow incorpora esos
 > mismos gates en un nuevo job estático. `testDebugUnitTest` pasa al invocar
-> explícitamente el binario cacheado Gradle 9.0.0, pero el wrapper del árbol de
-> trabajo apunta a 9.6.1 y falla por incompatibilidad de metadata Kotlin; el gate
-> nativo normal no está verde. Pendientes: lint backend, cobertura formal
-> web/backend, restaurar un wrapper Android compatible y fijado por SHA, build/release
-> nativo de iOS, branch protection, secret scanning recurrente y migración de los
-> toolchains legacy que concentran los avisos altos de dependencias.
+> explícitamente el binario cacheado Gradle 9.0.0, y el wrapper local se reparó a 9.0.0.
+> Pendientes: build/release nativo de iOS, branch protection y migración de los
+> toolchains legacy que concentran los avisos altos de dependencias. (Lint backend,
+> cobertura formal web/backend, Android wrapper y secret scanning recurrente están completados).
 
 Objetivo: cerrar C-5 y hacer que las fases siguientes no rompan lo anterior.
 
