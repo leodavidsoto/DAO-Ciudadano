@@ -73,7 +73,7 @@ REQUIRED_DATA_GROUPS = (1, 2)
 # eslabones de rotación; más que esto es un ciclo o una cadena construida.
 MAX_CHAIN_DEPTH = 6
 
-_HASHES = {
+_HASHES: dict[str, type[hashes.HashAlgorithm]] = {
     "sha1": hashes.SHA1,
     "sha224": hashes.SHA224,
     "sha256": hashes.SHA256,

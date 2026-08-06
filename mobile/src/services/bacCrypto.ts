@@ -186,8 +186,8 @@ export function retailMac(kmac: Buffer, data: Buffer): Buffer {
 
     // Paso 3: Descifrar el último bloque con Kb y cifrar con Ka.
     // Al ser un solo bloque, el cifrado CBC con IV cero es equivalente a ECB.
-    y = desDecryptCBC(kb, Buffer.alloc(8), y);
-    y = desEncryptCBC(ka, Buffer.alloc(8), y);
+    y = desDecryptCBC(kb, Buffer.alloc(8), Buffer.from(y));
+    y = desEncryptCBC(ka, Buffer.alloc(8), Buffer.from(y));
 
     return y;
 }

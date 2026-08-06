@@ -517,9 +517,11 @@ async def cast_vote(
         proposal = await proposals_collection().find_one({"id": request.proposal_id})
         if not proposal:
             return VoteResponse(ok=False, error="Proposal not found")
-        
         if proposal.get("private_voting"):
-            return VoteResponse(ok=False, error="This proposal uses private voting via MACI. Cannot cast public vote.")
+            return VoteResponse(
+                ok=False,
+                error="This proposal uses private voting via MACI. Cannot cast public vote."
+            )
 
         # Enforce the deadline here. Relying on GET /proposals to update status
         # allowed a write after ends_at when nobody had loaded the listing.

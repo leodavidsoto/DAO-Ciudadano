@@ -127,7 +127,7 @@ function App(): React.JSX.Element {
             card: theme.colors.primary,
             text: '#FFFFFF',
             border: theme.colors.borderDark,
-            notification: theme.colors.secondary,
+            notification: theme.colors.danger,
           },
         }}
       >

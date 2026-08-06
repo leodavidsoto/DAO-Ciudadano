@@ -199,7 +199,7 @@ contract DAOCiudadanaSBT is
             membershipScope
         ];
 
-        bool proofIsValid;
+        bool proofIsValid = false;
         try membershipVerifier.verifyProof(pA, pB, pC, publicSignals) returns (
             bool valid
         ) {

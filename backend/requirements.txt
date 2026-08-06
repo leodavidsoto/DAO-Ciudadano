@@ -30,7 +30,7 @@ python-multipart==0.0.32
 pillow==12.3.0             # validación de imágenes en el flujo de liveness
 
 # === Autenticación e identidad (tarea 1.1 del ROADMAP) ===
-cryptography==48.0.1       # Fernet (PII en reposo) + X.509/firmas de la Autenticación Pasiva
+cryptography>=50.0.0       # Fernet (PII en reposo) + X.509/firmas de la Autenticación Pasiva
 # Parser ASN.1/CMS para el EF.SOD de la cédula (ROADMAP 5.8, app/services/passive_auth.py).
 # `cryptography` no expone verificación de CMS SignedData, y la alternativa era
 # escribir a mano el parser de la estructura sobre la que se decide si una

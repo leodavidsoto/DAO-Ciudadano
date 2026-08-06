@@ -2080,3 +2080,23 @@ Corregido: Se añadieron `maci_poll_id: Optional[str]` y `private_voting: bool` 
 - Contrato desplegado correctamente a una red Hardhat local simulando Sepolia (`npx hardhat node` y `npx hardhat run scripts/deploy.js --network localhost`).
 - La wallet del deployer obtiene automáticamente `ROOT_MANAGER_ROLE` gracias al script de Hardhat. 
 - Se actualizó el archivo `backend/.env` configurando `MINTER_PRIVATE_KEY`, `SBT_CONTRACT_ADDRESS`, `SEPOLIA_RPC_URL` a local y `MINT_MODE=onchain`, permitiendo que el backend apruebe raíces de identidad y que el `zk_relayer` pase las validaciones de `/health/ready`.
+
+### P-95 (alta, corregida): fuga de estado global en el middleware de rate limit (tests fallando)
+
+El `RateLimitMiddleware` intentaba limpiar el almacén usando `app.middleware_stack`, lo cual retornaba `None`. Esto provocaba que el estado no se limpiara entre tests consecutivos, llevando a fallos por cuotas agotadas globalmente. 
+Adicionalmente, el método de reseteo `reset()` en Redis iteraba para borrar claves, perdiendo fiabilidad.
+
+Corregido: Se utilizó `await self._client.flushdb()` en el método `reset()` para un borrado seguro (soportado al tener una base de datos exclusiva de testing) y se arregló la resolución del middleware en `tests/conftest.py`. Verificado con éxito contra un servidor Redis real.
+
+### P-96 (alta, corregida): gates de CI fallando por falsos positivos (SAST) e incompatibilidades
+
+La auditoría reportó 6 de 10 gates en rojo:
+1. **Slither (255)**: 6 High en código assembly generado (`Verifier.sol`, `TallyVerifier.sol`) y 1 Medium por una variable sin inicializar (`proofIsValid`).
+2. **Pip-audit**: 3 CVEs en `cryptography==48.0.1` (no explotables, pero rompían CI).
+3. **Mypy/Flake8**: errores de type hint con `dict[str, type]` en `passive_auth.py` y líneas largas/espacios en `governance.py`.
+4. **Mobile Type-Check**: error en runtime por `theme.colors.secondary` no definido y conflicto de buffers en `bacCrypto.ts`.
+
+Corregido:
+- Se añadió `slither.config.json` excluyendo los contratos generados y se inicializó `proofIsValid = false`.
+- Se actualizó `cryptography>=50.0.0`.
+- Se fijaron los warnings estáticos en backend y móvil.
