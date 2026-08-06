@@ -9,10 +9,22 @@
  * cambiado de sitio.
  *
  * Los componentes de cada paso NO se tocaron: siguen usando su vocabulario
- * de clases `cyber-*`, que styles/onboarding-estamosdao.css redefine
- * dentro del contenedor `.estamosdao-flow`. Así el rediseño no arriesga la
- * lógica del flujo (NFC, liveness, wallet, minteo), que es la parte
- * delicada.
+ * de clases `cyber-*`. Así el rediseño no arriesga la lógica del flujo
+ * (NFC, liveness, wallet, minteo), que es la parte delicada.
+ *
+ * REDISEÑO INCOMPLETO — el rediseño preveía un styles/onboarding-estamosdao.css
+ * que redefiniera esas clases `cyber-*` dentro del contenedor
+ * `.estamosdao-flow`, pero ese archivo nunca se commiteó (no existe en
+ * ninguna rama). Su `import` quedó aquí y rompía la resolución de módulos,
+ * lo que tumbaba el bundle COMPLETO: ninguna ruta compilaba y el deploy de
+ * producción caía con `Module not found`. Se retiró el import para devolver
+ * el build a verde.
+ *
+ * Consecuencia visible: los pasos posteriores al selector de método siguen
+ * con su aspecto cyberpunk sobre el fondo claro. Es una inconsistencia
+ * visual conocida, no un descuido. Cerrarla exige escribir ese stylesheet
+ * (o migrar los componentes a clases `civic-*`), y `.estamosdao-flow` no
+ * tiene reglas en ninguna parte hasta que eso ocurra.
  */
 import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -32,7 +44,6 @@ import {
     SuccessStep,
     DashboardStep,
 } from '@/components/onboarding';
-import '../styles/onboarding-estamosdao.css';
 
 const AZUL = '#003897';
 const TINTA = '#0B2545';
