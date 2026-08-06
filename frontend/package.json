@@ -43,6 +43,7 @@
     "cmdk": "^1.1.1",
     "crypto-browserify": "^3.12.1",
     "date-fns": "^4.1.0",
+    "dotenv": "^17.4.2",
     "embla-carousel-react": "^8.6.0",
     "ethers": "^6.13.4",
     "input-otp": "^1.4.2",
