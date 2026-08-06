@@ -202,6 +202,7 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
                 ) {
                     disableReader(activity, adapter)
                 }
+                timer.cancel()
             }
         }, TAG_DISCOVERY_TIMEOUT_MS)
     }
@@ -414,7 +415,9 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
             try {
                 assets.open("$CSCA_ASSET_DIR/$name").use { input ->
                     val certificate = factory.generateCertificate(input) as X509Certificate
-                    if (isApprovedChileanCSCASubject(certificate.subjectX500Principal.name)) {
+                    if (isApprovedChileanCSCASubject(certificate.subjectX500Principal.name) &&
+                        isSelfSigned(certificate)
+                    ) {
                         anchors.add(TrustAnchor(certificate, null))
                     }
                 }
@@ -446,6 +449,25 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
             putString("optionalData1", mrz.optionalData1.orEmpty().trim('<'))
             putString("optionalData2", mrz.optionalData2.orEmpty().trim('<'))
             putMap("photo", extractPhoto(dg2Raw))
+        }
+    }
+
+    /**
+     * Ancla sí/no comprobando la FIRMA, no comparando `subject` con `issuer`.
+     *
+     * Desde 2024 el Registro Civil rota la clave de su CSCA conservando el
+     * mismo DN, así que el *link certificate* que la generación anterior emite
+     * sobre la clave nueva tiene subject idéntico a su issuer. Con la prueba
+     * por DN ese eslabón se instalaría como raíz: la app confiaría en él por
+     * su nombre y no porque nadie demostrara nada. Aquí sólo entra un
+     * certificado que verifique con su propia clave pública.
+     */
+    private fun isSelfSigned(certificate: X509Certificate): Boolean {
+        return try {
+            certificate.verify(certificate.publicKey)
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 

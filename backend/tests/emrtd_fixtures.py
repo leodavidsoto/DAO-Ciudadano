@@ -203,15 +203,10 @@ def build_sod(
         digest_value = hashlib.new(digest, econtent + b"x").digest()
 
     attributes = [
-        {
-            "type": "content_type",
-            "values": [core.ObjectIdentifier(LDS_SECURITY_OBJECT_OID)],
-        },
+        {"type": "content_type", "values": [LDS_SECURITY_OBJECT_OID]},
     ]
     if not omit_message_digest:
-        attributes.append(
-            {"type": "message_digest", "values": [core.OctetString(digest_value)]}
-        )
+        attributes.append({"type": "message_digest", "values": [digest_value]})
 
     # `CMSAttributes` es un SET OF: `.dump()` ya produce el tag 0x31 sobre el
     # que se calcula la firma. Dentro del SignerInfo viaja con [0] IMPLICIT, y
@@ -253,7 +248,7 @@ def build_sod(
             ),
             "digest_algorithm": {"algorithm": digest},
             "signed_attrs": signed_attrs,
-            "signature_algorithm": {"algorithm": "rsassa_pkcs1v15"},
+            "signature_algorithm": {"algorithm": "sha256_rsa"},
             "signature": signature,
         }
     )
@@ -286,6 +281,71 @@ def _wrap_ef_sod(content_info: bytes) -> bytes:
         encoded = length.to_bytes((length.bit_length() + 7) // 8, "big")
         header = bytes([0x77, 0x80 | len(encoded)]) + encoded
     return header + content_info
+
+
+def _mrz_check_digit(value: str) -> str:
+    weights = (7, 3, 1)
+    total = 0
+    for index, character in enumerate(value):
+        if character.isdigit():
+            weight = int(character)
+        elif character == "<":
+            weight = 0
+        else:
+            weight = ord(character) - 55
+        total += weight * weights[index % 3]
+    return str(total % 10)
+
+
+def td1_mrz(
+    document_number: str = "12345678",
+    run: str = "123456785",
+    issuing_state: str = "CHL",
+    nationality: str = "CHL",
+    date_of_birth: str = "900101",
+    date_of_expiry: str = "350101",
+    document_code: str = "I<",
+    surname: str = "PEREZ",
+    given_names: str = "JUAN",
+) -> str:
+    """MRZ TD1 (90 caracteres) con los dígitos verificadores CALCULADOS.
+
+    Escribirlos a mano en el test es una fuente silenciosa de falsos fallos:
+    un dígito mal puesto hace fallar al parser por el motivo equivocado y
+    parece un bug del código bajo prueba.
+    """
+    number = document_number.ljust(9, "<")
+    line1 = (
+        document_code.ljust(2, "<")
+        + issuing_state.ljust(3, "<")
+        + number
+        + _mrz_check_digit(number)
+        + run.ljust(15, "<")
+    )
+    composite_birth = date_of_birth + _mrz_check_digit(date_of_birth)
+    composite_expiry = date_of_expiry + _mrz_check_digit(date_of_expiry)
+    line2 = (
+        composite_birth
+        + "M"
+        + composite_expiry
+        + nationality.ljust(3, "<")
+        + "<" * 11
+    )
+    line2 += _mrz_check_digit(
+        number + _mrz_check_digit(number) + run.ljust(15, "<")
+        + composite_birth + composite_expiry
+    )
+    line3 = f"{surname}<<{given_names}".ljust(30, "<")[:30]
+
+    assert len(line1) == 30 and len(line2) == 30, (len(line1), len(line2))
+    return line1 + line2 + line3
+
+
+def dg1(mrz_text: str) -> bytes:
+    """Envuelve una MRZ en el TLV del DG1 (`61` -> `5F1F`)."""
+    body = mrz_text.encode("ascii")
+    inner = b"\x5f\x1f" + bytes([len(body)]) + body
+    return b"\x61" + bytes([len(inner)]) + inner
 
 
 def trust_store_pem(*certificates: x509.Certificate) -> bytes:

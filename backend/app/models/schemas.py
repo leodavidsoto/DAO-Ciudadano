@@ -33,20 +33,10 @@ class ClaveUnicaResponse(BaseModel):
     error: Optional[str] = None
 
 
-class NFCRequest(BaseModel):
-    """Optional payload: real chip serial captured by the mobile app.
-
-    When absent (web demo flow), the backend generates a demo serial.
-    """
-
-    chip_serial: Optional[str] = Field(default=None, max_length=64)
-
-
-class NFCResponse(BaseModel):
-    ok: bool
-    chip_serial: Optional[str] = None
-    doc_hash: Optional[str] = None
-    error: Optional[str] = None
+# NFCRequest/NFCResponse se eliminaron con el simulador de NFC (ROADMAP 5.8).
+# Describían un `chip_serial` que el cliente elegía y un `doc_hash` derivado de
+# él: campos de una verificación que no ocurría. La lectura real usa
+# `app/routers/cedula.py`, cuyo esquema son los bytes del chip.
 
 
 class LivenessResponse(BaseModel):

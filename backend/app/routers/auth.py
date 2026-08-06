@@ -1,6 +1,11 @@
 """
 Authentication Router
-Handles ClaveÚnica, NFC, and Liveness detection endpoints
+Handles Liveness detection and the RUT+email pilot registration.
+
+ClaveÚnica y NFC ya NO viven aquí: sus simuladores se eliminaron y sus
+caminos reales están en `clave_unica.py` y `cedula.py`, fuera de este router
+porque este apaga todos sus endpoints en producción. Lo que queda son los
+`410 Gone` que dicen a los clientes desplegados adónde ir.
 """
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
@@ -14,8 +19,6 @@ import io
 from PIL import Image
 
 from ..models import (
-    NFCRequest,
-    NFCResponse,
     LivenessResponse,
     User,
     UserRegisterRequest,
@@ -27,7 +30,6 @@ from ..core.config import settings
 from ..core.crypto import encrypt, decrypt
 from ..core.database import users_collection
 from ..core.identity import lookup_key, lookup_key_candidates
-from ..core.security import generate_short_hash
 
 logger = logging.getLogger(__name__)
 
@@ -86,33 +88,30 @@ async def clave_unica_simulation_removed():
     )
 
 
-@router.post("/nfc", response_model=NFCResponse)
-async def authenticate_nfc(request: Optional[NFCRequest] = None):
+@router.post("/nfc", deprecated=True)
+async def nfc_simulation_removed():
+    """El simulador de NFC se eliminó (ROADMAP 5.8).
+
+    Devolvía `ok: true` con un `chip_serial` y un `doc_hash` derivados de lo
+    que el cliente quisiera mandar —o de un UUID aleatorio si no mandaba
+    nada—. No leía ningún chip ni comprobaba ninguna firma: acreditaba
+    identidad a cualquiera que llamase al endpoint.
+
+    Ahora existe la verificación real: `POST /api/auth/cedula/verify` recibe
+    los bytes del EF.SOD y de los data groups, repite la Autenticación Pasiva
+    contra las CSCA del Registro Civil y sólo entonces emite un grant civil.
+
+    Queda esta señal en vez de un 404 mudo porque hay clientes desplegados
+    llamando aquí: así reciben qué usar en su lugar (AGENTS.md, regla 2).
     """
-    Authenticate using NFC chip in Chilean ID card
-
-    DEMO MODE: no cryptographic verification of the chip happens yet
-    (real PACE reading is ROADMAP task 4.2). If the client sends a tag serial,
-    the API derives a non-sensitive demo identifier from it; otherwise a random
-    demo identifier is generated. Neither result proves the tag is a cédula.
-    """
-    try:
-        await mock_delay(0.16)
-
-        if request and request.chip_serial:
-            chip_serial = (
-                "DEMO-NFC-CLIENT-"
-                + generate_short_hash(request.chip_serial, length=12).upper()
-            )
-        else:
-            chip_serial = f"DEMO-NFC-RANDOM-{uuid.uuid4().hex[:8].upper()}"
-        doc_hash = f"0x{generate_short_hash('nfc_doc_' + chip_serial)}"
-
-        return NFCResponse(ok=True, chip_serial=chip_serial, doc_hash=doc_hash)
-
-    except Exception as e:
-        logger.error(f"Error in NFC auth: {e}")
-        return NFCResponse(ok=False, error="No se pudo completar la lectura NFC.")
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "El simulador de NFC se eliminó. Usa la verificación real: "
+            "POST /api/auth/cedula/verify con el EF.SOD y los data groups "
+            "leídos del chip."
+        ),
+    )
 
 
 @router.post("/liveness", response_model=LivenessResponse)

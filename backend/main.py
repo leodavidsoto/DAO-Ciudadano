@@ -39,6 +39,7 @@ from app.routers.identity import router as identity_router
 from app.routers.maci import router as maci_router
 from app.routers.erc4337 import router as erc4337_router
 from app.routers.clave_unica import router as clave_unica_router
+from app.routers.cedula import router as cedula_router
 
 
 # Configure logging
@@ -220,6 +221,10 @@ app.include_router(auth_router, prefix="/api")
 # para TODOS sus endpoints porque son simulaciones, y este flujo sí
 # autentica identidad civil cuando está configurado (ROADMAP 4.1).
 app.include_router(clave_unica_router, prefix="/api")
+# Verificación real de la cédula por NFC (ROADMAP 5.8). Igual que ClaveÚnica:
+# router aparte porque el de /auth apaga sus simuladores en producción y este
+# camino tiene que funcionar precisamente ahí.
+app.include_router(cedula_router, prefix="/api")
 # Emisión real de credenciales ZK: router aparte, sin el bloqueo de los demos.
 app.include_router(identity_router, prefix="/api")
 app.include_router(wallet_router, prefix="/api")

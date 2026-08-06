@@ -112,21 +112,37 @@ async def test_the_clave_unica_simulation_is_gone(client, monkeypatch):
     assert await _identity_event_count() == 0
 
 
-async def test_nfc_generates_demo_serial_without_body(client):
-    response = await client.post("/api/auth/nfc")
-    data = response.json()
-    assert data["ok"] is True
-    assert data["chip_serial"].startswith("DEMO-NFC-RANDOM-")
-    assert data["doc_hash"].startswith("0x")
+async def test_the_nfc_simulation_is_gone(client):
+    """Devolvía `ok: true` sin leer ningún chip ni comprobar ninguna firma.
+
+    El `chip_serial` salía de lo que el cliente mandara —o de un UUID si no
+    mandaba nada— y el `doc_hash` se derivaba de él. Acreditaba identidad a
+    cualquiera que llamase al endpoint. La verificación real (ROADMAP 5.8)
+    está en /api/auth/cedula/verify y recibe los bytes del chip.
+    """
+    for payload in (None, {"chip_serial": "CLIENT-TAG-01"}):
+        response = await client.post("/api/auth/nfc", json=payload)
+
+        assert response.status_code == 410
+        assert "cedula/verify" in response.json()["detail"]
+
     assert await _identity_event_count() == 0
 
 
-async def test_nfc_derives_demo_id_from_client_tag_when_provided(client):
-    response = await client.post("/api/auth/nfc", json={"chip_serial": "CLIENT-TAG-01"})
-    data = response.json()
-    assert data["ok"] is True
-    assert data["chip_serial"].startswith("DEMO-NFC-CLIENT-")
-    assert "CLIENT-TAG-01" not in data["chip_serial"]
+async def test_the_nfc_endpoint_never_acredits_identity_in_production(
+    client, monkeypatch
+):
+    """En producción el router entero responde 503 antes de llegar al 410.
+
+    Da igual cuál de los dos salga: lo que se comprueba es que NINGUNA
+    respuesta de esta ruta acredita identidad en producción.
+    """
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+
+    response = await client.post("/api/auth/nfc")
+
+    assert response.status_code >= 400
+    assert "chip_serial" not in response.text
     assert await _identity_event_count() == 0
 
 

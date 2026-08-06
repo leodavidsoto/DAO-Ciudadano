@@ -44,7 +44,23 @@ dump.rdb
 
 # System files
 .DS_Store
+
+# Llaves y certificados: se ignoran por defecto para que ninguna llave privada
+# llegue al repo por descuido.
 *.pem
+
+# EXCEPCIÓN — trust store de CSCA del Registro Civil (ROADMAP 5.8). Son
+# certificados PÚBLICOS del PKD de la ICAO, sin material privado, y TIENEN que
+# versionarse: son el ancla contra la que se validan las cédulas, así que
+# forman parte del artefacto desplegado. Sin ellos, el backend arranca y
+# rechaza todas las lecturas NFC, y la app móvil también.
+!backend/app/certs/*.pem
+!mobile/android/app/src/main/assets/csca/*.pem
+
+# Material de trabajo del PKD de la ICAO: el LDIF completo son 13 MB y el
+# explorador de master lists casi 200. Los certificados que se extraen de ahí
+# sí se versionan (arriba); la materia prima se descarga cuando haga falta.
+/icao/
 
 # Python
 __pycache__/

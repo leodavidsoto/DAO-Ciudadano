@@ -55,7 +55,7 @@ credencial on-chain de producción está habilitada.
 | **Dashboard** | ✅ Montado | `/dashboard` con 5 secciones. Router funcionando. |
 | **Despliegue** | 🟡 Servicio histórico activo | La versión pública anterior responde; esta rama separa liveness/readiness y aún no fue publicada. |
 | **Autenticación** | ✅ Wallet / 🟡 identidad | Challenge EIP-4361, JWT corto y gates self/active. No equivale a identidad civil. |
-| **Minteo on-chain** | 🔒 Bloqueado | Sin fallback implícito; producción espera grant de identidad + contrato compatible + reconciliación. |
+| **Minteo on-chain** | 🔒 Bloqueado por despliegue | El camino ZK (`/membership/mint-zk`) ya no tiene defectos conocidos: se corrigió una precondición que exigía un `MINTER_ROLE` inexistente y hacía imposible todo minteo (P-87), y la reconciliación cadena↔Mongo está implementada (P-89). Falta un despliegue compatible del contrato. `/membership/mint` **no puede mintear on-chain** y lo dice. |
 | **Identidad real** | ❌ Pendiente | Demos bloqueadas en producción; Web NFC nunca se acepta como cédula verificada. |
 | **PII** | 🟡 Código nuevo cifrado | Altas nuevas usan Fernet + índices HMAC. Datos legacy no fueron migrados/auditados; snapshot y migración son bloqueantes. |
 | **Identidad ZK (D-2)** | 🟡 Implementada, sin proveedor | Circuito `MembershipEligibility(25)` con `recipient` ligado en la hoja; emisor con árbol Merkle de 25 niveles y firma EIP-191. Bloqueado: no existe proveedor civil que emita `identity_grant`, y la ceremonia de confianza es de una sola parte. |
@@ -202,6 +202,18 @@ Cosas que te van a costar tiempo si no las sabes de antemano:
 12. **Papeleta y tally no son una escritura atómica.** El índice único evita votos
     duplicados concurrentes en propuestas, pero una caída entre insertar el voto y
     sumar el contador exige transacción o reconciliación derivada de papeletas.
+
+12b. **El estado de un minteo lo decide la cadena, nunca un temporizador.**
+    `mint_operations.py` distingue `pending` (nada difundido, reintentable) de
+    `submitted` (la transacción salió; su suerte la decide la cadena). Si
+    "simplificas" marcando `failed` al expirar la espera del recibo, vuelve el
+    bug que costaba gas: el reintento envía una segunda transacción que revierte
+    por `NullifierAlreadyUsed`. Por lo mismo, `nullifier_is_used()` y
+    `transaction_outcome()` devuelven `None`/`unknown` cuando el RPC falla —
+    **`None` no es `False`**: leer un corte de red como "no pasó nada" es lo que
+    autoriza ese segundo envío. Las operaciones olvidadas se cierran con
+    `python scripts/reconcile_mints.py sweep`; no hay barrido automático porque
+    con varias instancias cada una correría el suyo contra el RPC.
 
 13. **El backend NO firma UserOperations, y no debe hacerlo.** La Safe es del
     ciudadano y firma él con MetaMask; el servidor solo prepara, valida y

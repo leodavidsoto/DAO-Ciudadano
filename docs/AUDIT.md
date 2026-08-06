@@ -1906,3 +1906,165 @@ vez de gastar cupo— antes de añadir código nuevo.
 | `npm test` | ✅ 43 tests, 5 suites |
 | `npm run lint -- --max-warnings=21` | ✅ 0 errores, 21 avisos |
 | `npm run android:ci` (comando de CI) | ✅ BUILD SUCCESSFUL, APK+AAB |
+
+---
+
+## Decimoctava pasada (06-08-2026) — el minteo real nunca pudo ejecutarse
+
+Objetivo de la pasada: destrabar el primer minteo real en Sepolia. Se buscaba
+trabajar la idempotencia (fase 1/3) y apareció antes un defecto que hacía
+imposible cualquier minteo, estuviera todo lo demás bien configurado o no.
+
+### P-87 (crítica, corregida): la precondición on-chain exigía un rol inexistente
+
+`backend/app/services/chain_service.py:275` (antes de esta pasada) llamaba a
+`contract.functions.MINTER_ROLE().call()` dentro de `runtime_status()`.
+
+`MINTER_ROLE` **no existe en `DAOCiudadanaSBT.sol`**. El contrato declara
+`ROOT_MANAGER_ROLE`, `PAUSER_ROLE` y `REVOKER_ROLE`, y nada más:
+
+    $ grep -rn "MINTER_ROLE" contracts/contracts/
+    (sin resultados)
+
+Contra el contrato desplegado esa llamada revierte. La excepción se capturaba
+en el `except Exception` de la función y se traducía a
+`errors = ["no se pudo validar RPC, contrato, ABI y MINTER_ROLE"]` con
+`ready: False`. Como `mint_with_proof()` aborta cuando el sondeo no está
+`ready`, **todo minteo real fallaba en la precondición sin llegar a enviar
+nada**, y el mensaje mandaba a revisar la red y los permisos en vez del código.
+
+Por qué no lo vio nadie: `backend/tests/test_chain_service.py:75` definía un
+contrato falso que **sí** exponía `MINTER_ROLE()`. El doble era más permisivo
+que el original, así que el suite confirmaba un contrato que no existe. Es
+exactamente el fallo contra el que existe la regla 4 de `AGENTS.md`.
+
+Corregido: el sondeo comprueba lo que el contrato pide de verdad —red,
+bytecode, `membershipScope()` (que además distingue el contrato ZK del
+histórico), `paused()` y saldo del relayer—. `mintMembership` no exige rol
+alguno: la prueba Groth16 es la autorización. El doble de test se reescribió
+para imitar el contrato real, sin `MINTER_ROLE()`.
+
+### P-88 (alta, corregida): `MINT_MODE=onchain` llamaba a una firma borrada
+
+`blockchain_service.mint_sbt` invocaba `chain_service.mint_sbt_onchain`, que
+construía `mintMembership(to, identityHash, assuranceLevel, uri)`. Esa firma
+desapareció al migrar al modelo ZK —el propio comentario del ABI lo decía— y no
+está ni en el ABI ni en el contrato. El resultado era siempre un
+`"No se pudo confirmar el minteo on-chain. Intenta más tarde."`: un error que
+parece de red y que ninguna revisión de infraestructura podía resolver.
+
+Corregido: se eliminó `mint_sbt_onchain` y `MINT_MODE=onchain` responde 503
+indicando `POST /api/membership/mint-zk`. `MINT_MODE` queda gobernando solo el
+registro local (`disabled` / `demo`).
+
+### P-89 (alta, corregida): un timeout de recibo provocaba un segundo gasto de gas
+
+`mint_with_proof` esperaba el recibo hasta 120 s y el hash solo se guardaba al
+terminar. Dos consecuencias:
+
+1. Si el proceso moría dentro de esa ventana, la transacción quedaba **sin
+   rastro en Mongo**. La operación seguía `pending` para siempre y el ciudadano
+   recibía un 409 permanente, sin credencial y sin forma de pedir otra.
+2. Si expiraba el timeout, el router marcaba `failed`. El reintento enviaba una
+   SEGUNDA transacción que revertía por `NullifierAlreadyUsed`, quemando gas de
+   la DAO sin emitir nada.
+
+Corregido en `backend/app/services/mint_operations.py` (nuevo). El hash se
+persiste desde el hilo del RPC en cuanto la transacción se difunde, mediante
+el callback `on_submitted`, y aparece el estado `submitted`: una transacción
+difundida ya no la declara fallida un temporizador de este proceso, solo la
+cadena. Una operación abierta se resuelve consultando el recibo y, si no
+alcanza, `isNullifierUsed()`.
+
+Regla que atraviesa el módulo: un RPC que no responde nunca se lee como "no
+pasó nada". Todas las lecturas devuelven `None`/`unknown` y mantienen la
+operación en vuelo; traducir un corte de red a "puedes reintentar" es justo lo
+que provoca el doble gasto.
+
+Contradicciones (nullifier consumido sin SBT para esa wallet) quedan en
+`needs_review` y las mira una persona: no se adivinan.
+
+### P-90 (media, corregida): los hashes de transacción se guardaban malformados
+
+`hexbytes` 1.x dejó de prefijar `.hex()` con `0x`, y el código guardaba el
+valor tal cual. Los `tx_hash` de `members` y `mint_operations` no eran hashes
+válidos para ningún explorador: el ciudadano no podía seguir su transacción.
+Comprobado en el entorno real del proyecto:
+
+    $ python -c "from hexbytes import HexBytes; print(HexBytes(b'\x01').hex())"
+    01
+
+Corregido con `chain_service.tx_hash_hex()`, que normaliza una sola vez.
+
+### P-91 (media, corregida): sin ROOT_MANAGER_ROLE el fallo era opaco
+
+`approveIdentityRoot` es `onlyRole(ROOT_MANAGER_ROLE)` y `scripts/deploy.js`
+concede ese rol **solo al admin**. Si el relayer no lo tiene, la emisión de
+credenciales fallaba como un revert durante la estimación de gas, sin decir que
+lo que faltaba era una concesión de rol. Ahora se comprueba antes, con su
+motivo, y `/health/ready` lo reporta en `minting.zk_relayer`.
+
+### P-92 (media, corregida): el estado del relayer ZK era invisible
+
+`main.py` solo sondeaba la cadena con `MINT_MODE=onchain`. Como
+`/membership/mint-zk` no consulta esa variable, el despliegue que de verdad
+mintea reportaba `ready` sin haber comprobado nunca su relayer. Ahora se sondea
+siempre que la cadena esté configurada (el sondeo ya cachea 30 s) y readiness
+publica `minting.zk_relayer`.
+
+### P-93 (alta, mitigada — la rotación sigue pendiente): no había secret scanning
+
+El paso 4 de `docs/SECURITY_RUNBOOK.md` pedía escanear HEAD, ramas, tags e
+historial. No existía ningún job: el incidente P0 se encontró leyendo el
+historial a mano.
+
+Añadido el job `Seguridad · secret scanning` a `.github/workflows/ci.yml`
+(gitleaks 8.30.1, fijado por versión y checksum SHA-256, sobre el historial
+completo). Verificado en ambos sentidos sobre un clon limpio: sale en verde con
+el historial actual y **rompe la build** al plantar un secreto de prueba.
+
+`.gitleaks.toml` lista las excepciones una a una, ancladas a commit y ruta.
+La del incidente P0 **no lo cierra**: borrar blobs no vuelve segura una llave
+que ya fue pública. Revocarla en el proveedor sigue siendo obligatorio y sigue
+pendiente; la excepción solo permite que el detector empiece a proteger de los
+secretos futuros mientras esa rotación se coordina.
+
+Cinco de los seis hallazgos del historial eran falsos positivos (fixtures de
+test y un checksum de CocoaPods); el sexto es el `backend/.env` de `6202a9f`
+que el runbook ya documenta.
+
+### Estado tras esta pasada
+
+Al terminar, el suite completo estaba en **524 tests verdes**. Después entró en
+el árbol de trabajo la pasada paralela de NFC/autenticación pasiva
+(`passive_auth.py`, `csca_trust_store.py`, `emrtd_fixtures.py`,
+`extract_csca_from_ldif.py`, el router `cedula`), que a esta hora está a medias
+y deja los gates del repositorio en rojo. Por eso la tabla separa ambos ámbitos
+en vez de anunciar un verde que no es cierto:
+
+| Gate | Archivos de esta pasada | Repositorio completo |
+|---|---|---|
+| `pytest -q` | ✅ 88 tests | ❌ 2 fallos en `test_auth.py::test_nfc_*` |
+| `black --check` | ✅ 13 archivos limpios | ❌ 5 archivos sin formatear |
+| `flake8` | ✅ limpio | ❌ 5 avisos (F401/E501/F541) |
+| `mypy` | ✅ sin errores | ❌ 1 error en `passive_auth.py:217` |
+| `gitleaks git .` sobre clon limpio | ✅ 0 hallazgos, y rompe con un secreto plantado | — |
+
+Todos los fallos de la columna derecha están en archivos de la pasada paralela;
+ninguno toca los de esta. No se corrigieron a propósito: son de trabajo en
+curso de otro agente y arreglarlos sería pisar su edición.
+
+`black` y `flake8` ya estaban **rojos antes de esta pasada**, por otro motivo:
+`app/routers/analytics.py` y `main.py` (un router de analítica que entró sin
+formatear, con un `List` sin usar). Eso sí se corrigió de paso; es solo formato.
+
+### Lo que sigue bloqueado, y por quién
+
+- **Minteo real:** ya no hay defecto conocido en el camino, pero sigue sin
+  existir un despliegue compatible del contrato. `totalSupply()` de la
+  dirección histórica sigue en 0 y esa dirección tiene otra ABI.
+- **Identidad:** el camino ClaveÚnica está implementado de punta a punta
+  (`clave_unica.py` → `identity_grant.issue` → `identity_issuer`). Lo que falta
+  son las credenciales del sandbox que entrega la División de Gobierno Digital.
+  No es trabajo de código.
+- **Llave filtrada:** revocarla es una acción del dueño en el proveedor.

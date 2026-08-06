@@ -24,6 +24,25 @@ Acciones del owner, en este orden:
 No hay secretos actuales detectados en HEAD durante la auditoría del 01-08-2026.
 Eso no cierra el incidente histórico.
 
+### Estado del paso 4 (06-08-2026)
+
+El escaneo ya es automático: el job `Seguridad · secret scanning` de
+`.github/workflows/ci.yml` corre gitleaks 8.30.1 —fijado por versión y checksum
+SHA-256, no por una acción de terceros— sobre el **historial completo** en cada
+PR. Se verificó en ambos sentidos sobre un clon limpio: verde con el historial
+actual, y rompe la build al plantar un secreto de prueba.
+
+`.gitleaks.toml` contiene una excepción anclada al commit `6202a9f` y a la ruta
+`backend/.env`. **No cierra este incidente.** Existe únicamente para que el
+detector proteja de los secretos futuros mientras la rotación y la posible
+reescritura de historial se coordinan; los pasos 1 y 2 siguen pendientes y son
+obligatorios. Retirar esa excepción en cuanto se reescriba el historial.
+
+Los otros cinco hallazgos del historial son falsos positivos verificados uno a
+uno: fixtures fijos de la suite del backend y un checksum de CocoaPods. Están
+listados con su valor literal, no eximidos por carpeta, para que añadir algo que
+parezca un secreto obligue a justificarlo en la revisión.
+
 ## Antes de promover datos a producción
 
 - Crear snapshot verificable de Atlas y ensayar restore.

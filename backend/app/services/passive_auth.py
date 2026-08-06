@@ -260,11 +260,20 @@ def _verify_signature(
     algorithm = signer["signature_algorithm"]
     try:
         signature_algo = algorithm.signature_algo
-        hash_name = algorithm.hash_algo
     except Exception as exc:
         raise PassiveAuthError(
             f"El algoritmo de firma del SOD no es reconocible: {exc}"
         ) from exc
+
+    try:
+        hash_name = algorithm.hash_algo
+    except ValueError:
+        # `signatureAlgorithm` puede ser el OID desnudo (rsaEncryption), sin
+        # hash embebido. RFC 5652 dice que entonces el hash es el declarado en
+        # `digestAlgorithm` del propio SignerInfo, y hay documentos reales
+        # emitidos así. Rechazarlos sería confundir "no lo entiendo" con "es
+        # falso".
+        hash_name = signer["digest_algorithm"]["algorithm"].native
 
     if hash_name and hash_name.lower() in FORBIDDEN_SIGNATURE_HASHES:
         raise PassiveAuthError(

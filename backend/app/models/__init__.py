@@ -2,8 +2,6 @@
 from .schemas import (
     ClaveUnicaRequest,
     ClaveUnicaResponse,
-    NFCRequest,
-    NFCResponse,
     LivenessResponse,
     MintSBTRequest,
     MintSBTResponse,

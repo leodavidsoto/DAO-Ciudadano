@@ -36,7 +36,6 @@ function getCrypto(): any {
     return _crypto;
 }
 
-const ZERO_IV = Buffer.alloc(8);
 
 function tripleKey(key16: Buffer): Buffer {
     // 3DES de 2 llaves (K1|K2) expresado como K1|K2|K1, que es lo que
@@ -169,20 +168,28 @@ export function unpad(data: Buffer): Buffer {
     return data.subarray(0, i);
 }
 
-/**
- * Retail MAC — ISO 9797-1 Algoritmo 3 (DES-CBC con Ka sobre todos los
- * bloques, luego D con Kb y E con Ka sobre el último).
- */
 export function retailMac(kmac: Buffer, data: Buffer): Buffer {
     const ka = kmac.subarray(0, 8);
     const kb = kmac.subarray(8, 16);
     const padded = pad(data);
 
-    let y: Buffer = Buffer.alloc(8);
-    for (let i = 0; i < padded.length; i += 8) {
-        y = desEncryptCBC(ka, ZERO_IV, xor(y, padded.subarray(i, i + 8)));
-    }
-    return desEncryptCBC(ka, ZERO_IV, desDecryptCBC(kb, ZERO_IV, y));
+    // Paso 1: Cifrar todos los bloques con DES-CBC y un IV en cero usando la llave Ka.
+    // Esto es algorítmicamente equivalente al bucle manual, pero se hace todo
+    // en la capa nativa (OpenSSL), ahorrando miles de asignaciones de memoria JNI
+    // y evitando la mutación in-place del IV estático.
+    const c = getCrypto().createCipheriv('des-ede3-cbc', Buffer.concat([ka, ka, ka]), Buffer.alloc(8));
+    c.setAutoPadding(false);
+    const cipherText = Buffer.concat([c.update(padded), c.final()]);
+    
+    // Paso 2: Tomar el último bloque resultante.
+    let y = cipherText.subarray(cipherText.length - 8);
+
+    // Paso 3: Descifrar el último bloque con Kb y cifrar con Ka.
+    // Al ser un solo bloque, el cifrado CBC con IV cero es equivalente a ECB.
+    y = desDecryptCBC(kb, Buffer.alloc(8), y);
+    y = desEncryptCBC(ka, Buffer.alloc(8), y);
+
+    return y;
 }
 
 /** Llaves de sesión tras la autenticación mutua: Kseed = K.IFD XOR K.ICC */

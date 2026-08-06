@@ -449,6 +449,16 @@ def main() -> int:
     )
     parser.add_argument("--out", type=Path, help="Ruta del .pem a escribir")
     parser.add_argument(
+        "--anchors-dir",
+        type=Path,
+        help=(
+            "Directorio donde escribir UN .pem por ancla auto-firmada (para "
+            "assets/csca de la app móvil, que carga un archivo por certificado). "
+            "Los link certificates no se escriben aquí: en el móvil serían "
+            "anclas, y un eslabón no es una raíz."
+        ),
+    )
+    parser.add_argument(
         "--roots-only",
         action="store_true",
         help="Omite los link certificates; deja sólo raíces auto-firmadas.",
@@ -573,8 +583,22 @@ def main() -> int:
         )
         return 1
 
-    if args.dry_run or not args.out:
+    if args.dry_run or not (args.out or args.anchors_dir):
         print("\n(dry-run: no se escribió nada)", file=sys.stderr)
+        return 0
+
+    if args.anchors_dir:
+        args.anchors_dir.mkdir(parents=True, exist_ok=True)
+        for index, candidate in enumerate(roots, start=1):
+            name = f"csca_{country.lower()}_{index:02d}_{candidate.fingerprint[:16]}.pem"
+            (args.anchors_dir / name).write_bytes(
+                candidate.certificate.public_bytes(Encoding.PEM)
+            )
+        print(
+            f"\nEscritas {len(roots)} anclas en {args.anchors_dir}", file=sys.stderr
+        )
+
+    if not args.out:
         return 0
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

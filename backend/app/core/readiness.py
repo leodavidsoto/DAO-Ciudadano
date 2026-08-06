@@ -248,6 +248,75 @@ def deployment_blockers() -> list[str]:
     return blockers
 
 
+#: Proveedores civiles realmente implementados. Un valor fuera de aquí
+#: significa que algo emite grants sin haber verificado identidad, o que
+#: alguien dejó un nombre de sandbox en producción.
+IMPLEMENTED_IDENTITY_PROVIDERS = ("clave-unica", "cedula-nfc")
+
+
+def configured_identity_providers() -> list[str]:
+    """Proveedores declarados en `IDENTITY_PROVIDER`.
+
+    Se admite una lista separada por comas porque desde la Fase 5.8 hay dos
+    caminos reales —ClaveÚnica en web, la cédula por NFC en el móvil— y un
+    despliegue puede querer los dos, uno, o ninguno. Un solo nombre sigue
+    siendo válido y significa lo mismo que antes.
+    """
+    raw = settings.IDENTITY_PROVIDER.strip()
+    return [name.strip() for name in raw.split(",") if name.strip()]
+
+
+def identity_provider_blockers() -> list[str]:
+    """Qué impide que este despliegue emita grants civiles."""
+    blockers: list[str] = []
+    providers = configured_identity_providers()
+
+    if not providers:
+        return [
+            "IDENTITY_PROVIDER no está configurado: no se pueden emitir grants "
+            "civiles y el alta de nuevos ciudadanos queda bloqueada"
+        ]
+
+    for provider in providers:
+        if provider not in IMPLEMENTED_IDENTITY_PROVIDERS:
+            blockers.append(
+                f"IDENTITY_PROVIDER='{provider}' no corresponde a ningún proveedor "
+                "civil implementado; los disponibles son "
+                + ", ".join(f"'{name}'" for name in IMPLEMENTED_IDENTITY_PROVIDERS)
+            )
+            continue
+
+        if provider == "clave-unica":
+            from ..services import clave_unica as _clave_unica
+
+            missing = _clave_unica.configuration_errors()
+            if missing:
+                blockers.append(
+                    "ClaveÚnica está declarada como proveedor pero su configuración "
+                    "está incompleta: " + ", ".join(sorted(missing))
+                )
+
+        if provider == "cedula-nfc":
+            from ..services import csca_trust_store
+
+            store = csca_trust_store.status()
+            if not store["available"]:
+                # Declarar el proveedor sin anclas dejaría un despliegue que
+                # acepta lecturas NFC y las rechaza TODAS, sin que nadie sepa
+                # por qué hasta que un ciudadano lo intenta.
+                blockers.append(
+                    "La cédula por NFC está declarada como proveedor pero no hay "
+                    f"trust store de CSCA utilizable: {store['error']}"
+                )
+            elif store["anchors"] == 0:
+                blockers.append(
+                    "El trust store de CSCA no contiene ninguna raíz del Registro "
+                    "Civil: toda lectura NFC sería rechazada"
+                )
+
+    return blockers
+
+
 def _service_blockers() -> list[str]:
     """Servicios añadidos después de la primera pasada de readiness.
 
@@ -259,29 +328,7 @@ def _service_blockers() -> list[str]:
 
     # Proveedor civil: sin él la emisión de credenciales falla cerrada, así que
     # el flujo de alta completo no existe.
-    provider = settings.IDENTITY_PROVIDER.strip()
-    if not provider:
-        blockers.append(
-            "IDENTITY_PROVIDER no está configurado: no se pueden emitir grants "
-            "civiles y el alta de nuevos ciudadanos queda bloqueada"
-        )
-    elif provider != "clave-unica":
-        # El único proveedor civil real implementado. Un valor distinto
-        # significa que algo emite grants sin haber verificado identidad, o
-        # que alguien dejó un nombre de sandbox en producción.
-        blockers.append(
-            f"IDENTITY_PROVIDER='{provider}' no corresponde a ningún proveedor "
-            "civil implementado; el único es 'clave-unica'"
-        )
-    else:
-        from ..services import clave_unica as _clave_unica
-
-        missing = _clave_unica.configuration_errors()
-        if missing:
-            blockers.append(
-                "ClaveÚnica está declarada como proveedor pero su configuración "
-                "está incompleta: " + ", ".join(sorted(missing))
-            )
+    blockers.extend(identity_provider_blockers())
 
     # Rate limiter: con varios workers y sin Redis el límite efectivo se
     # multiplica por el número de instancias (ROADMAP 3.8).
@@ -312,6 +359,7 @@ def feature_status() -> dict:
     from ..services import (
         chain_service,
         clave_unica,
+        csca_trust_store,
         paymaster_service,
         treasury_service,
     )
@@ -363,7 +411,12 @@ def feature_status() -> dict:
             ),
             "issuer_configured": bool(settings.IDENTITY_ISSUER_PRIVATE_KEY.strip()),
             "civil_provider": settings.IDENTITY_PROVIDER.strip() or None,
+            "civil_providers": configured_identity_providers(),
         },
+        # Autenticación Pasiva del eMRTD (ROADMAP 5.8): contra qué CSCA se
+        # validan las cédulas. Sin anclas, el proveedor `cedula-nfc` rechaza
+        # todo, y eso tiene que verse aquí y no sólo cuando alguien lo intenta.
+        "passive_authentication": csca_trust_store.status(),
         "sponsored_minting": {
             # Habilitado no significa probado: la sonda del bundler vive en
             # /health/ready bajo `erc4337`.

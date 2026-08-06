@@ -14,7 +14,7 @@ import pytest
 
 from app.services import csca_trust_store, passive_auth
 
-from . import emrtd_fixtures as fx
+import emrtd_fixtures as fx
 
 DG1 = b"\x61\x1d\x5f\x1f\x1aI<CHL12345678<<<<<<<<<<<<<<"
 DG2 = b"\x75\x10" + b"\xff" * 16
