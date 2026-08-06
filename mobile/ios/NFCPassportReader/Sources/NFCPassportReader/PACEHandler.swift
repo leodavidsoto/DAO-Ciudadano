@@ -575,10 +575,10 @@ extension PACEHandler {
     /// - Returns a encoded key based on the mrz key that can be used for PACE
     func createPaceKey( from mrzKey: String ) throws -> [UInt8] {
         let buf: [UInt8] = Array(mrzKey.utf8)
-        let hash = calcSHA1Hash(buf)
+        let keySeed = paceKeyType == PACEHandler.CAN_PACE_KEY_REFERENCE ? buf : calcSHA1Hash(buf)
         
         let smskg = SecureMessagingSessionKeyGenerator()
-        let key = try smskg.deriveKey(keySeed: hash, cipherAlgName: cipherAlg, keyLength: keyLength, nonce: nil, mode: .PACE_MODE, paceKeyReference: paceKeyType)
+        let key = try smskg.deriveKey(keySeed: keySeed, cipherAlgName: cipherAlg, keyLength: keyLength, nonce: nil, mode: .PACE_MODE, paceKeyReference: paceKeyType)
         return key
     }
     
