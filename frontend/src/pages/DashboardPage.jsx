@@ -164,7 +164,7 @@ const OverviewSection = () => {
     return (
         <div className="space-y-10">
             <RepresentativesPanel />
-            <ProposalsList walletAddress={walletAddress} />
+            <ProposalsList walletAddress={walletAddress} chainId={chainId} eip1193Provider={eip1193Provider} />
         </div>
     );
 };
@@ -178,7 +178,7 @@ const ProposalsSection = () => {
                 chainId={chainId}
                 eip1193Provider={eip1193Provider}
             />
-            <ProposalsList walletAddress={walletAddress} />
+            <ProposalsList walletAddress={walletAddress} chainId={chainId} eip1193Provider={eip1193Provider} />
         </div>
     );
 };

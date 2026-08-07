@@ -28,12 +28,53 @@ const ESTADOS = {
     expired: { tag: 'civic-tag-neutral', label: 'Expirada', icon: <Timer className="w-3 h-3" /> },
 };
 
-const ProposalCard = ({ proposal }) => {
+const ProposalCard = ({ proposal, walletAddress, chainId, eip1193Provider, onVoteSuccess }) => {
     const totalVotes = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
     const forPercent = totalVotes > 0 ? (proposal.votes_for / totalVotes) * 100 : 0;
     const againstPercent = totalVotes > 0 ? (proposal.votes_against / totalVotes) * 100 : 0;
 
     const estado = ESTADOS[proposal.status] || ESTADOS.expired;
+
+    
+    const [voting, setVoting] = useState(false);
+    const handlePublicVote = async (choice) => {
+        if (!eip1193Provider) return alert('No eip1193Provider');
+        setVoting(true);
+        try {
+            const schemaRes = await governanceAPI.getBallotSchema();
+            const { types, primaryType, domainName, domainVersion } = schemaRes.data;
+            const nonce = crypto.randomUUID();
+            const domain = {
+                name: domainName || "DAO Ciudadana",
+                version: domainVersion || "1",
+                chainId: Number(chainId || 11155111)
+            };
+            const message = {
+                proposalId: proposal.id,
+                voter: walletAddress,
+                choice: choice,
+                nonce: nonce
+            };
+            const payload = {
+                types: types,
+                primaryType: primaryType,
+                domain: domain,
+                message: message
+            };
+            
+            const signature = await eip1193Provider.request({
+                method: 'eth_signTypedData_v4',
+                params: [walletAddress, JSON.stringify(payload)]
+            });
+            await governanceAPI.vote(proposal.id, walletAddress, choice, nonce, signature);
+            if (onVoteSuccess) onVoteSuccess();
+        } catch (err) {
+            console.error(err);
+            alert('Error al votar: ' + err.message);
+        } finally {
+            setVoting(false);
+        }
+    };
 
     const endsAt = new Date(proposal.ends_at);
     const timeLeft = Math.max(0, Math.floor((endsAt - new Date()) / (1000 * 60 * 60 * 24)));
@@ -93,11 +134,22 @@ const ProposalCard = ({ proposal }) => {
                 </div>
             )}
 
+        
+            {proposal.status === 'active' && walletAddress && (
+                <div style={{ marginTop: '16px', borderTop: '1px solid #eaeaea', paddingTop: '16px' }}>
+                    <p className="civic-eyebrow mb-2">Voto EIP-712 (Público)</p>
+                    <div className="flex gap-2">
+                        <button disabled={voting} onClick={() => handlePublicVote('for')} className="civic-btn civic-btn-sm" style={{borderColor: '#1F6B45', color: '#1F6B45'}}>Votar A favor</button>
+                        <button disabled={voting} onClick={() => handlePublicVote('against')} className="civic-btn civic-btn-sm" style={{borderColor: '#A9211D', color: '#A9211D'}}>Votar En contra</button>
+                    </div>
+                </div>
+            )}
+
         </article>
     );
 };
 
-const ProposalsList = ({ walletAddress }) => {
+const ProposalsList = ({ walletAddress, chainId, eip1193Provider }) => {
     const [proposals, setProposals] = useState([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState(null);
@@ -187,6 +239,10 @@ const ProposalsList = ({ walletAddress }) => {
                         <ProposalCard
                             key={proposal.id}
                             proposal={proposal}
+                            walletAddress={walletAddress}
+                            chainId={chainId}
+                            eip1193Provider={eip1193Provider}
+                            onVoteSuccess={loadProposals}
                         />
                     ))}
                 </div>

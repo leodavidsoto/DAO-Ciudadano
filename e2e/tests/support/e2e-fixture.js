@@ -621,6 +621,42 @@ export const installBackendFixture = async (page) => {
                 token_id: E2E_FIXTURE.tokenId,
             });
         }
+        
+        if (method === 'GET' && path === '/api/governance/ballot-schema') {
+            return jsonResponse(route, {
+                types: {
+                    EIP712Domain: [
+                        { name: 'name', type: 'string' },
+                        { name: 'version', type: 'string' },
+                        { name: 'chainId', type: 'uint256' }
+                    ],
+                    Ballot: [
+                        { name: 'proposalId', type: 'string' },
+                        { name: 'voter', type: 'address' },
+                        { name: 'choice', type: 'string' },
+                        { name: 'nonce', type: 'string' }
+                    ]
+                },
+                primaryType: 'Ballot',
+                domainName: 'DAO Ciudadana',
+                domainVersion: '1'
+            });
+        }
+        if (method === 'POST' && path === '/api/governance/vote') {
+            if (!hasSessionCookie) {
+                return jsonResponse(route, { detail: 'Fixture session missing' }, 401);
+            }
+            if (!hasCsrfHeader) {
+                return jsonResponse(route, { detail: 'Fixture CSRF rejected' }, 403);
+            }
+            state.publicVotes = state.publicVotes || [];
+            state.publicVotes.push(request.postDataJSON());
+            return jsonResponse(route, {
+                ok: true,
+                message: 'Voto registrado exitosamente'
+            });
+        }
+
         if (method === 'GET' && path === '/api/governance/proposals') {
             return jsonResponse(route, [{
                 id: E2E_FIXTURE.proposalId,
