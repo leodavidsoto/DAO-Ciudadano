@@ -12,7 +12,13 @@ import base64
 import pytest
 
 from app.core.config import settings
-from app.services import cedula_nfc, csca_trust_store, identity_grant, mrz
+from app.services import (
+    cedula_nfc,
+    csca_trust_store,
+    identity_grant,
+    membership_grant,
+    mrz,
+)
 
 import emrtd_fixtures as fx
 
@@ -203,6 +209,13 @@ async def test_the_endpoint_issues_a_grant_for_a_valid_reading(
     # El grant tiene que ser canjeable de verdad, no un valor decorativo.
     subject = await identity_grant.consume(body["identity_grant"])
     assert subject == cedula_nfc.verify_reading(**reading).subject_key
+
+    # El JWT de alta declara exactamente lo que se comprobó: Autenticación
+    # Pasiva. Sin Autenticación Activa no puede afirmar presencia del chip.
+    claims = membership_grant.verify(body["membership_grant"])
+    assert claims.subject_key == subject
+    assert claims.assurance_level == "CEDULA_NFC_PASSIVE"
+    assert body["assurance_level"] == "CEDULA_NFC_PASSIVE"
 
 
 async def test_the_endpoint_never_issues_a_grant_for_a_forged_document(

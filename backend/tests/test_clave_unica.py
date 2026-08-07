@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app.core.config import settings
 from app.core.database import get_collection
-from app.services import clave_unica, identity_grant
+from app.services import clave_unica, identity_grant, membership_grant
 
 CLIENT_ID = "dao-ciudadana-test"
 ISSUER = "https://accounts.example.gob.cl/openid"
@@ -197,6 +197,14 @@ async def test_a_valid_login_yields_a_single_use_grant(client, configured):
     )
     with pytest.raises(identity_grant.IdentityGrantError):
         await identity_grant.consume(data["identity_grant"], browser_binding=binding)
+
+    # Y el JWT de alta de membresía certifica al MISMO sujeto y su nivel
+    # (ROADMAP 1.10): es lo que `POST /membership/mint` exige y quema.
+    claims = membership_grant.verify(data["membership_grant"])
+    assert claims.subject_key == expected_subject
+    assert claims.assurance_level == "CLAVE_UNICA"
+    assert claims.provider == clave_unica.PROVIDER_NAME
+    assert data["membership_grant_expires_in"] == settings.MEMBERSHIP_GRANT_TTL_SECONDS
 
 
 async def test_the_run_is_never_persisted(client, configured):
@@ -411,6 +419,10 @@ async def test_repeating_the_callback_returns_the_same_grant(client, configured)
     assert replay.json()["identity_grant"] == first.json()["identity_grant"]
     # Y solo hay UN grant emitido, no dos.
     assert await get_collection("identity_grants").count_documents({}) == 1
+    # El JWT de membresía también se repite. Emitir uno nuevo daría dos jtis
+    # para una sola verificación civil, y el consumo de un solo uso dejaría de
+    # significar "una identidad, una membresía".
+    assert replay.json()["membership_grant"] == first.json()["membership_grant"]
 
 
 async def test_a_consumed_grant_is_not_replayed(client, configured):
