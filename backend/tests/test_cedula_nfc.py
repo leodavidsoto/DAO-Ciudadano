@@ -8,6 +8,7 @@ una firma válida del Registro Civil.
 """
 
 import base64
+import logging
 
 import pytest
 
@@ -99,6 +100,42 @@ def test_a_run_that_is_not_a_run_fails_closed():
     for value in ("", "<<<<<<", "ABC123", "1"):
         with pytest.raises(cedula_nfc.CedulaVerificationError):
             cedula_nfc.normalize_run(value)
+
+
+def test_the_shape_diagnostic_distinguishes_the_hypotheses():
+    """AUDIT P-101: la forma basta para saber qué trae el campo."""
+    # Las tres hipótesis sobre por qué la cédula real no produce un RUN son
+    # distinguibles por la forma sola: campo vacío (el RUN estaría en DG11/13),
+    # RUN legible, o un carácter de más (dígito de control del propio campo).
+    assert cedula_nfc.describe_field_shape("") == "len=0 "
+    assert cedula_nfc.describe_field_shape("123456785") == "len=9 DDDDDDDDD"
+    assert cedula_nfc.describe_field_shape("12345678K") == "len=9 DDDDDDDDA"
+    assert cedula_nfc.describe_field_shape("1234<<<") == "len=7 DDDD<<<"
+
+
+def test_the_shape_diagnostic_never_reveals_the_field():
+    """Es lo único que se registra del campo, así que no puede filtrarlo."""
+    for value in ("123456785", "9876543-2", "12345678K", "AB12<34"):
+        mask = cedula_nfc.describe_field_shape(value).split(" ", 1)[1]
+        # Ningún carácter del original sobrevive salvo el relleno, que no
+        # identifica a nadie.
+        assert not any(char.isdigit() for char in mask)
+        assert set(mask) <= {"D", "A", "<", "?"}
+
+
+def test_the_run_failure_logs_the_shape_and_not_the_run(caplog):
+    """El aviso del camino real sale de la máscara, nunca del valor."""
+    logger = logging.getLogger(cedula_nfc.__name__)
+    run_like = "123456789012"
+
+    with caplog.at_level(logging.WARNING, logger=cedula_nfc.__name__):
+        logger.warning(
+            "El campo opcional de la MRZ no expone un RUN reconocible (forma: %s)",
+            cedula_nfc.describe_field_shape(run_like),
+        )
+
+    assert "len=12 DDDDDDDDDDDD" in caplog.text
+    assert run_like not in caplog.text
 
 
 def test_the_subject_key_does_not_leak_the_run(trust_store, reading):

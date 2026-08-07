@@ -134,6 +134,21 @@ def _decode_data_groups(data_groups: Mapping[str, str]) -> dict[int, bytes]:
     return decoded
 
 
+def describe_field_shape(value: str) -> str:
+    """Describe un campo de la MRZ sin revelar su contenido (AUDIT P-101).
+
+    Cada carácter se sustituye por su clase —`D` dígito, `A` letra, `<` relleno,
+    `?` cualquier otra cosa— de modo que la salida distingue «nueve dígitos» de
+    «vacío» o de «ocho dígitos y una letra», que es exactamente lo que hace
+    falta para saber qué trae el campo, sin que el RUN llegue a ningún log.
+    """
+    mask = "".join(
+        "D" if char.isdigit() else "A" if char.isalpha() else "<" if char == "<" else "?"
+        for char in value or ""
+    )
+    return f"len={len(value or '')} {mask}"
+
+
 def normalize_run(value: str) -> str:
     """Normaliza el RUN y comprueba su dígito verificador.
 
@@ -221,7 +236,22 @@ def verify_reading(sod: str, data_groups: Mapping[str, str]) -> VerifiedCedula:
 
     # El RUN, no el número de documento: el número cambia en cada renovación y
     # usarlo daría a la misma persona una identidad nueva con cada cédula.
-    run = normalize_run(mrz.optional_data)
+    try:
+        run = normalize_run(mrz.optional_data)
+    except CedulaVerificationError:
+        # Diagnóstico temporal (AUDIT P-101). Contra una cédula chilena real
+        # este campo no contiene lo que `mrz.py` supone, y sin saber QUÉ trae
+        # no se puede decidir entre leer DG11/DG13, ajustar el corte de la
+        # línea 1, o descartar un dígito de control sobrante.
+        #
+        # Se registra la FORMA, nunca el valor: longitud y máscara de clases.
+        # Un RUN sigue siendo un identificador civil y no entra en un log ni
+        # para depurar. Borrar esto en cuanto se sepa la respuesta.
+        logger.warning(
+            "El campo opcional de la MRZ no expone un RUN reconocible (forma: %s)",
+            describe_field_shape(mrz.optional_data),
+        )
+        raise
 
     # Nunca se registra el RUN ni el número de documento.
     logger.info(
