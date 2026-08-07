@@ -311,7 +311,7 @@ def td1_mrz(
     document_code: str = "I<",
     surname: str = "PEREZ",
     given_names: str = "JUAN",
-    optional_2: str = "",
+    optional_1: str = "",
 ) -> str:
     """MRZ TD1 (90 caracteres) con los dígitos verificadores CALCULADOS.
 
@@ -320,33 +320,36 @@ def td1_mrz(
     parece un bug del código bajo prueba.
     """
     number = document_number.ljust(9, "<")
+    # El campo opcional de la línea 1 NO lleva el RUN. En la cédula chilena
+    # real trae tres caracteres (una letra y dos dígitos); el RUN va en el
+    # segundo campo opcional, en la línea 2 (AUDIT P-101).
+    optional_1_field = optional_1.ljust(15, "<")
     line1 = (
         document_code.ljust(2, "<")
         + issuing_state.ljust(3, "<")
         + number
         + _mrz_check_digit(number)
-        + run.ljust(15, "<")
+        + optional_1_field
     )
     composite_birth = date_of_birth + _mrz_check_digit(date_of_birth)
     composite_expiry = date_of_expiry + _mrz_check_digit(date_of_expiry)
-    # Segundo campo opcional (posiciones 19-29 de la línea 2). ICAO lo define
-    # solo para TD1 y este proyecto lo ignoraba: contra una cédula real es
-    # donde puede estar el RUN (AUDIT P-101).
-    optional_2_field = optional_2.ljust(11, "<")
+    # Segundo campo opcional (posiciones 19-29 de la línea 2): aquí es donde
+    # la cédula chilena lleva el RUN.
+    run_field = run.ljust(11, "<")
     line2 = (
         composite_birth
         + "M"
         + composite_expiry
         + nationality.ljust(3, "<")
-        + optional_2_field
+        + run_field
     )
     line2 += _mrz_check_digit(
         number
         + _mrz_check_digit(number)
-        + run.ljust(15, "<")
+        + optional_1_field
         + composite_birth
         + composite_expiry
-        + optional_2_field
+        + run_field
     )
     line3 = f"{surname}<<{given_names}".ljust(30, "<")[:30]
 

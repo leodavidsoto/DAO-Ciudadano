@@ -236,8 +236,13 @@ def verify_reading(sod: str, data_groups: Mapping[str, str]) -> VerifiedCedula:
 
     # El RUN, no el número de documento: el número cambia en cada renovación y
     # usarlo daría a la misma persona una identidad nueva con cada cédula.
+    # `national_number` sabe en qué campo lo pone cada formato de MRZ.
+    #
+    # El dígito verificador es lo que confirma que el campo es el correcto: si
+    # estuviéramos leyendo otra cosa de nueve dígitos —el número de documento,
+    # por ejemplo— sólo cuadraría una vez de cada once.
     try:
-        run = normalize_run(mrz.optional_data)
+        run = normalize_run(mrz.national_number)
     except CedulaVerificationError:
         # Diagnóstico temporal (AUDIT P-101). Contra una cédula chilena real
         # este campo no contiene lo que `mrz.py` supone, y sin saber QUÉ trae

@@ -47,6 +47,22 @@ class MRZ:
     format: str
 
     @property
+    def national_number(self) -> str:
+        """El número nacional de la persona (en Chile, el RUN).
+
+        Cada formato lo pone en un sitio distinto. En TD1 va en el SEGUNDO
+        campo opcional, el de la línea 2: contra una cédula chilena real ahí
+        hay nueve dígitos, la forma de un RUN con su verificador, mientras que
+        el campo de la línea 1 trae tres caracteres que no lo son. Leerlo del
+        primero hacía imposible dar de alta a nadie (AUDIT P-101).
+
+        No se recurre al número de documento aunque también tenga nueve
+        dígitos: ese cambia en cada renovación, y usarlo daría a la misma
+        persona una identidad nueva con cada cédula.
+        """
+        return self.optional_data_2 if self.format == "TD1" else self.optional_data
+
+    @property
     def is_chilean(self) -> bool:
         return self.issuing_state == "CHL" and self.nationality == "CHL"
 

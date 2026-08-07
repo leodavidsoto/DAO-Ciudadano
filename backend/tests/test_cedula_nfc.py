@@ -75,23 +75,31 @@ def test_parses_a_td1_identity_card():
     assert parsed.issuing_state == "CHL"
     assert parsed.is_identity_card
     assert parsed.is_chilean
-    assert parsed.optional_data == RUN
+    assert parsed.national_number == RUN
 
 
-def test_td1_exposes_both_optional_fields():
-    """ICAO define dos campos opcionales en TD1; solo se leía el primero.
+def test_the_run_comes_from_the_second_optional_field(caplog):
+    """AUDIT P-101: el RUN va en la línea 2, no en la 1.
 
-    Contra una cédula chilena real el de la línea 1 trae tres caracteres, donde
-    un RUN no cabe (AUDIT P-101), así que el de la línea 2 tiene que ser
-    legible para poder descartarlo o usarlo.
+    Se leía del campo opcional de la línea 1, que en la cédula real trae tres
+    caracteres. Ninguna alta podía completarse.
     """
-    parsed = mrz.parse(fx.dg1(fx.td1_mrz(run="123456785", optional_2="987654321")))
+    parsed = mrz.parse(fx.dg1(fx.td1_mrz(run="123456785", optional_1="A12")))
 
-    assert parsed.optional_data == "123456785"
-    assert parsed.optional_data_2 == "987654321"
+    assert parsed.optional_data == "A12"
+    assert parsed.optional_data_2 == "123456785"
+    assert parsed.national_number == "123456785"
 
-    # Un TD1 sin ese campo lo devuelve vacío, no None: el relleno no es dato.
-    assert mrz.parse(fx.dg1(fx.td1_mrz())).optional_data_2 == ""
+    # Y es el que se usa: si se leyera el de la línea 1, «A12» no es un RUN.
+    assert cedula_nfc.normalize_run(parsed.national_number) == "12345678-5"
+
+
+def test_the_document_number_is_never_used_as_the_run():
+    """Tiene nueve dígitos igual que el RUN, pero cambia en cada renovación."""
+    parsed = mrz.parse(fx.dg1(fx.td1_mrz(document_number="87654321", run="123456785")))
+
+    assert parsed.document_number != parsed.national_number
+    assert parsed.national_number == "123456785"
 
 
 def test_rejects_a_dg1_that_is_not_an_mrz():
