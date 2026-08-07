@@ -9,6 +9,7 @@ import {
     Animated,
     Alert,
     TextInput,
+    ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import nfcService, {
@@ -218,6 +219,13 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
 
     return (
         <SafeAreaView style={styles.container}>
+            {/* Con tres campos y el teclado abierto esta pantalla ya no cabe en
+                un teléfono pequeño. Sin scroll, el contenido centrado que
+                desborda se sale por arriba y se pinta sobre el título. */}
+            <ScrollView
+                contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps="handled"
+            >
             {/* Header */}
             <View style={styles.header}>
                 <Text style={styles.title}>LECTURA eMRTD</Text>
@@ -367,8 +375,9 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                     </TouchableOpacity>
                 )}
             </View>
+            </ScrollView>
 
-            {/* NFC Status */}
+            {/* Fuera del scroll: es un indicador de estado, no contenido. */}
             <View style={styles.statusBar}>
                 <View
                     style={[
@@ -402,9 +411,15 @@ const styles = StyleSheet.create({
         marginTop: 8,
         textAlign: 'center',
     },
+    scrollContent: {
+        // Crece hasta llenar la pantalla cuando sobra sitio, y deja scrollear
+        // cuando falta. `flex: 1` aquí anularía el scroll.
+        flexGrow: 1,
+    },
     scannerContainer: {
-        flex: 1,
-        justifyContent: 'center',
+        // Sin `flex: 1` ni centrado vertical: dentro de un ScrollView, centrar
+        // un contenido más alto que el hueco lo hace desbordar por los dos
+        // lados a la vez, que es justo el defecto que tapaba el título.
         alignItems: 'center',
         width: '100%',
     },

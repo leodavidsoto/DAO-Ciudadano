@@ -2,7 +2,7 @@ jest.mock('react-native-quick-crypto', () => require('crypto'));
 
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
-import { TextInput, TouchableOpacity } from 'react-native';
+import { ScrollView, StyleSheet, TextInput, TouchableOpacity } from 'react-native';
 import NfcManager from 'react-native-nfc-manager';
 import ScanScreen from '../ScanScreen';
 import apiService from '../../services/apiService';
@@ -130,6 +130,29 @@ async function pressScan(renderer: ReactTestRenderer.ReactTestRenderer) {
         renderer.root.findAllByType(TouchableOpacity)[0].props.onPress();
     });
 }
+
+describe('ScanScreen layout', () => {
+    afterEach(async () => {
+        await unmountAll();
+        jest.restoreAllMocks();
+    });
+
+    it('scrolls its content instead of overflowing over the header', async () => {
+        // Visto en un teléfono real: con tres campos y el círculo, un
+        // contenedor centrado con flex:1 desborda por arriba y por abajo a la
+        // vez, y el formulario se pintaba encima de «LECTURA eMRTD».
+        const { renderer } = await renderScreen();
+
+        const scroll = renderer.root.findByType(ScrollView);
+        const contentStyle = StyleSheet.flatten(scroll.props.contentContainerStyle);
+        expect(contentStyle.flexGrow).toBe(1);
+        // `flex: 1` en el contenido anularía el scroll: volvería a comprimir.
+        expect(contentStyle.flex).toBeUndefined();
+
+        // Los tres campos y el círculo cuelgan del scroll, no del SafeAreaView.
+        expect(scroll.findAllByType(TextInput)).toHaveLength(3);
+    });
+});
 
 describe('ScanScreen CAN entry', () => {
     afterEach(async () => {
