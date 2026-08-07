@@ -1,6 +1,9 @@
 require("@nomicfoundation/hardhat-toolbox");
 require("dotenv").config();
 
+// Tareas propias. Se cargan después del toolbox porque usan `ethers`.
+require("./tasks/maci-tally");
+
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
     solidity: {
