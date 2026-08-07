@@ -2218,7 +2218,7 @@ Arreglo propuesto: `ScrollView` con `contentContainerStyle={{ flexGrow: 1 }}` y 
 `justifyContent: 'center'`. Con tres campos y el teclado abierto esta pantalla ya no cabe
 en un teléfono pequeño.
 
-### P-101 (crítica, SIN RESOLVER): el servidor no reconoce el RUN de la cédula real
+### P-101 (crítica, CORREGIDA): el RUN se leía del campo equivocado de la MRZ
 
 Es el bloqueante del alta. El chip se lee, los bytes crudos llegan al backend, la
 Autenticación Pasiva pasa, y entonces `cedula_nfc.py:224` falla:
@@ -2240,3 +2240,56 @@ hipótesis sin escribir el número en ningún sitio. Borrarlo después.
 
 **No relajar `_RUN_PATTERN` para desbloquear la demo.** El dígito verificador se comprueba
 justamente porque de ese número cuelga la identidad entera de la persona.
+
+---
+
+## Vigesimoprimera pasada (07-08-2026) — P-101 resuelto y primera alta civil real
+
+### P-101 · el RUN estaba en el otro campo opcional
+
+El diagnóstico de forma dio la respuesta en dos escaneos:
+
+```
+formato: TD1 | opcional-1: len=3 ADD | opcional-2: len=9 DDDDDDDDD | documento: len=9 DDDDDDDDD
+```
+
+El campo del que se leía —línea 1, posiciones 16-30— trae **tres caracteres** en la cédula
+chilena. El RUN va en el **segundo** campo opcional, el de la línea 2 (posiciones 19-29),
+que `mrz.py` no leía en absoluto pese a estar definido en ICAO 9303 para TD1.
+
+Corregido con `MRZ.national_number`, que sabe dónde lo pone cada formato. El número de
+documento **no** se usa como respaldo aunque también tenga nueve dígitos: cambia en cada
+renovación y daría a la misma persona una identidad nueva con cada cédula.
+
+La confirmación no es una deducción: el dígito verificador módulo 11 cuadró. Leyendo otro
+campo de nueve dígitos habría cuadrado una vez de cada once.
+
+**Por qué 570 tests en verde no lo detectaron:** el fixture `td1_mrz()` construía la MRZ
+poniendo el RUN en la línea 1, es decir, **reproducía el error en lugar de detectarlo**.
+Los tests confirmaban que el parser leía donde el fixture escribía, y ambos estaban
+equivocados igual. Corregido: el fixture ahora coloca el RUN donde está de verdad, con el
+dígito compuesto recalculado para incluir ese campo.
+
+Es la lección de esta pasada y de la anterior: **ningún fixture prueba que la realidad sea
+como el fixture.** Contra una cédula física cayeron dos supuestos que llevaban meses en
+verde — el formato del CAN (P-97) y la posición del RUN (P-101).
+
+### Primera alta civil completa
+
+Con la corrección, el camino entero funcionó contra una cédula chilena real:
+
+```
+POST /api/auth/cedula/verify   → 200   Autenticación Pasiva contra ancla CSCA real
+                                       identity_grant + membership_grant emitidos
+POST /api/wallet/challenge     → 200   SIWE
+POST /api/wallet/verify        → 200   firma verificada
+GET  /api/membership/member/…  → 200
+```
+
+Lo que sigue bloqueando el minteo es `MINT_MODE=disabled`, no la identidad.
+
+### Comprobado y descartado como hallazgo
+
+El `InsecureKeyLengthWarning` de 14 bytes que aparece en desarrollo es la `SECRET_KEY` por
+defecto (`dev-secret-key`, en `config.py:42`). **No es un hallazgo:** `readiness.py:71` ya
+la trata como placeholder y exige 32 caracteres o más, así que producción falla cerrado.
