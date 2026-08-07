@@ -13,16 +13,23 @@ import NfcManager from 'react-native-nfc-manager';
 type UnknownRecord = Record<string, unknown>;
 
 /**
- * The Card Access Number is the six printed digits that key PACE. It is not
- * the document number and not the tag serial: both native readers reject
- * anything that is not exactly six ASCII digits, so this layer must agree.
+ * The printed key that opens PACE: 6 to 15 alphanumeric characters.
+ *
+ * It is the number printed on the card, not the RUT and not the tag serial.
+ * Both native readers enforce the same range, so this layer must agree — a
+ * stricter JS rule would reject input the chip accepts and make valid cards
+ * unreadable.
+ *
+ * The protocol is PACE either way. With a date of birth and expiry the native
+ * side derives an MRZ PACE key; without them, a CAN PACE key. BAC is never
+ * used: Android only ever calls `doPACE`, and iOS sets `allowBACFallback: false`.
  */
-export const PACE_CAN_LENGTH = 6;
-const CAN_PATTERN = /^[0-9]{6}$/;
+export const PACE_CAN_MAX_LENGTH = 15;
+const CAN_PATTERN = /^[A-Za-z0-9]{6,15}$/;
 
 /** Normalizes user input before it reaches the CAN validator. */
 export function normalizeCAN(value: string): string {
-    return value.replace(/[^0-9]/g, '').slice(0, PACE_CAN_LENGTH);
+    return value.replace(/[^A-Za-z0-9]/g, '').slice(0, PACE_CAN_MAX_LENGTH).toUpperCase();
 }
 
 export function isValidCAN(value: string): boolean {
@@ -30,7 +37,7 @@ export function isValidCAN(value: string): boolean {
 }
 
 interface NativePassportReaderModule {
-    startPACESession(can: string): Promise<unknown>;
+    startPACESession(can: string, dob: string, doe: string): Promise<unknown>;
     cancelPACESession?: () => void;
 }
 
@@ -55,6 +62,20 @@ export interface ChileanIDData {
     optionalData1?: string;
     optionalData2?: string;
     photo?: PassportPhoto;
+}
+
+/**
+ * Raw chip files, base64, exactly as read.
+ *
+ * They exist so the backend can repeat passive authentication itself — it
+ * accepts bytes, never a client verdict. Re-serializing a parsed data group
+ * would produce different bytes and the EF.SOD hashes would stop matching, so
+ * these must be passed through untouched.
+ */
+export interface RawDocumentFiles {
+    sod: string;
+    dg1: string;
+    dg2: string;
 }
 
 /** Passive-auth evidence returned by the native module (ADR-004). */
@@ -96,6 +117,7 @@ export interface VerifiedNFCReadResult {
     readCompleted: true;
     identityVerified: true;
     data: ChileanIDData;
+    files: RawDocumentFiles;
     verification: VerifiedPassiveAuthResult;
 }
 
@@ -208,6 +230,27 @@ function parseChileanIDData(value: unknown): ChileanIDData | null {
     };
 }
 
+/** Strict base64: the backend's decoder rejects whitespace and wrapping. */
+const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+function normalizedBase64File(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim();
+    if (!normalized || normalized.length % 4 !== 0) return null;
+    return BASE64_PATTERN.test(normalized) ? normalized : null;
+}
+
+function parseRawDocumentFiles(value: unknown): RawDocumentFiles | null {
+    if (!isRecord(value)) return null;
+
+    const sod = normalizedBase64File(value.sod);
+    const dg1 = normalizedBase64File(value.dg1);
+    const dg2 = normalizedBase64File(value.dg2);
+    if (!sod || !dg1 || !dg2) return null;
+
+    return { sod, dg1, dg2 };
+}
+
 function parsePassiveAuthResult(value: unknown): PassiveAuthResult | null {
     if (!isRecord(value)) return null;
 
@@ -262,12 +305,19 @@ function parsePassiveAuthResult(value: unknown): PassiveAuthResult | null {
 function requiredEvidenceFailures(
     nativeIdentityVerified: boolean,
     data: ChileanIDData | null,
+    files: RawDocumentFiles | null,
     verification: PassiveAuthResult | null,
 ): string[] {
     const failures: string[] = [];
 
     if (!nativeIdentityVerified) failures.push('El módulo nativo no verificó la identidad.');
     if (!data) failures.push('Faltan campos obligatorios autenticados de DG1.');
+    if (!files) {
+        // Without the raw files the server cannot repeat passive
+        // authentication, and a verdict only this device computed is not
+        // evidence anyone else can check.
+        failures.push('Faltan los archivos EF.SOD, DG1 y DG2 en crudo.');
+    }
     if (data && data.issuingState !== 'CHL') {
         failures.push('El documento no declara a Chile como Estado emisor.');
     }
@@ -357,6 +407,7 @@ export function parseNativePassportReadResult(value: unknown): NFCReadResult {
 
     const nativeIdentityVerified = value.identityVerified;
     const data = parseChileanIDData(value.data);
+    const files = parseRawDocumentFiles(value.files);
     const verification = parsePassiveAuthResult(value.verification);
     if (!verification) {
         return {
@@ -370,15 +421,17 @@ export function parseNativePassportReadResult(value: unknown): NFCReadResult {
     const evidenceFailures = requiredEvidenceFailures(
         nativeIdentityVerified,
         data,
+        files,
         verification,
     );
 
-    if (data && evidenceFailures.length === 0) {
+    if (data && files && evidenceFailures.length === 0) {
         return {
             status: 'verified',
             readCompleted: true,
             identityVerified: true,
             data,
+            files,
             verification: asVerifiedPassiveAuth(verification),
         };
     }
@@ -404,8 +457,9 @@ export function isVerifiedNFCReadResult(value: unknown): value is VerifiedNFCRea
     }
 
     const data = parseChileanIDData(value.data);
+    const files = parseRawDocumentFiles(value.files);
     const verification = parsePassiveAuthResult(value.verification);
-    return requiredEvidenceFailures(true, data, verification).length === 0;
+    return requiredEvidenceFailures(true, data, files, verification).length === 0;
 }
 
 /** What the citizen can actually do about a failure. */
@@ -436,15 +490,15 @@ export function describeReadFailure(
         case 'E_INVALID_CAN':
             return {
                 title: 'Ese CAN no tiene el formato correcto',
-                detail: `El CAN son exactamente ${PACE_CAN_LENGTH} dígitos impresos en tu cédula. No es el RUT ni el número de documento.`,
+                detail: `El CAN o Número de Documento debe tener entre 6 y 15 caracteres impresos en tu cédula. No es el RUT.`,
                 action: 'fix_can',
             };
         case 'E_PACE_FAILED':
             return {
                 title: 'No se pudo abrir el canal seguro',
                 detail:
-                    'La causa más frecuente es un CAN equivocado: el chip rechaza la clave sin decir por qué. ' +
-                    'Revisa los dígitos y vuelve a intentarlo sin mover la cédula.',
+                    'El chip rechazó la clave sin decir por qué. Revisa el número de documento y, ' +
+                    'si las completaste, también las dos fechas: la clave se deriva de las tres.',
                 action: 'fix_can',
                 technicalDetail,
             };
@@ -454,6 +508,18 @@ export function describeReadFailure(
                 detail:
                     'Apoya la cédula contra la parte trasera del teléfono y mantenla quieta. ' +
                     'Las fundas gruesas y las carcasas metálicas bloquean la lectura.',
+                action: 'retry_positioning',
+                technicalDetail,
+            };
+        case 'E_TAG_LOST':
+            // La cédula se despegó. Puede pasar ANTES de PACE (leyendo
+            // EF.CardAccess) o después, así que el texto no afirma que el
+            // canal llegara a abrirse, y sobre todo no culpa al CAN.
+            return {
+                title: 'La cédula se separó del teléfono',
+                detail:
+                    'El chip dejó de responder a mitad de la lectura. El CAN no tiene ' +
+                    'nada que ver: apóyala bien y no la muevas hasta que termine.',
                 action: 'retry_positioning',
                 technicalDetail,
             };
@@ -604,14 +670,14 @@ class NFCService {
      * NFCPassportReader on iOS): they own the CSCA trust store, and a
      * JavaScript reimplementation could not validate the EF.SOD chain.
      */
-    async readChileanIDPACE(can: string): Promise<NFCReadResult> {
+    async readChileanIDPACE(can: string, dob: string = '', doe: string = ''): Promise<NFCReadResult> {
         if (!isValidCAN(can.trim())) {
             return {
                 status: 'failed',
                 readCompleted: false,
                 identityVerified: false,
                 errorCode: 'E_INVALID_CAN',
-                error: `El CAN debe contener exactamente ${PACE_CAN_LENGTH} dígitos.`,
+                error: `El CAN/Número de Serie debe tener al menos 6 caracteres.`,
             };
         }
 
@@ -627,7 +693,7 @@ class NFCService {
         }
 
         try {
-            const nativeResult = await passportReader.startPACESession(can.trim());
+            const nativeResult = await passportReader.startPACESession(can.trim(), dob.trim(), doe.trim());
             return parseNativePassportReadResult(nativeResult);
         } catch (error) {
             return {

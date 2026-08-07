@@ -13,6 +13,7 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableMap
 import net.sf.scuba.smartcards.IsoDepCardService
+import org.jmrtd.BACKey
 import org.jmrtd.PACEKeySpec
 import org.jmrtd.PassportService
 import org.jmrtd.lds.CardAccessFile
@@ -117,16 +118,15 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun startPACESession(can: String, promise: Promise) {
+    fun startPACESession(can: String, dob: String, doe: String, promise: Promise) {
         val once = SingleShotPromise(promise)
 
         val normalizedCan = can.trim().uppercase()
-        if (normalizedCan.length != 6 || !normalizedCan.all { it.isLetterOrDigit() }) {
-            // El CAN impreso en la cédula usualmente es numérico, pero puede 
-            // contener letras. 
+        if (normalizedCan.length < 6 || normalizedCan.length > 15 || !normalizedCan.all { it.isLetterOrDigit() }) {
+            // El CAN o Número de Documento chileno suele ser alfanumérico y de hasta 9 o más caracteres.
             once.reject(
                 "E_INVALID_CAN",
-                "El CAN debe contener exactamente los 6 caracteres impresos en la cédula."
+                "El CAN o Número de Documento debe tener entre 6 y 15 caracteres alfanuméricos."
             )
             return
         }
@@ -160,12 +160,21 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
             // se puede bloquear leyendo el chip sin congelar la UI.
             if (once.isDone()) return@ReaderCallback
             try {
-                val result = readDocument(tag, normalizedCan)
+                val result = readDocument(tag, normalizedCan, dob, doe)
                 once.resolve(result)
             } catch (e: PassportReadError) {
                 once.reject(e.code, e.message ?: "Error leyendo la cédula.")
             } catch (e: Throwable) {
-                once.reject("E_PACE_FAILED", describeFailure(e))
+                // Perder la tarjeta a mitad de la lectura NO es un CAN
+                // equivocado: el canal puede haberse abierto y caerse después,
+                // leyendo EF.CardAccess o cualquier data group. Mandarlo como
+                // fallo de PACE hace que la app le diga al ciudadano que revise
+                // unos dígitos que estaban bien, cuando lo que pasó es que
+                // movió la cédula.
+                once.reject(
+                    if (isTagLost(e)) "E_TAG_LOST" else "E_PACE_FAILED",
+                    describeFailure(e)
+                )
             } finally {
                 timer.cancel()
                 disableReader(activity, adapter)
@@ -227,7 +236,7 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
      * tal cual está en el chip, no el objeto ya parseado: volver a serializar
      * el DG1 daría bytes distintos y la comprobación fallaría siempre.
      */
-    private fun readDocument(tag: Tag, can: String): WritableMap {
+    private fun readDocument(tag: Tag, can: String, dob: String, doe: String): WritableMap {
         val isoDep = IsoDep.get(tag)
             ?: throw PassportReadError(
                 "E_TAG_NOT_SUPPORTED",
@@ -256,8 +265,13 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
                 )
 
             try {
+                val keySpec = if (dob.isNotEmpty() && doe.isNotEmpty()) {
+                    PACEKeySpec.createMRZKey(BACKey(can, dob, doe))
+                } else {
+                    PACEKeySpec.createCANKey(can)
+                }
                 service.doPACE(
-                    PACEKeySpec.createCANKey(can),
+                    keySpec,
                     paceInfo.objectIdentifier,
                     PACEInfo.toParameterSpec(paceInfo.parameterId),
                     null,
@@ -308,6 +322,16 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
                 putMap(
                     "data",
                     if (passed) buildData(dg1, dg2Raw) else Arguments.createMap()
+                )
+                // Archivos EN CRUDO para que el backend repita la Autenticación
+                // Pasiva por su cuenta. El servidor no acepta veredictos del
+                // cliente, y el hash del SOD cubre el archivo tal como está en
+                // el chip: reserializar un DG ya parseado daría otros bytes.
+                // Solo viajan si la verificación local pasó — una lectura que
+                // no verifica no tiene nada que mandar a ningún lado.
+                putMap(
+                    "files",
+                    if (passed) buildFiles(sodRaw, dg1Raw, dg2Raw) else Arguments.createMap()
                 )
                 putMap(
                     "verification",
@@ -429,6 +453,22 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
         return anchors
     }
 
+    /**
+     * EF.SOD y los data groups en base64, sin saltos de línea.
+     *
+     * NO_WRAP importa: `Base64.DEFAULT` mete '\n' cada 76 caracteres y el
+     * decodificador estricto del backend rechazaría la cadena.
+     */
+    private fun buildFiles(
+        sodRaw: ByteArray,
+        dg1Raw: ByteArray,
+        dg2Raw: ByteArray,
+    ): WritableMap = Arguments.createMap().apply {
+        putString("sod", Base64.encodeToString(sodRaw, Base64.NO_WRAP))
+        putString("dg1", Base64.encodeToString(dg1Raw, Base64.NO_WRAP))
+        putString("dg2", Base64.encodeToString(dg2Raw, Base64.NO_WRAP))
+    }
+
     private fun buildData(dg1: DG1File, dg2Raw: ByteArray): WritableMap {
         val mrz = dg1.mrzInfo
         return Arguments.createMap().apply {
@@ -546,9 +586,34 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
      * Mensaje de diagnóstico sin datos del titular ni el CAN: los errores
      * acaban en logs y en pantallas de soporte.
      */
+    /**
+     * ¿La cédula se despegó del teléfono a mitad de la lectura?
+     *
+     * Se recorre la cadena de causas porque JMRTD envuelve la
+     * `TagLostException` de Android dentro de `CardServiceException` y esta
+     * dentro de `IOException`; mirar solo la excepción de arriba no la ve.
+     */
+    private fun isTagLost(e: Throwable): Boolean {
+        var current: Throwable? = e
+        while (current != null) {
+            if (current is android.nfc.TagLostException) return true
+            current = current.cause
+        }
+        return false
+    }
+
     private fun describeFailure(e: Throwable): String {
-        val type = e.javaClass.simpleName
-        val detail = e.message
-        return if (detail.isNullOrBlank()) type else "$type: $detail"
+        android.util.Log.e("PassportReader", "Native error", e)
+        var current: Throwable? = e
+        val sb = java.lang.StringBuilder()
+        while (current != null) {
+            sb.append(current.javaClass.simpleName)
+            if (!current.message.isNullOrBlank()) {
+                sb.append(": ").append(current.message)
+            }
+            current = current.cause
+            if (current != null) sb.append(" -> ")
+        }
+        return sb.toString()
     }
 }

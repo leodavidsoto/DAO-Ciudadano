@@ -7,7 +7,7 @@ import nfcService, {
     isVerifiedNFCReadResult,
     normalizeCAN,
     parseNativePassportReadResult,
-    PACE_CAN_LENGTH,
+    PACE_CAN_MAX_LENGTH,
 } from '../nfcService';
 
 const validNativePayload = () => ({
@@ -22,6 +22,13 @@ const validNativePayload = () => ({
         issuingState: ' chl ',
         sex: 'f',
         personalNumber: '',
+    },
+    // Raw chip files, base64 without wrapping. The parser only accepts a
+    // reading it could hand to the backend for its own passive authentication.
+    files: {
+        sod: 'RUYuU09E',
+        dg1: 'REcx',
+        dg2: 'REcy',
     },
     verification: {
         passed: true,
@@ -105,6 +112,17 @@ describe('PassportReader runtime boundary', () => {
         ['CSCA subject', (payload: NativePayload) => { payload.verification.countrySigningCertificateSubject = ''; }],
         ['empty failure list', (payload: NativePayload) => { payload.verification.failures = ['firma inválida']; }],
         ['required DG1 fields', (payload: NativePayload) => { payload.data.firstName = ''; }],
+        // Sin los archivos en crudo el servidor no puede repetir la
+        // Autenticación Pasiva, y un veredicto que solo calculó este teléfono
+        // no es evidencia que nadie más pueda comprobar.
+        ['raw EF.SOD', (payload: NativePayload) => { payload.files.sod = ''; }],
+        ['raw DG1', (payload: NativePayload) => { payload.files.dg1 = ''; }],
+        ['raw DG2', (payload: NativePayload) => { payload.files.dg2 = ''; }],
+        // Base64 con saltos de línea: el decodificador estricto del backend lo
+        // rechazaría, así que la lectura no vale como alta.
+        // Longitud múltiplo de 4 a propósito: así lo que falla es el patrón
+        // estricto y no el chequeo de longitud.
+        ['wrapped base64', (payload: NativePayload) => { payload.files.sod = 'RUYu\nU09EAAA'; }],
     ])('fails closed when %s evidence is invalid', (_label, mutate) => {
         const payload = validNativePayload();
         mutate(payload);
@@ -143,10 +161,9 @@ describe('PassportReader runtime boundary', () => {
     // and PassportReader.swift). A JS rule that disagrees makes every scan
     // unreachable, so the contract is pinned on both sides.
     it.each([
-        ['12345678', 'the old nine-character document number'],
-        ['12345', 'too few digits'],
-        ['1234567', 'too many digits'],
-        ['12345A', 'a letter'],
+        ['12345', 'too few characters'],
+        ['A1B2C', 'too few characters with letters'],
+        ['1234567890123456', 'more than fifteen characters'],
         ['', 'an empty value'],
     ])('rejects %s (%s) before invoking the native module', async (candidate) => {
         const startPACESession = jest.fn(async () => validNativePayload());
@@ -161,27 +178,31 @@ describe('PassportReader runtime boundary', () => {
         expect(startPACESession).not.toHaveBeenCalled();
     });
 
-    it('agrees with the native six-digit CAN contract', () => {
-        expect(PACE_CAN_LENGTH).toBe(6);
+    it('agrees with the native alphanumeric document-number contract', () => {
+        // El número impreso en la cédula chilena es alfanumérico y de largo
+        // variable (p. ej. A12345678), no seis dígitos.
+        expect(PACE_CAN_MAX_LENGTH).toBe(15);
+        expect(isValidCAN('A12345678')).toBe(true);
         expect(isValidCAN('123456')).toBe(true);
-        expect(normalizeCAN(' 12-34 56 ')).toBe('123456');
-        expect(normalizeCAN('A1B2C3D4E5')).toBe('12345');
-        expect(normalizeCAN('1234567890')).toHaveLength(PACE_CAN_LENGTH);
+        expect(normalizeCAN(' a12-345 678 ')).toBe('A12345678');
+        expect(normalizeCAN('1234567890123456789')).toHaveLength(PACE_CAN_MAX_LENGTH);
     });
 
     it('validates the native module shape and its resolved payload', async () => {
         (NativeModules as Record<string, unknown>).PassportReader = {
             startPACESession: 'not-a-function',
         };
-        await expect(nfcService.readChileanIDPACE('123456')).resolves.toEqual(
+        await expect(nfcService.readChileanIDPACE('A12345678')).resolves.toEqual(
             expect.objectContaining({ status: 'failed', errorCode: 'E_MODULE_UNAVAILABLE' }),
         );
 
         const startPACESession = jest.fn(async () => validNativePayload());
         (NativeModules as Record<string, unknown>).PassportReader = { startPACESession };
-        const result = await nfcService.readChileanIDPACE('123456');
+        const result = await nfcService.readChileanIDPACE('A12345678', '850101', '301231');
 
-        expect(startPACESession).toHaveBeenCalledWith('123456');
+        // Las tres partes viajan al nativo: sin fechas no se puede derivar la
+        // clave de respaldo cuando la cédula no publica CAN.
+        expect(startPACESession).toHaveBeenCalledWith('A12345678', '850101', '301231');
         expect(result.status).toBe('verified');
     });
 
@@ -232,6 +253,7 @@ describe('failure guidance', () => {
     it.each([
         ['E_INVALID_CAN', 'fix_can'],
         ['E_PACE_FAILED', 'fix_can'],
+        ['E_TAG_LOST', 'retry_positioning'],
         ['E_TIMEOUT', 'retry_positioning'],
         ['E_READ_FAILED', 'retry_positioning'],
         ['E_DOCUMENT_READ_FAILED', 'retry_positioning'],
@@ -252,11 +274,34 @@ describe('failure guidance', () => {
         expect(guidance.detail).not.toHaveLength(0);
     });
 
-    it('points a rejected secure channel at the CAN without asserting the cause', () => {
+    it('never blames the CAN when the card was pulled away mid-read', () => {
+        // Visto en un teléfono real: TagLostException leyendo EF.CardAccess,
+        // que se lee ANTES de PACE. La clave nunca llegó a probarse, así que
+        // mandar al ciudadano a revisar dígitos correctos es un diagnóstico
+        // falso.
+        const guidance = failed(
+            'E_TAG_LOST',
+            'IOException -> CardServiceException: Read binary failed on file 11c ' +
+                '-> TagLostException: Tag was lost',
+        );
+
+        expect(guidance.action).toBe('retry_positioning');
+        expect(guidance.action).not.toBe('fix_can');
+        expect(`${guidance.title} ${guidance.detail}`).not.toMatch(/revisa los dígitos/i);
+        expect(guidance.technicalDetail).toMatch(/TagLostException/);
+    });
+
+    it('points a rejected secure channel at the whole key, without asserting the cause', () => {
         const guidance = failed('E_PACE_FAILED', 'PACE rechazado por el chip');
 
         expect(guidance.action).toBe('fix_can');
-        expect(guidance.detail).toMatch(/más frecuente/i);
+        // La clave puede derivarse del documento solo o del documento más las
+        // dos fechas. Señalar únicamente el número dejaría al ciudadano
+        // corrigiendo un campo correcto cuando el error está en una fecha.
+        expect(guidance.detail).toMatch(/número de documento/i);
+        expect(guidance.detail).toMatch(/fechas/i);
+        // El chip no dice por qué rechazó: no se afirma una causa como hecho.
+        expect(guidance.detail).toMatch(/sin decir por qué/i);
         // The native text is preserved separately, never rewritten as a verdict.
         expect(guidance.technicalDetail).toBe('PACE rechazado por el chip');
     });

@@ -17,9 +17,52 @@ import nfcService, {
     isVerifiedNFCReadResult,
     normalizeCAN,
     NFCFailureGuidance,
-    PACE_CAN_LENGTH,
+    PACE_CAN_MAX_LENGTH,
 } from '../services/nfcService';
+import apiService from '../services/apiService';
+import { useOnboarding } from '../context/OnboardingContext';
 import { theme } from '../styles/theme';
+
+/**
+ * Turns a server rejection into guidance.
+ *
+ * 401 means the chip bytes did not survive the backend's own passive
+ * authentication; its `reasons` are the authoritative explanation, so they are
+ * shown rather than paraphrased. 503 is a deployment problem (no CSCA anchors
+ * installed) and must never be phrased as the citizen's fault.
+ */
+function describeServerFailure(error: any): NFCFailureGuidance {
+    const status = error?.response?.status;
+    const detail = error?.response?.data?.detail;
+
+    if (status === 401) {
+        const reasons = Array.isArray(detail?.reasons) ? detail.reasons.join(' ') : undefined;
+        return {
+            title: 'El servidor rechazó la cédula',
+            detail:
+                'La lectura no superó la verificación criptográfica en el servidor. ' +
+                'No se emitió ninguna credencial.',
+            action: 'app_defect',
+            technicalDetail: reasons || detail?.message,
+        };
+    }
+    if (status === 503) {
+        return {
+            title: 'La verificación no está disponible',
+            detail:
+                'Al servidor le faltan los certificados del Registro Civil o no puede ' +
+                'emitir credenciales. No es un problema de tu cédula.',
+            action: 'app_defect',
+            technicalDetail: typeof detail === 'string' ? detail : undefined,
+        };
+    }
+    return {
+        title: 'No se pudo contactar al servidor',
+        detail: 'Revisa tu conexión y vuelve a intentarlo. La cédula se leyó correctamente.',
+        action: 'retry_positioning',
+        technicalDetail: typeof detail === 'string' ? detail : error?.message,
+    };
+}
 
 interface ScanScreenProps {
     navigation: any;
@@ -27,9 +70,13 @@ interface ScanScreenProps {
 
 const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
     const [isScanning, setIsScanning] = useState(false);
+    const [isVerifyingWithServer, setIsVerifyingWithServer] = useState(false);
     const [nfcEnabled, setNfcEnabled] = useState(false);
     const [failure, setFailure] = useState<NFCFailureGuidance | null>(null);
     const [can, setCan] = useState('');
+    const [dob, setDob] = useState('');
+    const [doe, setDoe] = useState('');
+    const { setVerifiedIdentity } = useOnboarding();
     const pulseAnim = React.useRef(new Animated.Value(1)).current;
     const scanAttempt = React.useRef(0);
 
@@ -89,7 +136,7 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
         if (!isValidCAN(normalizedCan)) {
             setFailure({
                 title: 'Falta el CAN completo',
-                detail: `Escribe los ${PACE_CAN_LENGTH} dígitos del Card Access Number impresos en tu cédula. No es el RUT ni el número de documento.`,
+                detail: `Escribe el Número de Documento (o Serial) impresos en tu cédula (generalmente 9 caracteres). No es el RUT.`,
                 action: 'fix_can',
             });
             return;
@@ -104,13 +151,39 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
         setFailure(null);
         const attempt = ++scanAttempt.current;
         try {
-            const result = await nfcService.readChileanIDPACE(normalizedCan);
+            const result = await nfcService.readChileanIDPACE(normalizedCan, dob, doe);
             if (attempt !== scanAttempt.current) return;
 
-            if (isVerifiedNFCReadResult(result)) {
-                navigation.navigate('Success', { result });
-            } else {
+            if (!isVerifiedNFCReadResult(result)) {
                 setFailure(describeReadFailure(result));
+                return;
+            }
+
+            // The local verdict is not enough to enrol: the server re-runs
+            // passive authentication over the same bytes against its own trust
+            // store, and only it can issue a grant.
+            setIsVerifyingWithServer(true);
+            try {
+                const verified = await apiService.verifyCedula(result.files);
+                if (attempt !== scanAttempt.current) return;
+
+                setVerifiedIdentity(
+                    {
+                        identityGrant: verified.identity_grant,
+                        membershipGrant: verified.membership_grant,
+                        assuranceLevel: verified.assurance_level,
+                        membershipGrantExpiresAt:
+                            Date.now() + verified.membership_grant_expires_in * 1000,
+                    },
+                    result.data,
+                );
+                navigation.navigate('Success', { result, grantIssued: true });
+            } catch (serverError: any) {
+                if (attempt === scanAttempt.current) {
+                    setFailure(describeServerFailure(serverError));
+                }
+            } finally {
+                if (attempt === scanAttempt.current) setIsVerifyingWithServer(false);
             }
         } catch (err: any) {
             // A throw here is a bug in the bridge, not a chip response: the
@@ -157,25 +230,50 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
             <View style={styles.scannerContainer}>
                 {!isScanning && (
                     <View style={styles.inputContainer}>
-                        <Text style={styles.inputLabel}>Card Access Number (CAN)</Text>
+                        <Text style={styles.inputLabel}>Número de Documento (Serie / CAN)</Text>
                         <TextInput
                             style={[
                                 styles.input,
                                 canNeedsCorrection && styles.inputInvalid,
                             ]}
-                            placeholder="000000"
+                            placeholder="A12345678"
                             placeholderTextColor={theme.colors.textSoft}
                             value={can}
                             onChangeText={handleCanChange}
-                            keyboardType="number-pad"
-                            maxLength={PACE_CAN_LENGTH}
+                            autoCapitalize="characters"
+                            keyboardType="default"
+                            maxLength={PACE_CAN_MAX_LENGTH}
                             editable={!isScanning}
                             accessibilityLabel="Card Access Number de la cédula"
                         />
                         <Text style={styles.inputHint}>
-                            Son los {PACE_CAN_LENGTH} dígitos del CAN impresos en tu cédula.
-                            No es el RUT ni el número de documento.
+                            Es el "Número de Documento" impreso en tu cédula (ej. A12345678).
+                            No uses tu RUT.
                         </Text>
+                        
+                        <Text style={[styles.inputLabel, { marginTop: 15 }]}>Fecha Nacimiento (AAMMDD)</Text>
+                        <TextInput
+                            style={[styles.input, { padding: 10, fontSize: 18 }]}
+                            placeholder="ej. 850101"
+                            placeholderTextColor={theme.colors.textSoft}
+                            value={dob}
+                            onChangeText={setDob}
+                            keyboardType="numeric"
+                            maxLength={6}
+                            editable={!isScanning}
+                        />
+
+                        <Text style={[styles.inputLabel, { marginTop: 15 }]}>Fecha Vencimiento (AAMMDD)</Text>
+                        <TextInput
+                            style={[styles.input, { padding: 10, fontSize: 18 }]}
+                            placeholder="ej. 301231"
+                            placeholderTextColor={theme.colors.textSoft}
+                            value={doe}
+                            onChangeText={setDoe}
+                            keyboardType="numeric"
+                            maxLength={6}
+                            editable={!isScanning}
+                        />
                     </View>
                 )}
 
@@ -193,7 +291,11 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                     <View style={styles.innerCircle}>
                         <Text style={styles.nfcIcon}>📡</Text>
                         <Text style={styles.scanText}>
-                            {isScanning ? 'Escaneando PACE...' : 'Listo'}
+                            {isVerifyingWithServer
+                                ? 'Verificando en el servidor...'
+                                : isScanning
+                                    ? 'Escaneando PACE...'
+                                    : 'Listo'}
                         </Text>
                     </View>
                 </Animated.View>

@@ -1,25 +1,32 @@
 /** Display only identity data that crossed the verified NFC boundary. */
 
-import React from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
     View,
     Text,
     StyleSheet,
     TouchableOpacity,
     ScrollView,
+    Animated,
+    Easing,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
     isVerifiedNFCReadResult,
     type VerifiedNFCReadResult,
 } from '../services/nfcService';
+import { useOnboarding } from '../context/OnboardingContext';
 import { theme } from '../styles/theme';
+
+/** How long the check stays on screen before the flow advances itself. */
+export const AUTO_ADVANCE_DELAY_MS = 2200;
 
 interface SuccessScreenProps {
     navigation: any;
     route?: {
         params?: {
             result?: VerifiedNFCReadResult;
+            grantIssued?: boolean;
         };
     };
 }
@@ -32,31 +39,76 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
     const idData = identityVerified ? candidate.data : null;
     const verification = identityVerified ? candidate.verification : null;
 
-    const handleContinue = () => {
+    const { hasUsableGrant } = useOnboarding();
+    // The route flag alone never authorizes advancing: the grant has to still
+    // be in context and unexpired, or the mint screen would open on nothing.
+    const readyToMint = identityVerified && route?.params?.grantIssued === true && hasUsableGrant();
+
+    const checkScale = useRef(new Animated.Value(0)).current;
+    const advanced = useRef(false);
+
+    const handleContinue = useCallback(() => {
+        if (advanced.current) return;
+        advanced.current = true;
         if (!identityVerified) {
             navigation.navigate('Scan');
             return;
         }
         navigation.navigate('Wallet');
-    };
+    }, [identityVerified, navigation]);
+
+    // Success check: springs in once, then stays put.
+    useEffect(() => {
+        if (!identityVerified) return;
+        Animated.timing(checkScale, {
+            toValue: 1,
+            duration: 420,
+            easing: Easing.out(Easing.back(2)),
+            useNativeDriver: true,
+        }).start();
+    }, [identityVerified, checkScale]);
+
+    // Auto-advance only when the backend actually issued a grant. A local-only
+    // verification stops here: it is not an enrolment.
+    useEffect(() => {
+        if (!readyToMint) return;
+        const timer = setTimeout(handleContinue, AUTO_ADVANCE_DELAY_MS);
+        return () => clearTimeout(timer);
+    }, [readyToMint, handleContinue]);
 
     return (
         <SafeAreaView style={styles.container}>
             <ScrollView contentContainerStyle={styles.content}>
-                <View style={identityVerified ? styles.successIcon : styles.warningIcon}>
+                <Animated.View
+                    style={[
+                        identityVerified ? styles.successIcon : styles.warningIcon,
+                        identityVerified && { transform: [{ scale: checkScale }] },
+                    ]}
+                >
                     <Text style={identityVerified ? styles.checkmark : styles.warningMark}>
                         {identityVerified ? '✓' : '!'}
                     </Text>
-                </View>
+                </Animated.View>
 
                 <Text style={identityVerified ? styles.title : styles.titleWarning}>
                     {identityVerified ? 'DOCUMENTO VERIFICADO' : 'LECTURA NO VERIFICADA'}
                 </Text>
                 <Text style={styles.subtitle}>
-                    {identityVerified
-                        ? 'La app comprobó localmente los datos firmados de la cédula y su cadena CSCA chilena instalada.'
-                        : 'La evidencia de autenticación pasiva está ausente o incompleta. No se mostrarán datos del documento.'}
+                    {!identityVerified
+                        ? 'La evidencia de autenticación pasiva está ausente o incompleta. No se mostrarán datos del documento.'
+                        : readyToMint
+                            ? 'El servidor repitió la autenticación pasiva y emitió tu credencial de un solo uso.'
+                            : 'La app comprobó localmente los datos firmados de la cédula y su cadena CSCA chilena instalada.'}
                 </Text>
+
+                {/* Derivado de `readyToMint`, no de un estado propio: un flag
+                    duplicado podría anunciar un avance que el temporizador ya
+                    no va a hacer, o callarse cuando sí lo va a hacer. */}
+                {readyToMint && (
+                    <Text style={styles.autoAdvanceText}>
+                        Continuando al minteo…
+                    </Text>
+                )}
 
                 {idData && verification && (
                     <View style={styles.dataCard}>
@@ -205,6 +257,14 @@ const styles = StyleSheet.create({
         marginTop: 8,
         marginBottom: 30,
         textAlign: 'center',
+    },
+    autoAdvanceText: {
+        ...theme.typography.caption,
+        color: theme.colors.primary,
+        marginTop: -18,
+        marginBottom: 24,
+        textAlign: 'center',
+        fontWeight: '600',
     },
     dataCard: {
         width: '100%',

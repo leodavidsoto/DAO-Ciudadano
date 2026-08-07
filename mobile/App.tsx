@@ -15,6 +15,7 @@ import HomeScreen from './src/screens/HomeScreen';
 import ScanScreen from './src/screens/ScanScreen';
 import SuccessScreen from './src/screens/SuccessScreen';
 import WalletScreen from './src/screens/WalletScreen';
+import { OnboardingProvider } from './src/context/OnboardingContext';
 import {
   isVerifiedNFCReadResult,
   type VerifiedNFCReadResult,
@@ -25,6 +26,12 @@ type RootStackParamList = {
   Scan: undefined;
   Success: {
     result: VerifiedNFCReadResult;
+    /**
+     * Whether the backend verified the same bytes and issued grants. A local
+     * reading is not an enrolment, so only this flag lets Success advance to
+     * minting — and it is still re-checked against the live grant in context.
+     */
+    grantIssued?: boolean;
   };
   Wallet: undefined;
 };
@@ -116,6 +123,10 @@ function App(): React.JSX.Element {
     <CrashScreenBoundary>
       <SafeAreaProvider>
       <StatusBar barStyle="light-content" backgroundColor={theme.colors.primary} />
+      {/* Los grants del alta viven aquí, en memoria y por encima del
+          navegador: Scan los obtiene y Success/Wallet los gastan, y siguen
+          disponibles al cambiar de pantalla sin tocar disco. */}
+      <OnboardingProvider>
       <NavigationContainer
         theme={{
           ...DefaultTheme,
@@ -161,6 +172,7 @@ function App(): React.JSX.Element {
           />
         </Stack.Navigator>
       </NavigationContainer>
+      </OnboardingProvider>
       </SafeAreaProvider>
     </CrashScreenBoundary>
   );

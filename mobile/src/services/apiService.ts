@@ -7,6 +7,19 @@
 
 import axios, { AxiosInstance } from 'axios';
 import { API_BASE_URL } from '../config';
+import type { RawDocumentFiles } from './nfcService';
+
+/** Mirrors CedulaVerificationResponse in backend/app/routers/cedula.py. */
+export interface CedulaVerificationResponse {
+    ok: boolean;
+    identity_grant: string;
+    identity_grant_expires_in: number;
+    /** The JWT that POST /membership/mint requires and burns. */
+    membership_grant: string;
+    membership_grant_expires_in: number;
+    assurance_level: string;
+    verification: Record<string, unknown>;
+}
 
 class ApiService {
     private client: AxiosInstance;
@@ -80,20 +93,43 @@ class ApiService {
         return response.data;
     }
 
+    /**
+     * POST /auth/cedula/verify — the real civil path (backend routers/cedula.py).
+     *
+     * Sends the raw chip files, not this device's verdict: the server repeats
+     * passive authentication against its own CSCA trust store and only then
+     * issues grants. No wallet session is required yet — the grants are
+     * redeemed later, once SIWE binds them to an address.
+     */
+    async verifyCedula(files: RawDocumentFiles) {
+        const response = await this.client.post('/auth/cedula/verify', {
+            sod: files.sod,
+            data_groups: { '1': files.dg1, '2': files.dg2 },
+        });
+        return response.data as CedulaVerificationResponse;
+    }
+
     // Membership endpoints
 
-    /** POST /membership/mint — off-chain demo registration, tx_hash is null */
-    async mintSBT(data: {
-        walletAddress: string;
-        docHash: string;
-        assuranceLevel: string;
-    }) {
+    /**
+     * POST /membership/mint — needs the SIWE session AND a membership grant.
+     *
+     * `doc_hash` and `assurance_level` are gone on purpose (AUDIT P-4): both
+     * were client self-assertions. They now come from inside the grant, which
+     * the server signed at the end of a real civil flow.
+     */
+    async mintSBT(data: { walletAddress: string; membershipGrant: string }) {
         const response = await this.client.post('/membership/mint', {
             wallet_address: data.walletAddress,
-            doc_hash: data.docHash,
-            assurance_level: data.assuranceLevel,
+            membership_grant: data.membershipGrant,
         });
-        return response.data;
+        return response.data as {
+            ok: boolean;
+            token_id?: number | null;
+            tx_hash?: string | null;
+            assurance_level?: string | null;
+            error?: string | null;
+        };
     }
 
     /** GET /membership/member/{address} — { found, member? } */

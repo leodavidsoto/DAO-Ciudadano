@@ -30,19 +30,23 @@ final class PassportReaderBridge: NSObject {
   private var scanInFlight = false
   private var activeReader: NFCPassportReader.PassportReader?
 
-  @objc(startPACESession:withResolver:withRejecter:)
+  @objc(startPACESession:dob:doe:withResolver:withRejecter:)
   func startPACESession(
-    can: String,
+    _ can: String,
+    dob: String,
+    doe: String,
     resolve: @escaping RCTPromiseResolveBlock,
     reject: @escaping RCTPromiseRejectBlock
   ) {
-    let normalizedCan = can.trimmingCharacters(in: .whitespacesAndNewlines)
-    let canIsSixAsciiDigits = normalizedCan.utf8.count == 6
-      && normalizedCan.utf8.allSatisfy({ byte in byte >= 48 && byte <= 57 })
-    guard canIsSixAsciiDigits else {
+    let normalizedCan = can.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    let canLength = normalizedCan.utf8.count
+    let isAlphanumeric = normalizedCan.utf8.allSatisfy { byte in
+      (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+    }
+    guard canLength >= 6 && canLength <= 15 && isAlphanumeric else {
       reject(
         "E_INVALID_CAN",
-        "El CAN debe contener exactamente los 6 dígitos impresos en la cédula.",
+        "El CAN o Número de Documento debe tener entre 6 y 15 caracteres alfanuméricos.",
         nil
       )
       return
@@ -225,9 +229,23 @@ final class PassportReaderBridge: NSObject {
           "failures": failures,
         ]
 
+        // Archivos EN CRUDO para que el backend repita la Autenticación Pasiva
+        // por su cuenta: no acepta veredictos del cliente. Se usa `.data` y no
+        // `.body` porque el hash del SOD cubre el data group completo, con su
+        // cabecera. Solo viajan si la verificación local pasó.
+        var files: [String: String] = [:]
+        if passed {
+          for (key, tag) in [("sod", DataGroupId.SOD), ("dg1", .DG1), ("dg2", .DG2)] {
+            if let raw = passport.dataGroupsRead[tag]?.data {
+              files[key] = Data(raw).base64EncodedString()
+            }
+          }
+        }
+
         resolve([
           "identityVerified": passed,
           "data": data,
+          "files": files,
           "verification": verification,
         ])
       } catch {
