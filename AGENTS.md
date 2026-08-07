@@ -21,23 +21,32 @@ minteo de producción. Léelo en `HANDOFF.md` antes de asumir capacidades.
 
 ## Los cuatro hechos que definen el estado actual
 
-1. **`totalSupply()` del contrato histórico en Sepolia = 0.** Esa dirección usa
-   otra ABI y no debe configurarse; aún no hay despliegue compatible.
+1. **Ya hay un despliegue compatible en Sepolia**, en
+   `0x6C6C7D0ceC1b7267cB2fa146519FBF9ef6319d56`: responde a la ABI actual y el
+   backend le lee `membershipScope()` y aprueba raíces. Su `totalSupply()` es 0
+   porque nadie ha minteado todavía, no porque esté roto. El contrato
+   *histórico* `0x813fd379…` usa otra ABI y **no debe configurarse**.
 2. **Minteo y acciones mutantes de gobernanza exigen SIWE y actuar como la propia wallet.** En
-   producción solo se confía en membresías on-chain verificadas; el verificador
-   on-chain aún no está implementado y por eso falla cerrado.
-3. **La identidad civil real sigue pendiente.** ClaveÚnica, NFC, liveness y
-   RUT/email son demos explícitas y devuelven 503 con `APP_ENV=production`.
+   producción solo se confía en membresías on-chain verificadas
+   (`MEMBERSHIP_SOURCE=onchain`, ya operativo).
+3. **La identidad civil real ya funciona por cédula NFC**, verificada contra una
+   cédula chilena física y anclas CSCA reales del Registro Civil: el servidor
+   repite la Autenticación Pasiva y emite los grants. ClaveÚnica sigue sin
+   configurar, y liveness y RUT/email siguen siendo demos que devuelven 503 con
+   `APP_ENV=production`.
 4. **Hay una llave de proveedor expuesta en el historial Git público.** No copies
    su valor: debe revocarse/rotarse y auditarse según `docs/SECURITY_RUNBOOK.md`.
 
-Verifícalo tú mismo:
+Verifícalo tú mismo — el contrato compatible tiene bytecode, el histórico
+responde con otra ABI:
 
 ```bash
 curl -s -X POST https://ethereum-sepolia-rpc.publicnode.com \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0x813fd379F715107b2451553d97f29408d8185f0e","data":"0x18160ddd"},"latest"],"id":1}'
+  -d '{"jsonrpc":"2.0","method":"eth_getCode","params":["0x6C6C7D0ceC1b7267cB2fa146519FBF9ef6319d56","latest"],"id":1}'
 ```
+
+Qué falta para producción y cómo comprobarlo: [`docs/PRODUCCION_SEPOLIA.md`](./docs/PRODUCCION_SEPOLIA.md)
 
 ---
 
