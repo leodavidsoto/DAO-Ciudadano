@@ -8,10 +8,26 @@
  */
 
 import { NativeModules } from 'react-native';
-import NfcManager, { NfcTech } from 'react-native-nfc-manager';
-import { deriveBACKeys as deriveBACKeysICAO, MRZKeyData } from './bacCrypto';
+import NfcManager from 'react-native-nfc-manager';
 
 type UnknownRecord = Record<string, unknown>;
+
+/**
+ * The Card Access Number is the six printed digits that key PACE. It is not
+ * the document number and not the tag serial: both native readers reject
+ * anything that is not exactly six ASCII digits, so this layer must agree.
+ */
+export const PACE_CAN_LENGTH = 6;
+const CAN_PATTERN = /^[0-9]{6}$/;
+
+/** Normalizes user input before it reaches the CAN validator. */
+export function normalizeCAN(value: string): string {
+    return value.replace(/[^0-9]/g, '').slice(0, PACE_CAN_LENGTH);
+}
+
+export function isValidCAN(value: string): boolean {
+    return CAN_PATTERN.test(value);
+}
 
 interface NativePassportReaderModule {
     startPACESession(can: string): Promise<unknown>;
@@ -392,6 +408,146 @@ export function isVerifiedNFCReadResult(value: unknown): value is VerifiedNFCRea
     return requiredEvidenceFailures(true, data, verification).length === 0;
 }
 
+/** What the citizen can actually do about a failure. */
+export type NFCFailureAction = 'fix_can' | 'enable_nfc' | 'retry_positioning' | 'unsupported' | 'app_defect';
+
+export interface NFCFailureGuidance {
+    title: string;
+    detail: string;
+    action: NFCFailureAction;
+    /** Raw native text, kept separate so guidance never invents a cause. */
+    technicalDetail?: string;
+}
+
+/**
+ * Maps the native error surface to guidance.
+ *
+ * Codes come from `PassportReaderModule.kt` (Android) and
+ * `PassportReader.swift` (iOS). A chip that refuses PACE cannot tell us *why*,
+ * so a wrong CAN is offered as the likely cause, never asserted as fact.
+ */
+export function describeReadFailure(
+    result: FailedNFCReadResult | UnverifiedNFCReadResult,
+): NFCFailureGuidance {
+    const technicalDetail = result.error?.trim() || undefined;
+    const code = result.status === 'failed' ? result.errorCode : undefined;
+
+    switch (code) {
+        case 'E_INVALID_CAN':
+            return {
+                title: 'Ese CAN no tiene el formato correcto',
+                detail: `El CAN son exactamente ${PACE_CAN_LENGTH} dígitos impresos en tu cédula. No es el RUT ni el número de documento.`,
+                action: 'fix_can',
+            };
+        case 'E_PACE_FAILED':
+            return {
+                title: 'No se pudo abrir el canal seguro',
+                detail:
+                    'La causa más frecuente es un CAN equivocado: el chip rechaza la clave sin decir por qué. ' +
+                    'Revisa los dígitos y vuelve a intentarlo sin mover la cédula.',
+                action: 'fix_can',
+                technicalDetail,
+            };
+        case 'E_TIMEOUT':
+            return {
+                title: 'No se detectó ninguna cédula',
+                detail:
+                    'Apoya la cédula contra la parte trasera del teléfono y mantenla quieta. ' +
+                    'Las fundas gruesas y las carcasas metálicas bloquean la lectura.',
+                action: 'retry_positioning',
+                technicalDetail,
+            };
+        case 'E_READ_FAILED':
+        case 'E_DOCUMENT_READ_FAILED':
+            return {
+                title: 'La lectura se interrumpió',
+                detail:
+                    'El canal seguro se abrió, pero la cédula se movió antes de terminar. ' +
+                    'Mantenla apoyada sin moverla hasta que el proceso finalice.',
+                action: 'retry_positioning',
+                technicalDetail,
+            };
+        case 'E_NFC_DISABLED':
+            return {
+                title: 'El NFC está apagado',
+                detail: 'Actívalo en los ajustes del sistema para poder leer el chip de la cédula.',
+                action: 'enable_nfc',
+                technicalDetail,
+            };
+        case 'E_NFC_UNAVAILABLE':
+            return {
+                title: 'Este dispositivo no puede leer la cédula',
+                detail: 'No tiene NFC compatible con documentos de identidad electrónicos.',
+                action: 'unsupported',
+                technicalDetail,
+            };
+        case 'E_TAG_NOT_SUPPORTED':
+            return {
+                title: 'Ese chip no es una cédula legible',
+                detail:
+                    'El chip detectado no responde a ISO-DEP. Retira otras tarjetas con NFC ' +
+                    '(bancarias, de transporte) y acerca solo la cédula.',
+                action: 'retry_positioning',
+                technicalDetail,
+            };
+        case 'E_PACE_UNSUPPORTED':
+            return {
+                title: 'La cédula no publica parámetros PACE',
+                detail:
+                    'Este documento no admite el canal seguro que exigimos. No se acepta el ' +
+                    'respaldo BAC, así que no podemos verificarlo.',
+                action: 'unsupported',
+                technicalDetail,
+            };
+        case 'E_SCAN_IN_PROGRESS':
+            return {
+                title: 'Ya hay una lectura en curso',
+                detail: 'Espera a que termine o cancélala antes de iniciar otra.',
+                action: 'retry_positioning',
+                technicalDetail,
+            };
+        case 'E_NO_ACTIVITY':
+        case 'E_NFC_READER_MODE':
+            return {
+                title: 'No se pudo activar el lector',
+                detail: 'Mantén la app abierta y en primer plano durante toda la lectura.',
+                action: 'retry_positioning',
+                technicalDetail,
+            };
+        case 'E_CSCA_MASTER_LIST_MISSING':
+        case 'E_MODULE_UNAVAILABLE':
+        case 'E_INVALID_NATIVE_RESPONSE':
+            return {
+                title: 'Esta versión de la app no puede verificar cédulas',
+                detail:
+                    'Falta la cadena de confianza o el módulo de lectura en este build. ' +
+                    'No es un problema de tu cédula: repórtalo al equipo.',
+                action: 'app_defect',
+                technicalDetail,
+            };
+        default:
+            break;
+    }
+
+    if (result.status === 'read_unverified') {
+        return {
+            title: 'La cédula se leyó, pero no se verificó',
+            detail:
+                'El chip respondió, pero la evidencia criptográfica no aprobó. ' +
+                'No se emite ninguna credencial con una lectura sin verificar.',
+            action: 'app_defect',
+            technicalDetail,
+        };
+    }
+
+    return {
+        title: 'No se pudo leer la cédula',
+        detail: 'Vuelve a intentarlo apoyando la cédula contra la parte trasera del teléfono.',
+        action: 'retry_positioning',
+        technicalDetail,
+    };
+}
+
 function getPassportReader(): NativePassportReaderModule | null {
     const candidate: unknown = NativeModules.PassportReader;
     if (!isRecord(candidate) || typeof candidate.startPACESession !== 'function') return null;
@@ -410,21 +566,17 @@ function describeNativeError(error: unknown): { error: string; errorCode?: strin
     };
 }
 
-function deriveBACKeys(mrz: MRZKeyData): { encKey: Buffer; macKey: Buffer } {
-    const { kenc, kmac } = deriveBACKeysICAO(mrz);
-    return { encKey: kenc, macKey: kmac };
-}
-
 class NFCService {
-    private isInitialized = false;
-
+    /**
+     * Only powers the NFC availability indicator. The reader session itself
+     * is opened by the native module, not by NfcManager.
+     */
     async initialize(): Promise<boolean> {
         try {
             const supported = await NfcManager.isSupported();
             if (!supported) throw new Error('NFC not supported on this device');
 
             await NfcManager.start();
-            this.isInitialized = true;
             return true;
         } catch (error) {
             console.error('NFC initialization error:', error);
@@ -445,55 +597,21 @@ class NFCService {
     }
 
     /**
-     * Legacy BAC entry point. Key derivation exists, but the authenticated
-     * APDU exchange does not; it must remain fail-closed.
+     * Reads and verifies a Chilean identity document through native PACE.
+     *
+     * The ISO-DEP/APDU exchange, the PACE-CAN handshake and passive
+     * authentication all live in the native readers (JMRTD on Android,
+     * NFCPassportReader on iOS): they own the CSCA trust store, and a
+     * JavaScript reimplementation could not validate the EF.SOD chain.
      */
-    async readChileanID(mrzData?: MRZKeyData): Promise<NFCReadResult> {
-        try {
-            if (!this.isInitialized) await this.initialize();
-
-            await NfcManager.requestTechnology(NfcTech.IsoDep);
-            await NfcManager.getTag();
-
-            if (!mrzData) {
-                return {
-                    status: 'read_unverified',
-                    readCompleted: true,
-                    identityVerified: false,
-                    error:
-                        'Faltan los datos MRZ. Sin ellos no se pueden derivar las llaves BAC.',
-                };
-            }
-
-            deriveBACKeys(mrzData);
-            return {
-                status: 'read_unverified',
-                readCompleted: true,
-                identityVerified: false,
-                error:
-                    'La lectura BAC autenticada todavía no está implementada. No se verificó identidad.',
-            };
-        } catch (error) {
-            return {
-                status: 'failed',
-                readCompleted: false,
-                identityVerified: false,
-                error: describeNativeError(error).error,
-            };
-        } finally {
-            await this.cleanup();
-        }
-    }
-
-    /** Reads and verifies a Chilean identity document through native PACE. */
     async readChileanIDPACE(can: string): Promise<NFCReadResult> {
-        if (!/^[A-Z0-9]{9}$/i.test(can.trim())) {
+        if (!isValidCAN(can.trim())) {
             return {
                 status: 'failed',
                 readCompleted: false,
                 identityVerified: false,
                 errorCode: 'E_INVALID_CAN',
-                error: 'El CAN debe contener exactamente 9 caracteres.',
+                error: `El CAN debe contener exactamente ${PACE_CAN_LENGTH} dígitos.`,
             };
         }
 
@@ -509,7 +627,7 @@ class NFCService {
         }
 
         try {
-            const nativeResult = await passportReader.startPACESession(can);
+            const nativeResult = await passportReader.startPACESession(can.trim());
             return parseNativePassportReadResult(nativeResult);
         } catch (error) {
             return {
@@ -521,43 +639,6 @@ class NFCService {
         }
     }
 
-    /**
-     * Diagnostic NDEF read. Detecting an arbitrary tag is a successful read,
-     * never identity evidence; no tag serial is promoted to identity data.
-     */
-    async readSimpleTag(): Promise<NFCReadResult> {
-        try {
-            if (!this.isInitialized) await this.initialize();
-
-            await NfcManager.requestTechnology(NfcTech.Ndef);
-            await NfcManager.getTag();
-            return {
-                status: 'read_unverified',
-                readCompleted: true,
-                identityVerified: false,
-                error:
-                    'Se detectó un tag NFC de diagnóstico, pero no aporta evidencia de identidad.',
-            };
-        } catch (error) {
-            return {
-                status: 'failed',
-                readCompleted: false,
-                identityVerified: false,
-                error: describeNativeError(error).error,
-            };
-        } finally {
-            await this.cleanup();
-        }
-    }
-
-    async cleanup(): Promise<void> {
-        try {
-            await NfcManager.cancelTechnologyRequest();
-        } catch {
-            // Cleanup failures do not change the verification result.
-        }
-    }
-
     async stopReading(): Promise<void> {
         try {
             getPassportReader()?.cancelPACESession?.();
@@ -565,7 +646,6 @@ class NFCService {
             // The native read promise will still be ignored by ScanScreen's
             // attempt token; cancellation is best-effort at this boundary.
         }
-        await this.cleanup();
     }
 }
 

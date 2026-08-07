@@ -12,8 +12,11 @@ existir al migrar al modelo ZK: el resultado era siempre un fallo genérico
 ("no se pudo confirmar el minteo on-chain") que parecía un problema de red.
 Falla con su motivo real en vez de aparentar un camino que no existe.
 
-Producción sigue bloqueada aquí: SIWE prueba control de una wallet, no que la
-persona completó una verificación civil.
+Producción sigue bloqueada aquí, pero el motivo ya NO es la identidad: desde
+ROADMAP 1.10 el alta consume un `membership_grant` firmado por el servidor, así
+que la persona sí está verificada. Lo que falta es el efecto on-chain — este
+endpoint solo escribe en Mongo, y una membresía que no existe en el contrato no
+es una membresía de la DAO. El camino real es `/membership/mint-zk`.
 """
 
 from typing import Optional, Tuple
@@ -38,26 +41,23 @@ class BlockchainService:
     """Service for blockchain and Web3 operations"""
 
     @staticmethod
-    async def mint_sbt(
-        wallet_address: str, assurance_level: str, doc_hash: str
-    ) -> Tuple[bool, Optional[int], Optional[str], Optional[str]]:
-        """
-        Register a membership using the explicitly selected MINT_MODE.
-        Returns: (success, token_id, tx_hash, error)
-        """
-        if not verify_eth_address(wallet_address):
-            return (False, None, None, "Dirección de wallet inválida")
+    def ensure_minting_available() -> None:
+        """¿Puede este despliegue dar altas por esta vía? Si no, dice por qué.
 
-        if not doc_hash:
-            return (False, None, None, "Document hash requerido")
-
-        # Production remains fail-closed until membership minting consumes a
-        # server-issued, one-time identity verification grant. SIWE proves
-        # control of a wallet, not that the citizen completed identity checks.
+        Separado de `mint_sbt` para que el router pueda preguntarlo ANTES de
+        quemar el grant de identidad: gastar una verificación civil por una
+        variable de entorno mal puesta obligaría a la persona a repetir todo
+        el flujo por un problema que no es suyo.
+        """
+        # Producción sigue cerrada, pero ya no por la identidad —el alta
+        # consume un grant firmado por el servidor (ROADMAP 1.10)—, sino
+        # porque esta vía no llega al contrato. Una membresía solo en Mongo
+        # no la reconoce la cadena.
         if settings.is_production:
             raise MintingUnavailable(
-                "El minteo está bloqueado en producción hasta enlazar una "
-                "verificación de identidad de un solo uso con esta wallet."
+                "Esta vía de alta solo registra la membresía en la base de "
+                "datos y no la emite on-chain, así que está bloqueada en "
+                "producción. Usa POST /api/membership/mint-zk."
             )
 
         if settings.MINT_MODE == "disabled":
@@ -71,6 +71,29 @@ class BlockchainService:
                 "solo emite contra una prueba Groth16. Usa "
                 "POST /api/membership/mint-zk."
             )
+
+    @staticmethod
+    async def mint_sbt(
+        wallet_address: str, assurance_level: str, doc_hash: str
+    ) -> Tuple[bool, Optional[int], Optional[str], Optional[str]]:
+        """
+        Register a membership using the explicitly selected MINT_MODE.
+
+        `assurance_level` y `doc_hash` vienen del `membership_grant` que el
+        servidor firmó, NUNCA del cuerpo de la petición (AUDIT P-4). El router
+        es quien lo garantiza.
+
+        Returns: (success, token_id, tx_hash, error)
+        """
+        if not verify_eth_address(wallet_address):
+            return (False, None, None, "Dirección de wallet inválida")
+
+        if not doc_hash:
+            return (False, None, None, "Document hash requerido")
+
+        # Se repite la comprobación del router: este método es público y un
+        # llamador nuevo no debe poder saltarse el cierre por entorno.
+        BlockchainService.ensure_minting_available()
 
         try:
             address = wallet_address.lower()
@@ -97,6 +120,12 @@ class BlockchainService:
                     )
 
             # Insert "pending" record BEFORE interacting with the blockchain (P-23)
+            # `identity_verified` sigue en False aunque el grant sea real, y no
+            # es un descuido: fuera de producción el proveedor civil puede ser
+            # un simulador, y esta bandera es lo que decide si una fila
+            # sobrevive a que la misma base se promueva a producción. Solo la
+            # vía ZK puede ponerla en True, porque allí la garantía la impone
+            # el contrato y no una variable de entorno.
             member = Member(
                 wallet_address=address,
                 token_id=None,

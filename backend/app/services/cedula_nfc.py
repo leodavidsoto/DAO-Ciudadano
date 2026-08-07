@@ -56,6 +56,12 @@ logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "cedula-nfc"
 
+#: Nivel que acredita esta vía, y nada más. El nombre dice exactamente qué se
+#: comprobó —Autenticación Pasiva del eMRTD— para no dejar que el grant afirme
+#: presencia del chip ni del titular: sin Autenticación Activa, un replay del
+#: SOD llega hasta aquí (ver el riesgo declarado arriba).
+ASSURANCE_LEVEL = "CEDULA_NFC_PASSIVE"
+
 # Dominio propio para el índice ciego: el mismo RUN nunca debe producir la
 # misma clave aquí y en `lookup_key(rut)` del registro por formulario.
 SUBJECT_DOMAIN = "cl-cedula-nfc-run"

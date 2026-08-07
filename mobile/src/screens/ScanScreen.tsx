@@ -11,7 +11,14 @@ import {
     TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import nfcService, { isVerifiedNFCReadResult } from '../services/nfcService';
+import nfcService, {
+    describeReadFailure,
+    isValidCAN,
+    isVerifiedNFCReadResult,
+    normalizeCAN,
+    NFCFailureGuidance,
+    PACE_CAN_LENGTH,
+} from '../services/nfcService';
 import { theme } from '../styles/theme';
 
 interface ScanScreenProps {
@@ -21,7 +28,7 @@ interface ScanScreenProps {
 const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
     const [isScanning, setIsScanning] = useState(false);
     const [nfcEnabled, setNfcEnabled] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const [failure, setFailure] = useState<NFCFailureGuidance | null>(null);
     const [can, setCan] = useState('');
     const pulseAnim = React.useRef(new Animated.Value(1)).current;
     const scanAttempt = React.useRef(0);
@@ -78,9 +85,13 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
     }, [isScanning, pulseAnim, startPulseAnimation]);
 
     const handleStartScan = async () => {
-        const normalizedCan = can.trim().toUpperCase();
-        if (!/^[A-Z0-9]{9}$/.test(normalizedCan)) {
-            setError('El CAN debe contener exactamente los 9 caracteres impresos en la cédula.');
+        const normalizedCan = normalizeCAN(can);
+        if (!isValidCAN(normalizedCan)) {
+            setFailure({
+                title: 'Falta el CAN completo',
+                detail: `Escribe los ${PACE_CAN_LENGTH} dígitos del Card Access Number impresos en tu cédula. No es el RUT ni el número de documento.`,
+                action: 'fix_can',
+            });
             return;
         }
 
@@ -90,7 +101,7 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
         }
 
         setIsScanning(true);
-        setError(null);
+        setFailure(null);
         const attempt = ++scanAttempt.current;
         try {
             const result = await nfcService.readChileanIDPACE(normalizedCan);
@@ -99,11 +110,18 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
             if (isVerifiedNFCReadResult(result)) {
                 navigation.navigate('Success', { result });
             } else {
-                setError(result.error || 'Error al leer la cédula mediante PACE');
+                setFailure(describeReadFailure(result));
             }
         } catch (err: any) {
+            // A throw here is a bug in the bridge, not a chip response: the
+            // service is supposed to resolve every failure as a typed result.
             if (attempt === scanAttempt.current) {
-                setError(err.message || 'Error inesperado');
+                setFailure({
+                    title: 'Error inesperado durante la lectura',
+                    detail: 'Vuelve a intentarlo. Si persiste, repórtalo al equipo.',
+                    action: 'app_defect',
+                    technicalDetail: typeof err?.message === 'string' ? err.message : undefined,
+                });
             }
         } finally {
             if (attempt === scanAttempt.current) setIsScanning(false);
@@ -115,6 +133,15 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
         nfcService.stopReading();
         setIsScanning(false);
     };
+
+    const handleCanChange = (value: string) => {
+        setCan(normalizeCAN(value));
+        // Stale guidance about a wrong CAN must not survive the correction.
+        if (failure?.action === 'fix_can') setFailure(null);
+    };
+
+    const canIsComplete = isValidCAN(can);
+    const canNeedsCorrection = failure?.action === 'fix_can' || (can.length > 0 && !canIsComplete);
 
     return (
         <SafeAreaView style={styles.container}>
@@ -130,18 +157,25 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
             <View style={styles.scannerContainer}>
                 {!isScanning && (
                     <View style={styles.inputContainer}>
-                        <Text style={styles.inputLabel}>Número de Documento (CAN)</Text>
+                        <Text style={styles.inputLabel}>Card Access Number (CAN)</Text>
                         <TextInput
-                            style={styles.input}
-                            placeholder="Ej: 123456789"
-                            placeholderTextColor="#555"
+                            style={[
+                                styles.input,
+                                canNeedsCorrection && styles.inputInvalid,
+                            ]}
+                            placeholder="000000"
+                            placeholderTextColor={theme.colors.textSoft}
                             value={can}
-                            onChangeText={setCan}
-                            keyboardType="default"
-                            autoCapitalize="characters"
-                            maxLength={9}
+                            onChangeText={handleCanChange}
+                            keyboardType="number-pad"
+                            maxLength={PACE_CAN_LENGTH}
+                            editable={!isScanning}
+                            accessibilityLabel="Card Access Number de la cédula"
                         />
-                        <Text style={styles.inputHint}>Ingresa los 9 caracteres impresos en el frente de tu cédula.</Text>
+                        <Text style={styles.inputHint}>
+                            Son los {PACE_CAN_LENGTH} dígitos del CAN impresos en tu cédula.
+                            No es el RUT ni el número de documento.
+                        </Text>
                     </View>
                 )}
 
@@ -178,10 +212,34 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
                 </Text>
             </View>
 
-            {/* Error Display */}
-            {error && (
-                <View style={styles.errorContainer}>
-                    <Text style={styles.errorText}>⚠️ {error}</Text>
+            {/* Failure guidance */}
+            {failure && (
+                <View
+                    style={[
+                        styles.errorContainer,
+                        failure.action === 'app_defect' && styles.warningContainer,
+                    ]}
+                >
+                    <Text
+                        style={[
+                            styles.errorTitle,
+                            failure.action === 'app_defect' && styles.warningText,
+                        ]}
+                    >
+                        ⚠️ {failure.title}
+                    </Text>
+                    <Text style={styles.errorDetail}>{failure.detail}</Text>
+                    {failure.technicalDetail && (
+                        <Text style={styles.errorTechnical}>{failure.technicalDetail}</Text>
+                    )}
+                    {failure.action === 'enable_nfc' && (
+                        <TouchableOpacity
+                            style={styles.inlineAction}
+                            onPress={() => nfcService.requestEnable()}
+                        >
+                            <Text style={styles.inlineActionText}>Abrir ajustes de NFC</Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
             )}
 
@@ -189,9 +247,12 @@ const ScanScreen: React.FC<ScanScreenProps> = ({ navigation }) => {
             <View style={styles.buttonContainer}>
                 {!isScanning ? (
                     <TouchableOpacity
-                        style={[styles.button, !nfcEnabled && styles.buttonDisabled]}
+                        style={[
+                            styles.button,
+                            (!nfcEnabled || !canIsComplete) && styles.buttonDisabled,
+                        ]}
                         onPress={handleStartScan}
-                        disabled={!nfcEnabled}
+                        disabled={!nfcEnabled || !canIsComplete}
                     >
                         <Text style={styles.buttonText}>INICIAR ESCANEO</Text>
                     </TouchableOpacity>
@@ -265,6 +326,10 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         letterSpacing: 4,
     },
+    inputInvalid: {
+        borderColor: theme.colors.danger,
+        backgroundColor: theme.colors.dangerSoft,
+    },
     inputHint: {
         ...theme.typography.caption,
         marginTop: 8,
@@ -319,10 +384,37 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: theme.colors.danger,
     },
-    errorText: {
+    warningContainer: {
+        backgroundColor: theme.colors.warningSoft,
+        borderColor: theme.colors.warning,
+    },
+    errorTitle: {
         color: theme.colors.danger,
-        textAlign: 'center',
-        fontWeight: '500',
+        fontSize: 15,
+        fontWeight: '700',
+        marginBottom: 6,
+    },
+    warningText: {
+        color: theme.colors.warning,
+    },
+    errorDetail: {
+        ...theme.typography.caption,
+        color: theme.colors.text,
+    },
+    errorTechnical: {
+        ...theme.typography.caption,
+        color: theme.colors.textSoft,
+        fontSize: 12,
+        marginTop: 8,
+    },
+    inlineAction: {
+        marginTop: 12,
+        alignSelf: 'flex-start',
+    },
+    inlineActionText: {
+        color: theme.colors.primary,
+        fontWeight: '700',
+        textDecorationLine: 'underline',
     },
     buttonContainer: {
         padding: 20,

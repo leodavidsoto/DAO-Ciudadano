@@ -2,9 +2,15 @@
 Membership endpoints: explicit demo mode, fail-closed production behavior,
 duplicate rejection, address validation, lookups, and wallet session auth
 (C-1: minting "as" another address is rejected).
+
+Desde ROADMAP 1.10, además, el alta exige un `membership_grant` firmado por el
+servidor: el nivel de aseguramiento ya no lo elige quien pide la membresía
+(AUDIT P-4). Las reglas de ese grant viven en `test_membership_grant.py`.
 """
 
 from datetime import datetime, timezone
+
+from conftest import membership_grant_for
 
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -46,9 +52,7 @@ async def _sign_in(client, account):
     return {"Authorization": f"Bearer {verify.json()['token']}"}
 
 
-async def _mint(
-    client, account=VALID_ACCOUNT, address=None, doc_hash="0xdeadbeef", level="AL2"
-):
+async def _mint(client, account=VALID_ACCOUNT, address=None, grant=None, level="AL2"):
     """Mintea autenticado como `account`. Por defecto usa la propia
     dirección de `account`; pásale `address` distinto para probar el
     rechazo de "mintear como otra persona" (C-1)."""
@@ -57,8 +61,11 @@ async def _mint(
         "/api/membership/mint",
         json={
             "wallet_address": address if address is not None else account.address,
-            "assurance_level": level,
-            "doc_hash": doc_hash,
+            "membership_grant": (
+                grant
+                if grant is not None
+                else membership_grant_for(account.address.lower(), level)
+            ),
         },
         headers=headers,
     )
@@ -70,8 +77,7 @@ async def test_mint_requires_wallet_session(client):
         "/api/membership/mint",
         json={
             "wallet_address": VALID_ADDRESS,
-            "assurance_level": "AL2",
-            "doc_hash": "0xdeadbeef",
+            "membership_grant": membership_grant_for(VALID_ADDRESS),
         },
     )
     assert response.status_code == 401
@@ -114,18 +120,25 @@ async def test_demo_mode_never_fabricates_a_transaction_hash(client, monkeypatch
 
 
 async def test_mint_fails_closed_in_production(client, monkeypatch):
+    """Producción sigue cerrada aquí, y ahora por el motivo correcto.
+
+    El grant cierra el hueco de identidad (P-4), pero esta vía sigue sin tocar
+    el contrato: una membresía que solo existe en Mongo no la reconoce la
+    cadena. Por eso el 503 apunta a `/mint-zk` en vez de hablar de identidad.
+    """
+    grant = membership_grant_for(VALID_ADDRESS)
     monkeypatch.setattr(settings, "APP_ENV", "production")
     monkeypatch.setattr(settings, "MINT_MODE", "onchain")
     # Keep SIWE itself valid so this regression reaches the independent
-    # production identity-grant guard in the mint endpoint.
+    # production guard in the mint endpoint.
     monkeypatch.setattr(settings, "SIWE_DOMAIN", "estamosdao.cl")
     monkeypatch.setattr(settings, "SIWE_URI", "https://estamosdao.cl")
     monkeypatch.setattr(settings, "SIWE_CHAIN_ID", 11155111)
 
-    response = await _mint(client)
+    response = await _mint(client, grant=grant)
 
     assert response.status_code == 503
-    assert "verificación de identidad" in response.json()["detail"]
+    assert "/api/membership/mint-zk" in response.json()["detail"]
 
 
 async def test_mint_rejects_acting_as_another_address(client):
@@ -162,10 +175,42 @@ async def test_mint_rejects_duplicate_wallet_case_insensitive(client):
     assert "Ya existe" in data["error"]
 
 
-async def test_mint_requires_doc_hash(client):
-    response = await _mint(client, doc_hash="")
-    data = response.json()
-    assert data["ok"] is False
+async def test_client_cannot_choose_its_own_assurance_level(client):
+    """El corazón de P-4: el nivel sale del grant, no del cuerpo.
+
+    Se mandan `assurance_level` y `doc_hash` en el body, como hacía el cliente
+    antiguo. El modelo los descarta y la membresía queda con lo que firmó el
+    servidor — no con lo que pidió quien se da de alta.
+    """
+    headers = await _sign_in(client, VALID_ACCOUNT)
+    response = await client.post(
+        "/api/membership/mint",
+        json={
+            "wallet_address": VALID_ACCOUNT.address,
+            "membership_grant": membership_grant_for(VALID_ADDRESS, "AL1"),
+            "assurance_level": "AL4_MAXIMO",
+            "doc_hash": "0xloquesea",
+        },
+        headers=headers,
+    )
+
+    assert response.json()["ok"] is True
+    assert response.json()["assurance_level"] == "AL1"
+
+    stored = await members_collection().find_one({"wallet_address": VALID_ADDRESS})
+    assert stored["assurance_level"] == "AL1"
+    assert stored["doc_hash"] != "0xloquesea"
+
+
+async def test_mint_without_a_grant_is_rejected_by_the_schema(client):
+    """Falta el grant: 422. No hay alta "sin identidad" que degradar."""
+    headers = await _sign_in(client, VALID_ACCOUNT)
+    response = await client.post(
+        "/api/membership/mint",
+        json={"wallet_address": VALID_ACCOUNT.address},
+        headers=headers,
+    )
+    assert response.status_code == 422
 
 
 async def test_token_ids_are_sequential(client):
@@ -227,14 +272,17 @@ async def test_demo_member_loses_governance_rights_after_production_promotion(
     client,
     monkeypatch,
 ):
-    """Promoting the same DB must not promote self-asserted demo identity."""
+    """Promoting the same DB must not promote a demo-issued membership.
+
+    El grant es real, pero fuera de producción el proveedor puede ser un
+    simulador: la fila sigue siendo `demo` y no gobierna.
+    """
     headers = await _sign_in(client, VALID_ACCOUNT)
     minted = await client.post(
         "/api/membership/mint",
         json={
             "wallet_address": VALID_ADDRESS,
-            "assurance_level": "AL2",
-            "doc_hash": "0xselfasserted",
+            "membership_grant": membership_grant_for(VALID_ADDRESS),
         },
         headers=headers,
     )

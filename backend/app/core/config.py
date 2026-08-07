@@ -156,6 +156,16 @@ class Settings(BaseSettings):
         os.environ.get("IDENTITY_GRANT_TTL_SECONDS", "300")
     )
 
+    # Segundos de validez del *grant de membresía*: el JWT que certifica que un
+    # proveedor civil real verificó a esta persona y con qué nivel, y que
+    # `POST /membership/mint` exige y quema. Más largo que el grant civil
+    # opaco porque entre identificarse y conectar la wallet hay pasos de
+    # interfaz, pero corto de todas formas: es una autorización de alta, no
+    # una sesión. 15 minutos (ROADMAP 1.10).
+    MEMBERSHIP_GRANT_TTL_SECONDS: int = int(
+        os.environ.get("MEMBERSHIP_GRANT_TTL_SECONDS", "900")
+    )
+
     # === Retención de datos (ROADMAP 1.4, app/core/retention.py) ===
     # Días que se conserva el digest de un grant DESPUÉS de expirar, para
     # poder investigar un canje anómalo. 0 = conservar indefinidamente.

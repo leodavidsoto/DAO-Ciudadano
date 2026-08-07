@@ -2,8 +2,12 @@ jest.mock('react-native-quick-crypto', () => require('crypto'));
 
 import { NativeModules } from 'react-native';
 import nfcService, {
+    describeReadFailure,
+    isValidCAN,
     isVerifiedNFCReadResult,
+    normalizeCAN,
     parseNativePassportReadResult,
+    PACE_CAN_LENGTH,
 } from '../nfcService';
 
 const validNativePayload = () => ({
@@ -135,11 +139,21 @@ describe('PassportReader runtime boundary', () => {
         }));
     });
 
-    it('validates the CAN before invoking the native module', async () => {
+    // Both native readers require exactly six digits (PassportReaderModule.kt
+    // and PassportReader.swift). A JS rule that disagrees makes every scan
+    // unreachable, so the contract is pinned on both sides.
+    it.each([
+        ['12345678', 'the old nine-character document number'],
+        ['12345', 'too few digits'],
+        ['1234567', 'too many digits'],
+        ['12345A', 'a letter'],
+        ['', 'an empty value'],
+    ])('rejects %s (%s) before invoking the native module', async (candidate) => {
         const startPACESession = jest.fn(async () => validNativePayload());
         (NativeModules as Record<string, unknown>).PassportReader = { startPACESession };
 
-        const result = await nfcService.readChileanIDPACE('12345678');
+        expect(isValidCAN(candidate)).toBe(false);
+        const result = await nfcService.readChileanIDPACE(candidate);
         expect(result).toEqual(expect.objectContaining({
             status: 'failed',
             errorCode: 'E_INVALID_CAN',
@@ -147,20 +161,34 @@ describe('PassportReader runtime boundary', () => {
         expect(startPACESession).not.toHaveBeenCalled();
     });
 
+    it('agrees with the native six-digit CAN contract', () => {
+        expect(PACE_CAN_LENGTH).toBe(6);
+        expect(isValidCAN('123456')).toBe(true);
+        expect(normalizeCAN(' 12-34 56 ')).toBe('123456');
+        expect(normalizeCAN('A1B2C3D4E5')).toBe('12345');
+        expect(normalizeCAN('1234567890')).toHaveLength(PACE_CAN_LENGTH);
+    });
+
     it('validates the native module shape and its resolved payload', async () => {
         (NativeModules as Record<string, unknown>).PassportReader = {
             startPACESession: 'not-a-function',
         };
-        await expect(nfcService.readChileanIDPACE('123456789')).resolves.toEqual(
+        await expect(nfcService.readChileanIDPACE('123456')).resolves.toEqual(
             expect.objectContaining({ status: 'failed', errorCode: 'E_MODULE_UNAVAILABLE' }),
         );
 
         const startPACESession = jest.fn(async () => validNativePayload());
         (NativeModules as Record<string, unknown>).PassportReader = { startPACESession };
-        const result = await nfcService.readChileanIDPACE('123456789');
+        const result = await nfcService.readChileanIDPACE('123456');
 
-        expect(startPACESession).toHaveBeenCalledWith('123456789');
+        expect(startPACESession).toHaveBeenCalledWith('123456');
         expect(result.status).toBe('verified');
+    });
+
+    it('no longer exposes the NDEF or BAC placeholder reads', () => {
+        const surface = nfcService as unknown as Record<string, unknown>;
+        expect(surface.readSimpleTag).toBeUndefined();
+        expect(surface.readChileanID).toBeUndefined();
     });
 
     it('forwards cancellation to the native CoreNFC owner', async () => {
@@ -181,12 +209,79 @@ describe('PassportReader runtime boundary', () => {
         });
         (NativeModules as Record<string, unknown>).PassportReader = { startPACESession };
 
-        await expect(nfcService.readChileanIDPACE('123456789')).resolves.toEqual({
+        await expect(nfcService.readChileanIDPACE('123456')).resolves.toEqual({
             status: 'failed',
             readCompleted: false,
             identityVerified: false,
             errorCode: 'E_PACE_FAILED',
             error: 'CAN rechazado',
         });
+    });
+});
+
+describe('failure guidance', () => {
+    const failed = (errorCode: string, error = 'detalle nativo') =>
+        describeReadFailure({
+            status: 'failed',
+            readCompleted: false,
+            identityVerified: false,
+            errorCode,
+            error,
+        });
+
+    it.each([
+        ['E_INVALID_CAN', 'fix_can'],
+        ['E_PACE_FAILED', 'fix_can'],
+        ['E_TIMEOUT', 'retry_positioning'],
+        ['E_READ_FAILED', 'retry_positioning'],
+        ['E_DOCUMENT_READ_FAILED', 'retry_positioning'],
+        ['E_TAG_NOT_SUPPORTED', 'retry_positioning'],
+        ['E_SCAN_IN_PROGRESS', 'retry_positioning'],
+        ['E_NO_ACTIVITY', 'retry_positioning'],
+        ['E_NFC_READER_MODE', 'retry_positioning'],
+        ['E_NFC_DISABLED', 'enable_nfc'],
+        ['E_NFC_UNAVAILABLE', 'unsupported'],
+        ['E_PACE_UNSUPPORTED', 'unsupported'],
+        ['E_CSCA_MASTER_LIST_MISSING', 'app_defect'],
+        ['E_MODULE_UNAVAILABLE', 'app_defect'],
+        ['E_INVALID_NATIVE_RESPONSE', 'app_defect'],
+    ])('routes %s to the %s action', (code, action) => {
+        const guidance = failed(code);
+        expect(guidance.action).toBe(action);
+        expect(guidance.title).not.toHaveLength(0);
+        expect(guidance.detail).not.toHaveLength(0);
+    });
+
+    it('points a rejected secure channel at the CAN without asserting the cause', () => {
+        const guidance = failed('E_PACE_FAILED', 'PACE rechazado por el chip');
+
+        expect(guidance.action).toBe('fix_can');
+        expect(guidance.detail).toMatch(/más frecuente/i);
+        // The native text is preserved separately, never rewritten as a verdict.
+        expect(guidance.technicalDetail).toBe('PACE rechazado por el chip');
+    });
+
+    it('does not blame the citizen when the build lacks a trust chain', () => {
+        expect(failed('E_CSCA_MASTER_LIST_MISSING').detail)
+            .toMatch(/no es un problema de tu cédula/i);
+    });
+
+    it('treats an unverified read as unusable evidence', () => {
+        const guidance = describeReadFailure({
+            status: 'read_unverified',
+            readCompleted: true,
+            identityVerified: false,
+            error: 'La firma de EF.SOD no es válida.',
+        });
+
+        expect(guidance.action).toBe('app_defect');
+        expect(guidance.title).toMatch(/no se verificó/i);
+        expect(guidance.technicalDetail).toBe('La firma de EF.SOD no es válida.');
+    });
+
+    it('falls back safely for an unknown native code', () => {
+        const guidance = failed('E_SOMETHING_NEW');
+        expect(guidance.action).toBe('retry_positioning');
+        expect(guidance.technicalDetail).toBe('detalle nativo');
     });
 });

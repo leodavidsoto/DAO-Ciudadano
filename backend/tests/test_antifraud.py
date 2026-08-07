@@ -20,6 +20,7 @@ import pytest
 
 from eth_account import Account
 
+from conftest import membership_grant_for
 from app.core.database import elections_collection
 from app.core.security_middleware import FraudDetector, fraud_detector
 from app.services.governance_service import MAX_DELEGATION_DEPTH
@@ -55,8 +56,7 @@ async def _member_e(client):
         "/api/membership/mint",
         json={
             "wallet_address": ADDR_E,
-            "assurance_level": "AL2",
-            "doc_hash": f"0xdoc{ADDR_E[-8:]}",
+            "membership_grant": membership_grant_for(ADDR_E),
         },
         headers=headers,
     )

@@ -2100,3 +2100,50 @@ Corregido:
 - Se añadió `slither.config.json` excluyendo los contratos generados y se inicializó `proofIsValid = false`.
 - Se actualizó `cryptography>=50.0.0`.
 - Se fijaron los warnings estáticos en backend y móvil.
+
+### P-97 (crítica, corregida): el contrato del CAN entre JS y nativo era mutuamente excluyente
+
+`mobile/src/services/nfcService.ts:490` y `mobile/src/screens/ScanScreen.tsx:82` exigían
+un CAN de **9 caracteres alfanuméricos**, mientras que ambos lectores nativos exigen
+**6 dígitos**: `PassportReaderModule.kt:124` (6 alfanuméricos) y `PassportReader.swift:40`
+(6 dígitos ASCII estrictos).
+
+Las dos reglas no tienen intersección: ninguna entrada podía pasar las dos validaciones a
+la vez. En la práctica **toda lectura PACE era inalcanzable en ambas plataformas** — la
+capa TS rechazaba cualquier valor de 6 dígitos antes de invocar el puente, y cualquier
+valor de 9 que la pasara era rechazado por el nativo con `E_INVALID_CAN`. El defecto
+estaba enmascarado porque los tests usaban `'123456789'` como CAN válido contra un
+`startPACESession` mockeado, que nunca aplica la regla nativa.
+
+Origen del error: se confundió el Card Access Number con el número de documento. La
+etiqueta de la interfaz decía literalmente «Número de Documento (CAN)».
+
+Corregido:
+- `nfcService.ts` expone `PACE_CAN_LENGTH`, `isValidCAN()` y `normalizeCAN()` como fuente
+  única del contrato: 6 dígitos, que es el subconjunto aceptado por ambos nativos.
+- `ScanScreen.tsx` usa `keyboardType="number-pad"`, `maxLength=6`, normaliza la entrada
+  descartando no-dígitos y renombra la etiqueta a «Card Access Number (CAN)», aclarando
+  que no es el RUT ni el número de documento.
+- Tests que fijan el contrato en ambos lados (`nfcService.test.ts`, `ScanScreen.test.tsx`).
+
+**Pendiente:** el CAN sigue sin validarse contra una cédula física (bloqueante declarado
+en `ROADMAP.md:175`). Que el formato ya sea coherente no prueba que 6 dígitos sea el
+formato correcto del CAN chileno; hay que confirmarlo con un documento real.
+
+### A-8 · Estado actualizado (07-08-2026)
+
+El hallazgo original describía `readSimpleTag()` sobre NDEF y un `// TODO: Implement full
+PACE/BAC protocol`. La lectura autenticada ya existe en nativo (`PassportReaderModule.kt`
+con JMRTD; `PassportReader.swift` con NFCPassportReader): PACE-CAN, selección del applet,
+lectura de DG1/DG2/EF.SOD y autenticación pasiva contra anclas CSCA empaquetadas.
+
+Cerrado el remanente en esta pasada: se eliminaron de `nfcService.ts` los dos caminos
+muertos que quedaban — `readSimpleTag()` (NDEF, que la cédula nunca responderá) y
+`readChileanID()` (esqueleto BAC que derivaba llaves y devolvía `read_unverified`). No los
+llamaba nadie; sobrevivían como superficie engañosa. Regla 2 de `AGENTS.md`.
+
+**Nota:** `mobile/src/services/bacCrypto.ts` queda huérfano de código de producción — solo
+lo usa su propio test. Son primitivas BAC (3DES/SHA-1) verificadas contra los vectores de
+ICAO 9303, pero BAC está explícitamente rechazado como respaldo (`E_PACE_UNSUPPORTED`), y
+PACE-GM necesita ECDH sobre curvas brainpool que estas primitivas no pueden expresar. Debe
+decidirse si se conserva para un eventual respaldo BAC o se elimina.

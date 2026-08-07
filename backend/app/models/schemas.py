@@ -104,9 +104,18 @@ class UserResponse(BaseModel):
 
 
 class MintSBTRequest(BaseModel):
+    """Alta de membresía (AUDIT P-4, ROADMAP 1.10).
+
+    Ya no hay `assurance_level` ni `doc_hash`: eran datos que el cliente se
+    autoafirmaba, y una sesión SIWE solo prueba control de una wallet. Ahora
+    ambos salen del `membership_grant`, un JWT que el servidor firmó al
+    terminar un flujo civil real. Quitarlos del modelo —en vez de ignorarlos—
+    es deliberado: un campo aceptado y descartado en silencio invita a que
+    alguien vuelva a leerlo.
+    """
+
     wallet_address: str
-    assurance_level: str
-    doc_hash: str
+    membership_grant: str
 
 
 class MintSBTResponse(BaseModel):
@@ -114,6 +123,9 @@ class MintSBTResponse(BaseModel):
     token_id: Optional[int] = None
     tx_hash: Optional[str] = None
     error: Optional[str] = None
+    # Nivel que certificó el servidor, para que la interfaz lo muestre sin
+    # tener que decodificar el grant.
+    assurance_level: Optional[str] = None
 
 
 class Member(BaseModel):

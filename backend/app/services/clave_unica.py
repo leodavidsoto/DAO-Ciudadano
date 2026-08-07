@@ -484,18 +484,23 @@ def subject_key_for(run: str) -> str:
 class LoginAlreadyCompleted(RuntimeError):
     """El intento ya terminó: hay un grant emitido para este mismo flujo."""
 
-    def __init__(self, grant: str, name: str):
+    def __init__(self, grant: str, name: str, membership_grant: str = ""):
         super().__init__("El intento de inicio de sesión ya se completó.")
         self.grant = grant
         self.name = name
+        # JWT de alta de membresía emitido en el intento original. Se repite el
+        # MISMO: uno nuevo daría dos jtis para una sola verificación civil.
+        self.membership_grant = membership_grant
 
 
 class LoginInProgress(RuntimeError):
     """Otro callback del mismo flujo está en curso ahora mismo."""
 
 
-async def remember_issued_grant(state: str, grant: str, name: str) -> None:
-    """Guarda el grant CIFRADO para poder repetir la respuesta.
+async def remember_issued_grant(
+    state: str, grant: str, name: str, membership_grant: str = ""
+) -> None:
+    """Guarda los grants CIFRADOS para poder repetir la respuesta.
 
     Requisito de idempotencia: si la respuesta HTTP se pierde, el navegador
     reintenta y debe recibir EL MISMO grant, no otro —eso duplicaría
@@ -513,6 +518,9 @@ async def remember_issued_grant(state: str, grant: str, name: str) -> None:
         {
             "$set": {
                 "issued_grant": encrypt(grant),
+                "issued_membership_grant": (
+                    encrypt(membership_grant) if membership_grant else ""
+                ),
                 "issued_name": name,
                 "completed_at": datetime.now(timezone.utc),
             }
@@ -557,7 +565,24 @@ async def _replay_issued_grant(session: dict) -> NoReturn:
             "Vuelve a identificarte con ClaveÚnica."
         )
 
-    raise LoginAlreadyCompleted(grant, session.get("issued_name", ""))
+    # El JWT de membresía se repite tal cual si sigue guardado. No se
+    # reemite: su vigencia la lleva dentro y su unicidad la garantiza el jti.
+    stored_membership = session.get("issued_membership_grant") or ""
+    membership = ""
+    if stored_membership:
+        try:
+            membership = decrypt(stored_membership)
+        except ValueError:
+            # El grant civil sí se recuperó, así que el flujo ZK sigue
+            # disponible. Devolver "" es más honesto que fallar entero: la
+            # persona puede obtener su credencial y, si quiere el alta
+            # directa, volver a identificarse.
+            logger.warning(
+                "No se pudo descifrar el grant de membresía del intento; se "
+                "repite la respuesta sin él."
+            )
+
+    raise LoginAlreadyCompleted(grant, session.get("issued_name", ""), membership)
 
 
 async def complete_login(code: str, state: str, binding: Optional[str]) -> dict:

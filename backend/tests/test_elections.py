@@ -11,6 +11,7 @@ import jwt
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
+from conftest import membership_grant_for
 from app.core.config import settings
 from app.core.database import (
     candidacies_collection,
@@ -94,8 +95,7 @@ async def _mint_member(client, address):
         "/api/membership/mint",
         json={
             "wallet_address": address,
-            "assurance_level": "AL2",
-            "doc_hash": f"0xdoc{address[-8:]}",
+            "membership_grant": membership_grant_for(address.lower()),
         },
         headers=headers,
     )

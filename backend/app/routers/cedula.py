@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..core.config import settings
-from ..services import cedula_nfc, csca_trust_store, identity_grant
+from ..services import cedula_nfc, csca_trust_store, identity_grant, membership_grant
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,11 @@ class CedulaVerificationResponse(BaseModel):
     ok: bool
     identity_grant: str
     identity_grant_expires_in: int
+    #: Grant de membresía (JWT, ROADMAP 1.10): certifica sujeto y nivel, y es
+    #: lo que POST /api/membership/mint exige y quema.
+    membership_grant: str
+    membership_grant_expires_in: int
+    assurance_level: str
     #: Detalle criptográfico de lo comprobado. Sin datos del titular.
     verification: dict
 
@@ -88,7 +93,15 @@ async def verify_cedula(request: CedulaReadingRequest):
             subject_key=verified.subject_key,
             provider=cedula_nfc.PROVIDER_NAME,
         )
-    except identity_grant.IdentityGrantError as exc:
+        membership = membership_grant.issue(
+            subject_key=verified.subject_key,
+            assurance_level=cedula_nfc.ASSURANCE_LEVEL,
+            provider=cedula_nfc.PROVIDER_NAME,
+        )
+    except (
+        identity_grant.IdentityGrantError,
+        membership_grant.MembershipGrantError,
+    ) as exc:
         # El documento es auténtico, pero el despliegue no está habilitado para
         # emitir grants (IDENTITY_PROVIDER). Se dice tal cual.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -97,6 +110,9 @@ async def verify_cedula(request: CedulaReadingRequest):
         ok=True,
         identity_grant=grant,
         identity_grant_expires_in=settings.IDENTITY_GRANT_TTL_SECONDS,
+        membership_grant=membership,
+        membership_grant_expires_in=settings.MEMBERSHIP_GRANT_TTL_SECONDS,
+        assurance_level=cedula_nfc.ASSURANCE_LEVEL,
         verification=verified.verification,
     )
 

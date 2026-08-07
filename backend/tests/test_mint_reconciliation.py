@@ -109,6 +109,10 @@ async def test_a_crashed_worker_recovers_the_sbt_from_the_receipt(client, monkey
         "token_id": 7,
         "tx_hash": TX,
         "error": None,
+        # La vía ZK no declara nivel a propósito: el servidor no sabe —ni debe
+        # saber— quién minteó, así que no puede certificar nada sobre esa
+        # persona. La garantía la impone el contrato al verificar la prueba.
+        "assurance_level": None,
     }
     assert (await _operation())["status"] == mint_operations.CONFIRMED
 

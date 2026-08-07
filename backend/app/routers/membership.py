@@ -7,6 +7,12 @@ Thin HTTP layer: business logic lives in BlockchainService (see CLAUDE.md rule 5
 Wallet auth (cierra C-1): mintear una membresía requiere sesión de wallet
 (SIWE) para la MISMA dirección que se registra — antes cualquiera podía
 mintear "para" otra wallet con solo ponerla en el body.
+
+Verificación de identidad (cierra P-4, ROADMAP 1.10): además de la sesión,
+`POST /mint` exige un `membership_grant` — el JWT que el servidor firmó al
+terminar un flujo civil real. El nivel de aseguramiento y el índice del
+documento salen de ese token, no del body: SIWE prueba control de una wallet,
+nunca que la persona detrás completó verificación alguna.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,7 +22,7 @@ import asyncio
 import logging
 
 from ..models import MintSBTRequest, MintSBTResponse
-from ..services import chain_service, mint_operations
+from ..services import chain_service, membership_grant, mint_operations
 from ..services.blockchain_service import MintingUnavailable, blockchain_service
 from ..services.membership_verifier import (
     invalidate_cached_membership,
@@ -39,30 +45,78 @@ router = APIRouter(prefix="/membership", tags=["Membership"])
 async def mint_sbt(
     request: MintSBTRequest, authenticated: str = Depends(current_address)
 ):
-    """
-    Register a DAO membership using the explicit MINT_MODE. On-chain mode
-    never falls back to Mongo-only demo behavior. Production remains blocked
-    until identity verification is bound to the authenticated wallet.
+    """Da de alta una membresía consumiendo un grant de identidad de un solo uso.
+
+    Orden deliberado:
+
+      1. La sesión SIWE debe ser de ESTA wallet (C-1).
+      2. Se valida el grant —firma, vigencia, emisor, audiencia— ANTES de
+         tocar la base: un token inválido no debe dejar rastro de intento.
+      3. Se reclama el jti, que queda atado a esta wallet. Aquí es donde el
+         token deja de servirle a nadie más.
+      4. Solo entonces se registra la membresía, con el nivel y el índice de
+         documento que certificó el servidor.
+
+    Si el paso 4 falla, el grant se libera (`release`): la persona reintenta
+    con el mismo token sin repetir el flujo civil. Solo el éxito lo consume
+    definitivamente (`finalize`). Ver `services/membership_grant.py`.
     """
     ensure_acts_as_self(request.wallet_address, authenticated, "mintear una membresía")
+
+    # Antes de tocar el grant: si este despliegue no puede dar altas, quemar el
+    # jti para nada dejaría a la persona con una verificación gastada por un
+    # problema de configuración del servidor.
     try:
-        ok, token_id, tx_hash, error = await blockchain_service.mint_sbt(
-            wallet_address=request.wallet_address,
-            assurance_level=request.assurance_level,
-            doc_hash=request.doc_hash,
-        )
+        blockchain_service.ensure_minting_available()
     except MintingUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    try:
+        claims = membership_grant.verify(request.membership_grant)
+    except membership_grant.MembershipGrantError as exc:
+        # 403 y no 401: la sesión de wallet es válida; lo que falta es la
+        # verificación de identidad.
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    try:
+        await membership_grant.claim(claims, request.wallet_address)
+    except membership_grant.MembershipGrantError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    try:
+        ok, token_id, tx_hash, error = await blockchain_service.mint_sbt(
+            wallet_address=request.wallet_address,
+            assurance_level=claims.assurance_level,
+            # El índice ciego del sujeto ES el vínculo con el documento. El
+            # servidor nunca vio el documento, así que no hay nada mejor que
+            # esto y —a diferencia del `doc_hash` anterior— no lo eligió el
+            # cliente.
+            doc_hash=claims.subject_key,
+        )
+    except MintingUnavailable as exc:
+        # La configuración cambió entre la comprobación y el intento. La
+        # verificación sigue viva: se libera para que reintente.
+        await membership_grant.release(claims.jti, "minting_unavailable")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     if not ok:
+        await membership_grant.release(claims.jti, error or "mint_failed")
         return MintSBTResponse(ok=False, error=error)
+
+    # Estado terminal: hay membresía, el grant no vuelve a servir.
+    await membership_grant.finalize(claims.jti, token_id)
 
     # La caché de hasMembership() pudo guardar un "no es miembro" hace
     # segundos; sin invalidarla, quien acaba de mintear vería 403 al votar
     # durante el resto del TTL.
     invalidate_cached_membership(request.wallet_address)
 
-    return MintSBTResponse(ok=True, token_id=token_id, tx_hash=tx_hash)
+    return MintSBTResponse(
+        ok=True,
+        token_id=token_id,
+        tx_hash=tx_hash,
+        assurance_level=claims.assurance_level,
+    )
 
 
 @router.get("/verify/{token_id}")

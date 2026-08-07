@@ -8,6 +8,7 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from app.core.config import settings
+from conftest import membership_grant_for
 from app.core.database import members_collection
 
 # Minting now requires a real wallet session (SIWE, C-1).
@@ -42,8 +43,7 @@ async def _mint(client):
         "/api/membership/mint",
         json={
             "wallet_address": VALID_ADDRESS,
-            "assurance_level": "AL2",
-            "doc_hash": "0xdeadbeef",
+            "membership_grant": membership_grant_for(VALID_ADDRESS),
         },
         headers=headers,
     )

@@ -29,7 +29,7 @@ from fastapi import APIRouter, Cookie, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from ..core.config import settings
-from ..services import clave_unica, identity_grant
+from ..services import clave_unica, identity_grant, membership_grant
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,15 @@ class CallbackRequest(BaseModel):
 
 class CallbackResponse(BaseModel):
     ok: bool
+    # Grant opaco de un solo uso: se canjea por la credencial ZK en
+    # POST /api/identity/identity-credential.
     identity_grant: str
     identity_grant_expires_in: int
+    # Grant de membresía (JWT, ROADMAP 1.10): certifica sujeto y nivel, y es
+    # lo que POST /api/membership/mint exige y quema. Son dos tokens porque
+    # son dos altas distintas; no son intercambiables.
+    membership_grant: str
+    membership_grant_expires_in: int
     assurance_level: str
     # Nombre para saludar en la interfaz. NO se persiste en ninguna parte.
     name: str = ""
@@ -146,6 +153,8 @@ async def callback(
             ok=True,
             identity_grant=done.grant,
             identity_grant_expires_in=settings.IDENTITY_GRANT_TTL_SECONDS,
+            membership_grant=done.membership_grant,
+            membership_grant_expires_in=settings.MEMBERSHIP_GRANT_TTL_SECONDS,
             assurance_level=clave_unica.ASSURANCE_LEVEL,
             name=done.name,
         )
@@ -167,20 +176,34 @@ async def callback(
             provider=clave_unica.PROVIDER_NAME,
             browser_binding=result["browser_binding"],
         )
-    except identity_grant.IdentityGrantError as exc:
+        membership = membership_grant.issue(
+            subject_key=result["subject_key"],
+            assurance_level=result["assurance_level"],
+            provider=clave_unica.PROVIDER_NAME,
+        )
+    except (
+        identity_grant.IdentityGrantError,
+        membership_grant.MembershipGrantError,
+    ) as exc:
         # Ocurre si IDENTITY_PROVIDER no declara un proveedor en producción:
         # la autenticación fue real, pero el despliegue no está habilitado
         # para emitir credenciales. Se dice tal cual en vez de devolver un
         # grant que no respalda nada.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    # Se recuerda cifrado para poder repetir esta misma respuesta si se pierde.
-    await clave_unica.remember_issued_grant(result["state"], grant, result["name"])
+    # Se recuerdan cifrados para poder repetir esta misma respuesta si se
+    # pierde. Emitir un grant NUEVO en el reintento daría dos jtis para una
+    # sola verificación, que es justo lo que el consumo de un solo uso evita.
+    await clave_unica.remember_issued_grant(
+        result["state"], grant, result["name"], membership
+    )
 
     return CallbackResponse(
         ok=True,
         identity_grant=grant,
         identity_grant_expires_in=settings.IDENTITY_GRANT_TTL_SECONDS,
+        membership_grant=membership,
+        membership_grant_expires_in=settings.MEMBERSHIP_GRANT_TTL_SECONDS,
         assurance_level=result["assurance_level"],
         name=result["name"],
     )

@@ -43,7 +43,7 @@ APK_BADGING="$("$AAPT2" dump badging "$APK")"
 grep -Fq \
   "package: name='com.daociudadanaapp' versionCode='$DAO_VERSION_CODE' versionName='$DAO_VERSION_NAME'" \
   <<< "$APK_BADGING"
-grep -Fqx "targetSdkVersion:'36'" <<< "$APK_BADGING"
+grep -Fqx "targetSdkVersion:'34'" <<< "$APK_BADGING"
 grep -Fqx "uses-permission: name='android.permission.NFC'" <<< "$APK_BADGING"
 if grep -q '^application-debuggable' <<< "$APK_BADGING"; then
   echo 'Release APK must not be debuggable.' >&2

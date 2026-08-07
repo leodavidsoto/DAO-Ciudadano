@@ -182,7 +182,11 @@ export function retailMac(kmac: Buffer, data: Buffer): Buffer {
     const cipherText = Buffer.concat([c.update(padded), c.final()]);
     
     // Paso 2: Tomar el último bloque resultante.
-    let y = cipherText.subarray(cipherText.length - 8);
+    // Anotado como `Buffer` a secas: `subarray` conserva el `ArrayBuffer`
+    // concreto del origen, mientras que las funciones DES devuelven
+    // `Buffer<ArrayBufferLike>`. Sin la anotación, el reasignado de abajo no
+    // compila.
+    let y: Buffer = cipherText.subarray(cipherText.length - 8);
 
     // Paso 3: Descifrar el último bloque con Kb y cifrar con Ka.
     // Al ser un solo bloque, el cifrado CBC con IV cero es equivalente a ECB.

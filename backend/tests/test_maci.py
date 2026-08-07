@@ -16,6 +16,7 @@ import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
+from conftest import membership_grant_for
 from app.services import maci_service
 
 VOTER = Account.from_key("0x" + "a1" * 32)
@@ -55,8 +56,7 @@ async def _mint_member(client, account):
         "/api/membership/mint",
         json={
             "wallet_address": account.address,
-            "assurance_level": "AL2",
-            "doc_hash": f"0xdoc{account.address[-8:]}",
+            "membership_grant": membership_grant_for(account.address.lower()),
         },
         headers=headers,
     )

@@ -131,6 +131,16 @@ class Database:
             )
             # Grants civiles: un digest solo existe una vez.
             await cls.get_db()["identity_grants"].create_index("digest", unique=True)
+            # Grants de membresía (ROADMAP 1.10): el índice único sobre `jti`
+            # ES el mecanismo de un solo uso. Sin él, dos peticiones
+            # simultáneas con el mismo JWT crearían dos reclamos y la
+            # comprobación del servicio no vería nada raro.
+            await cls.get_db()["membership_grants"].create_index("jti", unique=True)
+            # Una identidad, una membresía: la consulta que impide que el
+            # mismo sujeto se dé de alta con varias wallets.
+            await cls.get_db()["membership_grants"].create_index(
+                [("subject_key", 1), ("status", 1)]
+            )
             # Idempotencia del relayer: un nullifier -> como mucho una tx.
             await cls.get_db()["mint_operations"].create_index(
                 "nullifier_hash", unique=True

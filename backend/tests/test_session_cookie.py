@@ -13,6 +13,8 @@ Lo que estos tests fijan como contrato para el frontend:
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
+from conftest import membership_grant_for
+
 from app.core import session
 from app.core.config import settings
 
@@ -54,8 +56,7 @@ async def _become_member(client):
         "/api/membership/mint",
         json={
             "wallet_address": ADDRESS,
-            "assurance_level": "AL2",
-            "doc_hash": "0xdoc-cookie-session",
+            "membership_grant": membership_grant_for(ADDRESS),
         },
         headers={session.CSRF_HEADER: csrf},
     )
@@ -151,8 +152,7 @@ async def test_bearer_header_still_works_without_csrf(client):
         "/api/membership/mint",
         json={
             "wallet_address": ADDRESS,
-            "assurance_level": "AL2",
-            "doc_hash": "0xdoc-bearer",
+            "membership_grant": membership_grant_for(ADDRESS),
         },
         headers={"Authorization": f"Bearer {token}"},
     )

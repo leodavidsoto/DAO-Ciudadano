@@ -76,7 +76,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.database import Database  # noqa: E402
 from app.core.security_middleware import fraud_detector  # noqa: E402
+from app.services import membership_grant  # noqa: E402
 from main import app  # noqa: E402
+
+
+def membership_grant_for(subject_key: str, assurance_level: str = "AL2") -> str:
+    """Grant de membresía firmado por el servidor, para tests (ROADMAP 1.10).
+
+    `POST /api/membership/mint` ya no acepta un nivel autoafirmado: exige este
+    JWT (AUDIT P-4). Vive en conftest y no en cada archivo porque casi toda la
+    suite necesita miembros para llegar a lo que de verdad prueba.
+
+    Cada llamada emite un jti nuevo, así que un test que reintenta el alta
+    debe reutilizar el MISMO valor — igual que haría el cliente real.
+    """
+    return membership_grant.issue(
+        subject_key=subject_key,
+        assurance_level=assurance_level,
+        provider="test-provider",
+    )
+
+
+async def mint_membership(client, account, headers, address=None, grant=None):
+    """Da de alta a `account` con un grant recién emitido para ese sujeto.
+
+    El sujeto se deriva de la dirección: distintas cuentas son distintas
+    personas, que es lo que espera la regla "una identidad, una membresía".
+    """
+    return await client.post(
+        "/api/membership/mint",
+        json={
+            "wallet_address": address if address is not None else account.address,
+            "membership_grant": grant or membership_grant_for(account.address.lower()),
+        },
+        headers=headers,
+    )
 
 
 _stores_to_reset = []

@@ -18,6 +18,7 @@ from eth_account.messages import encode_defunct, encode_typed_data
 
 from app.core.config import settings
 from app.core.database import members_collection, proposals_collection, votes_collection
+from conftest import membership_grant_for
 from app.services import ballot_service
 
 # Wallets reales derivadas de llaves privadas fijas de prueba (NO producción).
@@ -78,8 +79,7 @@ async def _mint_member(client, address):
         "/api/membership/mint",
         json={
             "wallet_address": address,
-            "assurance_level": "AL2",
-            "doc_hash": f"0xdoc{address[-8:]}",
+            "membership_grant": membership_grant_for(address.lower()),
         },
         headers=headers,
     )

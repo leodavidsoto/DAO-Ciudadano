@@ -113,6 +113,17 @@ def rules() -> List[RetentionRule]:
             ),
         ),
         RetentionRule(
+            collection="membership_grants",
+            field="created_at",
+            ttl_seconds=None,
+            reason=(
+                "Es la memoria de qué verificaciones civiles ya se usaron para "
+                "dar de alta a alguien. Purgarla por antigüedad permitiría "
+                "reutilizar una identidad vieja para una segunda membresía. "
+                "Solo guarda el índice ciego del sujeto, nunca el RUN."
+            ),
+        ),
+        RetentionRule(
             collection="revoked_tokens",
             field="created_at",
             ttl_seconds=settings.SESSION_TOKEN_EXPIRE_SECONDS,
