@@ -2147,3 +2147,96 @@ lo usa su propio test. Son primitivas BAC (3DES/SHA-1) verificadas contra los ve
 ICAO 9303, pero BAC está explícitamente rechazado como respaldo (`E_PACE_UNSUPPORTED`), y
 PACE-GM necesita ECDH sobre curvas brainpool que estas primitivas no pueden expresar. Debe
 decidirse si se conserva para un eventual respaldo BAC o se elimina.
+
+---
+
+## Vigésima pasada (07-08-2026) — primera prueba contra una cédula chilena real
+
+Esta pasada tiene una diferencia con todas las anteriores: hubo un documento físico
+delante. Varias cosas que estaban «coherentes» resultaron ser falsas.
+
+### P-97 · cerrado el pendiente: 6 dígitos NO era el formato correcto
+
+P-97 alineó JS y nativos en 6 dígitos —la intersección de dos reglas incompatibles— y
+dejó escrito que eso no probaba que fuera el formato chileno. **No lo era.** Contra una
+cédula real, la clave que abre el canal es el **número de documento impreso, alfanumérico
+de 6 a 15 caracteres** (p. ej. `A12345678`), opcionalmente acompañado de fecha de
+nacimiento y de vencimiento.
+
+Corregido en `nfcService.ts`, `ScanScreen.tsx`, `PassportReaderModule.kt`,
+`PassportReader.swift` y `PassportReader.m` (que ahora expone `dob` y `doe`).
+
+**Esto no es BAC.** Conviene decirlo porque se prestó a confusión: ambas ramas llaman a
+`doPACE`. Con fechas, el nativo deriva una **llave PACE-MRZ**; sin ellas, una **llave
+PACE-CAN**. `doBAC` no se invoca nunca en Android, y iOS mantiene
+`allowBACFallback: false`. El texto de `E_PACE_UNSUPPORTED` («no se acepta el respaldo
+BAC») sigue siendo cierto. JMRTD usa la clase `BACKey` como simple contenedor de la
+semilla MRZ, y de ahí venía el malentendido.
+
+### P-98 (alta, SIN CORREGIR): BouncyCastle bajado de 1.74 a 1.64
+
+`mobile/android/app/build.gradle:256` volvió a `bcprov-jdk15on:1.64` y quitó la exclusión
+que apartaba la copia vieja que arrastra JMRTD.
+
+El comentario inmediatamente anterior, que quedó intacto, **contradice ahora al código**:
+dice que se fija 1.74 por «diez años menos de CVEs que la 1.64 de JMRTD» e incluye el
+arreglo de **CVE-2023-33201**. Con el cambio, esa protección se perdió.
+
+Es plausible que el downgrade fuera necesario para que `PACEKeySpec.createMRZKey` funcione
+en tiempo de ejecución, pero **nadie lo dejó escrito ni lo midió**. Hay que decidir entre
+subir JMRTD, reintroducir 1.74 comprobando que PACE-MRZ siga funcionando, o aceptar el
+riesgo por escrito. No debe quedarse así por omisión.
+
+### P-99 (media, corregida): perder la tarjeta se reportaba como CAN equivocado
+
+En dispositivo real, una `TagLostException` leyendo **EF.CardAccess** (fichero `0x011C`,
+que se lee *antes* de PACE) llegaba a la interfaz como «No se pudo abrir el canal seguro —
+la causa más frecuente es un CAN equivocado. Revisa los dígitos».
+
+Diagnóstico falso: la clave nunca llegó a probarse. Se mandaba al ciudadano a corregir un
+número que estaba bien, cuando lo único que pasó es que movió la cédula.
+
+Origen: `PassportReaderModule.kt` tenía un `catch (e: Throwable)` que mandaba *todo* como
+`E_PACE_FAILED`, y `nfcService.ts` mapea ese código a `action: 'fix_can'`.
+
+Corregido: `isTagLost()` recorre la cadena de causas (JMRTD entierra la excepción bajo
+`CardServiceException` e `IOException`), se emite `E_TAG_LOST`, y el nuevo caso en
+`describeReadFailure` da `retry_positioning` sin mencionar los dígitos. Con test.
+
+De paso, el texto de `E_PACE_FAILED` ya no culpa solo al número: ahora que la clave puede
+derivarse también de las dos fechas, señalar un único campo llevaba a corregir el campo
+equivocado.
+
+### P-100 (media, SIN CORREGIR): el formulario se pinta encima del título
+
+`ScanScreen.tsx:405` — `scannerContainer` centra con `flex: 1` un contenido que pasó de un
+campo a tres, más el círculo del escáner. Cuando un hijo centrado desborda, flexbox lo
+saca **por los dos lados**; sin `ScrollView`, lo que sale por arriba se pinta sobre el
+header. Visible en dispositivo: «LECTURA eMRTD» queda tapado.
+
+Arreglo propuesto: `ScrollView` con `contentContainerStyle={{ flexGrow: 1 }}` y quitar el
+`justifyContent: 'center'`. Con tres campos y el teclado abierto esta pantalla ya no cabe
+en un teléfono pequeño.
+
+### P-101 (crítica, SIN RESOLVER): el servidor no reconoce el RUN de la cédula real
+
+Es el bloqueante del alta. El chip se lee, los bytes crudos llegan al backend, la
+Autenticación Pasiva pasa, y entonces `cedula_nfc.py:224` falla:
+
+> La MRZ del documento no expone un RUN reconocible.
+
+Recorrido: `mrz.py:179` toma `optional_data = line1[15:30]` (TD1) y `cedula_nfc.py:78` lo
+contrasta contra `^(?P<body>[0-9]{6,8})-?(?P<check>[0-9K])$`.
+
+Un RUN de 9 caracteres sin guion sí casa con ese patrón, así que **ese campo contiene otra
+cosa**. Hipótesis por descartar: (1) el RUN no viaja en la MRZ sino en DG11/DG13 —la más
+probable y la más cara, porque cambia qué data groups hay que pedir al chip—; (2) lleva un
+dígito de control del propio campo opcional y sobra un carácter; (3) el DG1 llega recortado
+y el corte `[15:30]` no cae donde se cree.
+
+**Cómo averiguarlo sin registrar el RUN de nadie:** un log de *forma, no valor* — longitud
+y máscara de clases de carácter (`len=14 DDDDDDDDD<<<<<`). Distingue entre las tres
+hipótesis sin escribir el número en ningún sitio. Borrarlo después.
+
+**No relajar `_RUN_PATTERN` para desbloquear la demo.** El dígito verificador se comprueba
+justamente porque de ese número cuelga la identidad entera de la persona.
