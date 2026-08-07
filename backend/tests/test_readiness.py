@@ -5,6 +5,7 @@ import pytest
 from app.core import readiness
 from app.core.config import settings
 from app.core.database import Database
+from app.services import chain_service
 
 
 async def test_live_endpoint_does_not_depend_on_external_services(client):
@@ -46,6 +47,112 @@ async def test_production_rejects_demo_mode_in_readiness(client, monkeypatch):
         "no está permitido" in blocker
         for blocker in data["configuration"]["minting"]["blockers"]
     )
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("disabled", "MINT_MODE=disabled"),
+        ("demo", "no está permitido"),
+        ("onchain", "/membership/mint-zk"),
+    ],
+)
+async def test_production_never_mints_through_the_mongo_endpoint(
+    client, monkeypatch, mode, expected
+):
+    """`/membership/mint` no tiene ningún modo válido en producción.
+
+    Se comprobaba con un bloqueador fijo que decía que el minteo «aún no
+    consume una verificación de identidad de un solo uso». Eso dejó de ser
+    cierto con ROADMAP 1.10 / P-4 y se retiró por informar de un motivo falso;
+    este test fija que retirarlo no abrió ninguna puerta.
+    """
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "MINT_MODE", mode)
+
+    minting = (await client.get("/health/ready")).json()["configuration"]["minting"]
+
+    assert minting["available"] is False
+    assert any(expected in blocker for blocker in minting["blockers"])
+    # Y el motivo que se informa es el real, no el que ya se arregló.
+    assert not any("un solo uso" in blocker for blocker in minting["blockers"])
+
+
+def _production_environment(monkeypatch):
+    """Un despliegue de producción con todo lo exigible ya puesto."""
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "DEBUG", False)
+    monkeypatch.setattr(settings, "IDENTITY_PROVIDER", "cedula-nfc")
+    monkeypatch.setattr(settings, "MEMBERSHIP_SOURCE", "onchain")
+    monkeypatch.setattr(settings, "SIGNED_BALLOTS_REQUIRED", True)
+    monkeypatch.setattr(settings, "CORS_ORIGINS", "https://daociudadana.cl")
+    monkeypatch.setattr(settings, "SIWE_DOMAIN", "daociudadana.cl")
+    monkeypatch.setattr(settings, "SIWE_URI", "https://daociudadana.cl")
+    monkeypatch.setattr(settings, "REDIS_URL", "redis://redis:6379/0")
+    monkeypatch.setattr(settings, "MONGO_URL", "mongodb+srv://u:p@c.example.net/dao")
+    monkeypatch.setattr(settings, "SECRET_KEY", "s" * 48)
+    monkeypatch.setattr(settings, "IDENTITY_PEPPER", "p" * 48)
+    # `conftest` vacía la configuración de cadena para que la suite no hable
+    # con ningún RPC. Aquí hace falta darla por configurada, porque lo que se
+    # está probando es justo el camino de minteo on-chain.
+    monkeypatch.setattr(chain_service, "configuration_errors", lambda: {})
+    monkeypatch.setattr(settings, "SBT_CONTRACT_ADDRESS", "0x" + "ab" * 20)
+    # Llave de prueba conocida de Hardhat: no custodia nada y nunca ha tenido
+    # fondos. Hace falta una válida de verdad porque el requisito la construye
+    # con eth_account y una cadena cualquiera falla.
+    monkeypatch.setattr(
+        settings,
+        "IDENTITY_ISSUER_PRIVATE_KEY",
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+    )
+
+
+_HEALTHY_RELAYER = {
+    "checked": True,
+    "ready": True,
+    "chain_id": 11155111,
+    "paused": False,
+    "can_approve_roots": True,
+    "errors": [],
+}
+
+
+def test_production_readiness_is_reachable(monkeypatch):
+    """Antes era INALCANZABLE: `ready` exigía `/membership/mint`.
+
+    Ese endpoint tiene sus tres modos bloqueados en producción a propósito, así
+    que ningún despliegue podía dar verde hiciera lo que hiciera. Una señal
+    permanentemente en rojo no informa de nada. El camino real de producción es
+    `/membership/mint-zk`, y es el que ahora se exige.
+    """
+    _production_environment(monkeypatch)
+
+    status = readiness.status(_HEALTHY_RELAYER)
+
+    # Un fallo aquí tiene que decir QUÉ falta, o depurarlo obliga a instrumentar
+    # a mano lo que el propio estado ya sabe.
+    assert status["production_ready"] is True, {
+        "missing": [m["key"] for m in status["missing"]],
+        "blockers": status["blockers"],
+        "zk_relayer": status["minting"]["zk_relayer"]["blockers"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("runtime", "expected"),
+    [
+        (None, "sondeo"),
+        ({**_HEALTHY_RELAYER, "can_approve_roots": False}, "ROOT_MANAGER_ROLE"),
+        ({**_HEALTHY_RELAYER, "ready": False, "errors": ["RPC caído"]}, "RPC caído"),
+    ],
+)
+def test_production_readiness_still_fails_closed(monkeypatch, runtime, expected):
+    """Alcanzable no es lo mismo que regalado: sin relayer sano, no hay verde."""
+    _production_environment(monkeypatch)
+    status = readiness.status(runtime)
+
+    assert status["production_ready"] is False
+    assert any(expected in b for b in status["minting"]["zk_relayer"]["blockers"])
 
 
 async def test_readiness_fails_when_required_indexes_are_missing(client, monkeypatch):

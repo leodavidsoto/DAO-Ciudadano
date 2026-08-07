@@ -500,7 +500,16 @@ def report_at_startup() -> None:
         logger.warning("readiness: minteo bloqueado -> %s", blocker)
     for blocker in config_blockers:
         logger.warning("readiness: configuración bloqueada -> %s", blocker)
-    if not missing and minting["available"] and not config_blockers:
+    # En producción el camino de minteo es el relayer ZK, no `/membership/mint`
+    # (ver `status()`). Sin esto, el arranque nunca podía decir "listo".
+    for blocker in minting["zk_relayer"]["blockers"]:
+        logger.warning("readiness: relayer ZK -> %s", blocker)
+    minting_path_ready = (
+        minting["zk_relayer"]["available"]
+        if settings.is_production
+        else minting["available"]
+    )
+    if not missing and minting_path_ready and not config_blockers:
         logger.info("readiness: el entorno seleccionado está listo")
 
 
@@ -583,10 +592,16 @@ def minting_status(onchain_runtime: dict | None = None) -> dict:
             "va por /membership/mint-zk"
         )
 
-    if settings.is_production:
-        blockers.append(
-            "el minteo aún no consume una verificación de identidad de un solo uso"
-        )
+    # Aquí había un bloqueador fijo que decía que el minteo «aún no consume una
+    # verificación de identidad de un solo uso». Dejó de ser cierto: desde
+    # ROADMAP 1.10 / AUDIT P-4, `/membership/mint` exige un `membership_grant`,
+    # lo reclama y lo quema (`routers/membership.py`). Mantenerlo hacía que
+    # `/health` informara de un motivo falso.
+    #
+    # Producción sigue fallando cerrada por su cuenta: los tres modos posibles
+    # tienen ya su propio bloqueador —`disabled`, `demo` no permitido, y
+    # `onchain` redirigido a `/membership/mint-zk`—, así que ningún despliegue
+    # de producción puede mintear por este endpoint.
 
     return {
         "mode": settings.MINT_MODE,
@@ -601,7 +616,19 @@ def status(onchain_runtime: dict | None = None) -> dict:
     missing = missing_requirements()
     minting = minting_status(onchain_runtime)
     config_blockers = deployment_blockers()
-    ready = not missing and minting["available"] and not config_blockers
+    # Qué camino de minteo tiene que estar sano depende del entorno, porque no
+    # son el mismo endpoint. En producción el minteo real es
+    # `/membership/mint-zk` (relayer ZK contra el contrato); `/membership/mint`
+    # es el registro en Mongo y sus tres modos están bloqueados en producción a
+    # propósito. Exigirlo aquí hacía `production_ready` INALCANZABLE por
+    # construcción: ningún despliegue podía dar verde, hiciera lo que hiciera,
+    # y una señal que siempre está en rojo no informa de nada.
+    minting_path_ready = (
+        minting["zk_relayer"]["available"]
+        if settings.is_production
+        else minting["available"]
+    )
+    ready = not missing and minting_path_ready and not config_blockers
     return {
         "environment": settings.APP_ENV,
         "ready": ready,
