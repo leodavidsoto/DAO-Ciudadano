@@ -78,6 +78,22 @@ def test_parses_a_td1_identity_card():
     assert parsed.optional_data == RUN
 
 
+def test_td1_exposes_both_optional_fields():
+    """ICAO define dos campos opcionales en TD1; solo se leía el primero.
+
+    Contra una cédula chilena real el de la línea 1 trae tres caracteres, donde
+    un RUN no cabe (AUDIT P-101), así que el de la línea 2 tiene que ser
+    legible para poder descartarlo o usarlo.
+    """
+    parsed = mrz.parse(fx.dg1(fx.td1_mrz(run="123456785", optional_2="987654321")))
+
+    assert parsed.optional_data == "123456785"
+    assert parsed.optional_data_2 == "987654321"
+
+    # Un TD1 sin ese campo lo devuelve vacío, no None: el relleno no es dato.
+    assert mrz.parse(fx.dg1(fx.td1_mrz())).optional_data_2 == ""
+
+
 def test_rejects_a_dg1_that_is_not_an_mrz():
     with pytest.raises(mrz.MRZError):
         mrz.parse(b"\x61\x04\x5f\x1f\x02ab")

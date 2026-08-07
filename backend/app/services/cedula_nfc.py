@@ -248,8 +248,12 @@ def verify_reading(sod: str, data_groups: Mapping[str, str]) -> VerifiedCedula:
         # Un RUN sigue siendo un identificador civil y no entra en un log ni
         # para depurar. Borrar esto en cuanto se sepa la respuesta.
         logger.warning(
-            "El campo opcional de la MRZ no expone un RUN reconocible (forma: %s)",
+            "El campo opcional de la MRZ no expone un RUN reconocible "
+            "(formato: %s | opcional-1: %s | opcional-2: %s | documento: %s)",
+            mrz.format,
             describe_field_shape(mrz.optional_data),
+            describe_field_shape(mrz.optional_data_2),
+            describe_field_shape(mrz.document_number),
         )
         raise
 

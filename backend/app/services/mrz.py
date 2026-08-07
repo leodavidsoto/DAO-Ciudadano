@@ -37,9 +37,13 @@ class MRZ:
     date_of_birth: str
     date_of_expiry: str
     sex: str
-    #: Datos opcionales de la línea 1 (TD1) o `personalNumber` (TD3). En la
-    #: cédula chilena es donde viaja el RUN.
+    #: Datos opcionales de la línea 1 (TD1) o `personalNumber` (TD3).
     optional_data: str
+    #: Segundo campo de datos opcionales, que ICAO 9303 solo define para TD1
+    #: (línea 2, posiciones 19-29). Vacío en TD2 y TD3, que no lo tienen.
+    #: Se lee porque el primero no basta: contra una cédula chilena real trae
+    #: tres caracteres, y un RUN no cabe ahí (AUDIT P-101).
+    optional_data_2: str
     format: str
 
     @property
@@ -175,8 +179,8 @@ def _parse_td1(mrz: str) -> MRZ:
         date_of_birth=date_of_birth,
         date_of_expiry=date_of_expiry,
         sex=line2[7].replace(_FILLER, ""),
-        # El RUN de la cédula chilena viaja aquí.
         optional_data=line1[15:30].replace(_FILLER, ""),
+        optional_data_2=line2[18:29].replace(_FILLER, ""),
         format="TD1",
     )
 
@@ -201,6 +205,7 @@ def _parse_td2(mrz: str) -> MRZ:
         date_of_expiry=date_of_expiry,
         sex=line2[20].replace(_FILLER, ""),
         optional_data=line2[28:35].replace(_FILLER, ""),
+        optional_data_2="",
         format="TD2",
     )
 
@@ -228,5 +233,6 @@ def _parse_td3(mrz: str) -> MRZ:
         date_of_expiry=date_of_expiry,
         sex=line2[20].replace(_FILLER, ""),
         optional_data=personal_number.replace(_FILLER, ""),
+        optional_data_2="",
         format="TD3",
     )

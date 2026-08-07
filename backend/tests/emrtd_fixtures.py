@@ -311,6 +311,7 @@ def td1_mrz(
     document_code: str = "I<",
     surname: str = "PEREZ",
     given_names: str = "JUAN",
+    optional_2: str = "",
 ) -> str:
     """MRZ TD1 (90 caracteres) con los dígitos verificadores CALCULADOS.
 
@@ -328,8 +329,16 @@ def td1_mrz(
     )
     composite_birth = date_of_birth + _mrz_check_digit(date_of_birth)
     composite_expiry = date_of_expiry + _mrz_check_digit(date_of_expiry)
+    # Segundo campo opcional (posiciones 19-29 de la línea 2). ICAO lo define
+    # solo para TD1 y este proyecto lo ignoraba: contra una cédula real es
+    # donde puede estar el RUN (AUDIT P-101).
+    optional_2_field = optional_2.ljust(11, "<")
     line2 = (
-        composite_birth + "M" + composite_expiry + nationality.ljust(3, "<") + "<" * 11
+        composite_birth
+        + "M"
+        + composite_expiry
+        + nationality.ljust(3, "<")
+        + optional_2_field
     )
     line2 += _mrz_check_digit(
         number
@@ -337,6 +346,7 @@ def td1_mrz(
         + run.ljust(15, "<")
         + composite_birth
         + composite_expiry
+        + optional_2_field
     )
     line3 = f"{surname}<<{given_names}".ljust(30, "<")[:30]
 
