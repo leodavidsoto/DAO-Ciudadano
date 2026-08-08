@@ -16,6 +16,8 @@ abierto; todo lo demás está corregido y se conserva como registro.
 | P-100 | Media | `ScanScreen.tsx:405` pinta el formulario encima del título con el teclado abierto | 🔴 Sin corregir |
 | P-102 | Alta | La app móvil no puede mintear: `apiService.ts:121` llama a `/membership/mint`, bloqueado en producción | 🟡 En curso |
 | P-103 | Informativa | Revocar no libera el nullifier: cada cédula sirve para un solo minteo por despliegue | ⚪ Por diseño. Consecuencia operativa, no defecto |
+| P-105 | Alta | La Autenticación Activa se exige por defecto en producción, pero el cliente móvil no la envía: toda alta desde la app recibiría 401 el día del despliegue | 🔴 Abierto. Bloquea el despliegue, no el merge |
+| P-106 | Alta | `CEDULA_REQUIRE_ACTIVE_AUTH=false` reabre el replay en producción y `readiness.py` no lo señala | 🔴 Abierto |
 | — | Alta | **D-3: el tally MACI está roto.** Las señales públicas del contrato y las del circuito no coinciden, así que ninguna prueba auténtica pasa `publishTally` | 🔴 En curso |
 
 Fuera de esta tabla, dos límites que no son hallazgos sino propiedades del
@@ -2432,3 +2434,74 @@ contra la misma suposición equivocada — exactamente el patrón que ocultó P-
 P-101 durante meses. No se fusiona tal cual. El encargo en curso
 (`docs/PROMPT_ANTI_REPLAY.md`) parte de vectores de prueba de ICAO, no de la
 propia implementación.
+
+---
+
+## Vigesimotercera pasada (08-08-2026) — revisión adversaria de la Autenticación Activa
+
+Revisión de la implementación de AA **antes** de fusionarla, con el precedente
+de que el intento anterior (`bdb78cf`) usaba PKCS1v15 y tenía 96 líneas de
+tests en verde. Informe completo en
+`docs/hallazgos/anti-replay-autenticacion-activa.md`.
+
+**La criptografía es correcta y esta vez sí está anclada.** El KAT de
+`test_active_auth.py:41-70` es el `doTest13` de `ISO9796Test.java` de
+BouncyCastle, con procedencia verificada contra `bcgit/bc-java`, y ancla en las
+dos direcciones: el verificador acepta una firma que no calculó, y el firmante
+del fixture la reproduce byte a byte. Sin esa segunda mitad, la suite estaría
+comprobando que dos módulos propios se entienden entre ellos — que es
+exactamente lo que ocurrió en P-97 y P-101. Hay además un test de regresión que
+rechaza una firma PKCS1v15.
+
+El desafío lo emite el servidor, se consume de forma atómica con
+`find_one_and_update` **antes** de verificar nada, y DG15 va ligado al hash que
+firmó el SOD por partida doble. Existe el test del ataque real: reenviar una
+captura byte a byte devuelve 401.
+
+### P-105 (alta, abierta): se exige AA en producción y el móvil no la envía
+
+`config.py:318-329` hace que `cedula_requires_active_auth` valga `is_production`
+por defecto. El cliente no está cableado:
+
+- nadie llama a `POST /auth/cedula/aa-challenge`;
+- `startPACESession` se declara con cuatro argumentos
+  (`mobile/src/services/nfcService.ts:40-45`) y se llama con tres (`:826`), así
+  que `aaChallenge` llega indefinido — y en iOS un desajuste de firma no falla
+  en compilación, falla en ejecución;
+- `apiService.verifyCedula` (`apiService.ts:104-109`) sigue enviando solo DG1 y
+  DG2, sin `dg15`, `dg14` ni `active_authentication`.
+
+**Consecuencia:** el día que se despliegue esta rama, toda alta desde la app
+real recibiría 401. La dirección del fallo es la segura, pero rompe el camino
+principal. Bloquea el despliegue, no el merge.
+
+### P-106 (alta, abierta): la protección se puede apagar sin dejar rastro
+
+`CEDULA_REQUIRE_ACTIVE_AUTH=false` en `APP_ENV=production` devuelve `False` y el
+camino pasivo vuelve a emitir grants, es decir, reabre el replay con una
+variable de entorno. Contrasta con la disciplina que el propio repositorio
+aplica a `CSCA_TRUST_STORE_PATH` (`config.py:216-224`: «no hay valor que la
+desactive»). Agravante: `readiness.py` no expone esta política, así que un
+despliegue degradado no lo señala en ningún sitio.
+
+### Deuda menor registrada
+
+La rama **ECDSA no está anclada** a ningún vector de BSI TR-03111: fixture y
+verificador comparten librería y convención, que es el patrón de la regla 11
+(riesgo real bajo, las cédulas chilenas usan RSA). La **atomicidad del desafío
+no está probada** con un test concurrente. El **parser DS1 es más laxo que el
+estándar** en tres puntos comprobados ejecutando el código, ninguno explotable
+sin la clave privada. `parse_dg15` **no impone suelo de tamaño de clave**.
+
+### Corrección al rate limiter, rescatada de un worktree
+
+De `dc8b530`: el reinicio del limitador entre tests recorría
+`app.middleware_stack`, que Starlette deja en `None` hasta que la aplicación
+arranca, así que no encontraba nada y los contadores se acumulaban — la suite
+fallaba esporádicamente con 429. Ahora se toma el singleton del módulo.
+
+**No se trajo su segundo cambio.** Sustituía el borrado por namespace de
+`RedisRateLimitStore.reset()` por un `flushdb()`, que borra la base entera. El
+razonamiento era que los tests usan la DB 15, pero nada lo obliga:
+`TEST_REDIS_URL` acepta cualquier DB y con la 0 se llevaría por delante el
+Redis local del desarrollador.

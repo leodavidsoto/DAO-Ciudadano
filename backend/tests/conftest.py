@@ -117,19 +117,18 @@ _stores_to_reset = []
 
 
 def _reset_rate_limiter(asgi_app):
-    """Clear in-memory rate-limit counters left over from previous tests.
+    """Register the rate-limit store so counters don't leak between tests.
 
-    The middleware stack is a chain of wrappers; walk it looking for the
-    RateLimitMiddleware instance (identified by its state attributes).
+    This used to walk `app.middleware_stack` looking for the middleware
+    instance, but Starlette leaves that attribute as None until the app
+    starts, so the walk found nothing and the counters accumulated across
+    tests: the suite failed sporadically with 429. The store is a module-level
+    singleton, so take it straight from there.
     """
-    node = getattr(asgi_app, "middleware_stack", None)
-    seen = set()
-    while node is not None and id(node) not in seen:
-        seen.add(id(node))
-        if hasattr(node, "store") and hasattr(node, "PENALTY_THRESHOLD"):
-            # Todo el estado vive en el almacén desde ROADMAP 3.8.
-            _stores_to_reset.append(node.store)
-        node = getattr(node, "app", None)
+    from main import rate_limit_store
+
+    if rate_limit_store not in _stores_to_reset:
+        _stores_to_reset.append(rate_limit_store)
 
 
 @pytest.fixture
