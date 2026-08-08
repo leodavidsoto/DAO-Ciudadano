@@ -18,7 +18,10 @@ import org.jmrtd.PACEKeySpec
 import org.jmrtd.PassportService
 import org.jmrtd.lds.CardAccessFile
 import org.jmrtd.lds.PACEInfo
+import org.jmrtd.lds.ActiveAuthenticationInfo
 import org.jmrtd.lds.SODFile
+import org.jmrtd.lds.icao.DG14File
+import org.jmrtd.lds.icao.DG15File
 import org.jmrtd.lds.icao.DG1File
 import org.jmrtd.lds.icao.DG2File
 import java.io.ByteArrayInputStream
@@ -54,6 +57,19 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Civil. Devolver `true` ahí sería exactamente la capacidad fingida que
  * docs/HANDOFF.md prohíbe.
  *
+ * Autenticación Activa (ICAO 9303-11 §6.1)
+ * ────────────────────────────────────────
+ * La Pasiva demuestra que Chile firmó esos datos; no demuestra que el chip
+ * esté aquí. Si el servidor manda un desafío, se lee EF.DG15 y se le pide al
+ * chip que lo firme con INTERNAL AUTHENTICATE. La firma NO se verifica aquí:
+ * viaja en crudo al backend, que es quien tiene el desafío original y quien
+ * comprueba que la clave de DG15 esté declarada en el EF.SOD. Un veredicto
+ * calculado en este teléfono no es evidencia que nadie más pueda comprobar.
+ *
+ * Si el documento no trae DG15, no admite Autenticación Activa y se dice tal
+ * cual (`supported: false`, con motivo). No se inventa una firma ni se
+ * devuelve `performed: true` por defecto.
+ *
  * El CAN es un secreto de la tarjeta: no se registra en logs ni se devuelve.
  */
 class PassportReaderModule(reactContext: ReactApplicationContext) :
@@ -64,6 +80,9 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
 
         /** Carpeta de assets con los certificados CSCA en DER o PEM. */
         private const val CSCA_ASSET_DIR = "csca"
+
+        /** ICAO 9303-11 §6.1: el desafío de la AA son 8 bytes. */
+        private const val ACTIVE_AUTH_CHALLENGE_BYTES = 8
 
         /** Espera máxima a que el ciudadano acerque la cédula. */
         private const val TAG_DISCOVERY_TIMEOUT_MS = 60_000L
@@ -117,9 +136,47 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
         fun isDone(): Boolean = done.get()
     }
 
+    /**
+     * @param aaChallenge Desafío de Autenticación Activa en base64, emitido por
+     *   el servidor. Cadena vacía = no hacer AA. NUNCA lo genera este módulo:
+     *   un desafío elegido por el cliente no prueba nada, porque quien captura
+     *   una lectura captura también el par desafío+firma y puede reenviarlo.
+     */
     @ReactMethod
-    fun startPACESession(can: String, dob: String, doe: String, promise: Promise) {
+    fun startPACESession(
+        can: String,
+        dob: String,
+        doe: String,
+        aaChallenge: String,
+        promise: Promise,
+    ) {
         val once = SingleShotPromise(promise)
+
+        val challenge: ByteArray? = if (aaChallenge.isBlank()) {
+            null
+        } else {
+            try {
+                Base64.decode(aaChallenge, Base64.NO_WRAP).also {
+                    // 8 bytes es lo que el chip espera en INTERNAL AUTHENTICATE.
+                    // Otro tamaño solo puede venir de un error nuestro, y mandarlo
+                    // al chip produciría un fallo indescifrable.
+                    if (it.size != ACTIVE_AUTH_CHALLENGE_BYTES) {
+                        once.reject(
+                            "E_INVALID_AA_CHALLENGE",
+                            "El desafío de Autenticación Activa debe medir " +
+                                "$ACTIVE_AUTH_CHALLENGE_BYTES bytes."
+                        )
+                        return
+                    }
+                }
+            } catch (e: IllegalArgumentException) {
+                once.reject(
+                    "E_INVALID_AA_CHALLENGE",
+                    "El desafío de Autenticación Activa no viene en base64 válido."
+                )
+                return
+            }
+        }
 
         val normalizedCan = can.trim().uppercase()
         if (normalizedCan.length < 6 || normalizedCan.length > 15 || !normalizedCan.all { it.isLetterOrDigit() }) {
@@ -160,7 +217,7 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
             // se puede bloquear leyendo el chip sin congelar la UI.
             if (once.isDone()) return@ReaderCallback
             try {
-                val result = readDocument(tag, normalizedCan, dob, doe)
+                val result = readDocument(tag, normalizedCan, dob, doe, challenge)
                 once.resolve(result)
             } catch (e: PassportReadError) {
                 once.reject(e.code, e.message ?: "Error leyendo la cédula.")
@@ -236,7 +293,13 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
      * tal cual está en el chip, no el objeto ya parseado: volver a serializar
      * el DG1 daría bytes distintos y la comprobación fallaría siempre.
      */
-    private fun readDocument(tag: Tag, can: String, dob: String, doe: String): WritableMap {
+    private fun readDocument(
+        tag: Tag,
+        can: String,
+        dob: String,
+        doe: String,
+        aaChallenge: ByteArray?,
+    ): WritableMap {
         val isoDep = IsoDep.get(tag)
             ?: throw PassportReadError(
                 "E_TAG_NOT_SUPPORTED",
@@ -296,9 +359,30 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
             val dg1 = DG1File(ByteArrayInputStream(dg1Raw))
             val sod = SODFile(ByteArrayInputStream(sodRaw))
 
+            // El SOD dice qué data groups declara el documento. Preguntárselo a
+            // él, y no intentar la lectura a ver qué pasa, evita confundir "no
+            // admite AA" con "se movió la cédula".
+            val declaredDataGroups = try {
+                sod.dataGroupHashes.keys.map { it.toInt() }.toSet()
+            } catch (_: Exception) {
+                emptySet<Int>()
+            }
+
+            val activeAuth = performActiveAuthentication(
+                service, declaredDataGroups, aaChallenge
+            )
+
+            // DG14/DG15 entran en la Autenticación Pasiva como cualquier otro
+            // archivo: es lo que liga la clave del chip a la firma del Registro
+            // Civil. Sin eso, la firma de la AA la podría producir cualquiera
+            // con su propia clave.
+            val verifiedGroups = mutableMapOf(1 to dg1Raw, 2 to dg2Raw)
+            activeAuth.dg15Raw?.let { verifiedGroups[15] = it }
+            activeAuth.dg14Raw?.let { verifiedGroups[14] = it }
+
             val outcome = PassiveAuthenticator.verify(
                 sod,
-                mapOf(1 to dg1Raw, 2 to dg2Raw),
+                verifiedGroups,
                 loadTrustAnchors(),
             )
             val mrz = dg1.mrzInfo
@@ -331,8 +415,15 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
                 // no verifica no tiene nada que mandar a ningún lado.
                 putMap(
                     "files",
-                    if (passed) buildFiles(sodRaw, dg1Raw, dg2Raw) else Arguments.createMap()
+                    if (passed) {
+                        buildFiles(sodRaw, dg1Raw, dg2Raw, activeAuth)
+                    } else {
+                        Arguments.createMap()
+                    }
                 )
+                // Viaja pase o no la verificación local: si el chip no admite
+                // AA, la app tiene que poder decirlo en vez de callarse.
+                putMap("activeAuthentication", activeAuth.toWritableMap(passed))
                 putMap(
                     "verification",
                     toWritableMap(
@@ -454,6 +545,149 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
     }
 
     /**
+     * Resultado de intentar la Autenticación Activa. `performed` solo es
+     * `true` si el chip devolvió una firma; `reason` explica cualquier otro
+     * caso. No hay ningún camino que devuelva `true` sin firma.
+     */
+    private class ActiveAuthAttempt(
+        val requested: Boolean,
+        val supported: Boolean,
+        val performed: Boolean,
+        val signature: ByteArray? = null,
+        val dg15Raw: ByteArray? = null,
+        val dg14Raw: ByteArray? = null,
+        val reason: String? = null,
+    ) {
+        fun toWritableMap(passed: Boolean): WritableMap = Arguments.createMap().apply {
+            putBoolean("requested", requested)
+            putBoolean("supported", supported)
+            putBoolean("performed", performed)
+            // La firma solo sale si la verificación local pasó, igual que los
+            // archivos: una lectura sin verificar no tiene nada que mandar.
+            if (performed && passed && signature != null) {
+                putString("signature", Base64.encodeToString(signature, Base64.NO_WRAP))
+            }
+            reason?.let { putString("reason", it) }
+        }
+    }
+
+    /**
+     * Lee EF.DG15 y le pide al chip que firme el desafío del servidor.
+     *
+     * Aquí NO se verifica la firma. El backend es quien conserva el desafío
+     * original y quien comprueba que la clave de DG15 esté declarada en el
+     * EF.SOD; una comprobación hecha solo en este teléfono es una sugerencia,
+     * no evidencia (es exactamente el fallo que arregló `passive_auth.py`).
+     */
+    private fun performActiveAuthentication(
+        service: PassportService,
+        declaredDataGroups: Set<Int>,
+        challenge: ByteArray?,
+    ): ActiveAuthAttempt {
+        if (challenge == null) {
+            return ActiveAuthAttempt(
+                requested = false,
+                supported = declaredDataGroups.contains(15),
+                performed = false,
+                reason = "El servidor no pidió Autenticación Activa en esta lectura.",
+            )
+        }
+        if (declaredDataGroups.isNotEmpty() && !declaredDataGroups.contains(15)) {
+            // Un documento sin DG15 no admite AA. Decirlo es información
+            // verdadera; fingir que sí y no mandar firma sería peor.
+            return ActiveAuthAttempt(
+                requested = true,
+                supported = false,
+                performed = false,
+                reason = "El documento no incluye EF.DG15: no admite Autenticación Activa.",
+            )
+        }
+
+        val dg15Raw = try {
+            readFile(service, PassportService.EF_DG15, "DG15")
+        } catch (e: PassportReadError) {
+            return ActiveAuthAttempt(
+                requested = true,
+                supported = false,
+                performed = false,
+                reason = "No se pudo leer EF.DG15: ${e.message}",
+            )
+        }
+
+        val publicKey = try {
+            DG15File(ByteArrayInputStream(dg15Raw)).publicKey
+        } catch (e: Exception) {
+            return ActiveAuthAttempt(
+                requested = true,
+                supported = false,
+                performed = false,
+                dg15Raw = dg15Raw,
+                reason = "EF.DG15 no contiene una clave pública legible: ${describeFailure(e)}",
+            )
+        }
+
+        // DG14 solo hace falta cuando el chip firma con ECDSA: ahí es donde
+        // ICAO pone el hash, y no hay valor por defecto que valga.
+        var dg14Raw: ByteArray? = null
+        var digestAlgorithm = "SHA-1"
+        var signatureAlgorithm = "SHA1WithRSA/ISO9796-2"
+        if (declaredDataGroups.isEmpty() || declaredDataGroups.contains(14)) {
+            dg14Raw = try {
+                readFile(service, PassportService.EF_DG14, "DG14")
+            } catch (_: PassportReadError) {
+                null
+            }
+        }
+        dg14Raw?.let { raw ->
+            try {
+                val info = DG14File(ByteArrayInputStream(raw))
+                    .activeAuthenticationInfos
+                    .firstOrNull()
+                info?.signatureAlgorithmOID?.let { oid ->
+                    signatureAlgorithm = oid
+                    digestAlgorithm = digestForSignatureOID(oid) ?: digestAlgorithm
+                }
+            } catch (_: Exception) {
+                // DG14 ilegible: el backend decidirá. No se descarta el archivo
+                // —su hash sigue estando en el SOD— ni se inventa un algoritmo.
+            }
+        }
+
+        return try {
+            val result = service.doAA(
+                publicKey, digestAlgorithm, signatureAlgorithm, challenge
+            )
+            ActiveAuthAttempt(
+                requested = true,
+                supported = true,
+                performed = true,
+                signature = result.response,
+                dg15Raw = dg15Raw,
+                dg14Raw = dg14Raw,
+            )
+        } catch (e: Exception) {
+            ActiveAuthAttempt(
+                requested = true,
+                supported = true,
+                performed = false,
+                dg15Raw = dg15Raw,
+                dg14Raw = dg14Raw,
+                reason = "El chip rechazó INTERNAL AUTHENTICATE: ${describeFailure(e)}",
+            )
+        }
+    }
+
+    /** Hash que declara un OID de firma plana ECDSA de BSI TR-03111. */
+    private fun digestForSignatureOID(oid: String): String? = when (oid) {
+        ActiveAuthenticationInfo.ECDSA_PLAIN_SHA1_OID -> "SHA-1"
+        ActiveAuthenticationInfo.ECDSA_PLAIN_SHA224_OID -> "SHA-224"
+        ActiveAuthenticationInfo.ECDSA_PLAIN_SHA256_OID -> "SHA-256"
+        ActiveAuthenticationInfo.ECDSA_PLAIN_SHA384_OID -> "SHA-384"
+        ActiveAuthenticationInfo.ECDSA_PLAIN_SHA512_OID -> "SHA-512"
+        else -> null
+    }
+
+    /**
      * EF.SOD y los data groups en base64, sin saltos de línea.
      *
      * NO_WRAP importa: `Base64.DEFAULT` mete '\n' cada 76 caracteres y el
@@ -463,10 +697,20 @@ class PassportReaderModule(reactContext: ReactApplicationContext) :
         sodRaw: ByteArray,
         dg1Raw: ByteArray,
         dg2Raw: ByteArray,
+        activeAuth: ActiveAuthAttempt,
     ): WritableMap = Arguments.createMap().apply {
         putString("sod", Base64.encodeToString(sodRaw, Base64.NO_WRAP))
         putString("dg1", Base64.encodeToString(dg1Raw, Base64.NO_WRAP))
         putString("dg2", Base64.encodeToString(dg2Raw, Base64.NO_WRAP))
+        // Solo se envían si de verdad se leyeron. Un DG15 ausente tiene que
+        // llegar al backend como ausente, no como una cadena vacía que su
+        // decodificador estricto interpretaría como un archivo corrupto.
+        activeAuth.dg15Raw?.let {
+            putString("dg15", Base64.encodeToString(it, Base64.NO_WRAP))
+        }
+        activeAuth.dg14Raw?.let {
+            putString("dg14", Base64.encodeToString(it, Base64.NO_WRAP))
+        }
     }
 
     private fun buildData(dg1: DG1File, dg2Raw: ByteArray): WritableMap {

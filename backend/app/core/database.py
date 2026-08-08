@@ -131,6 +131,13 @@ class Database:
             )
             # Grants civiles: un digest solo existe una vez.
             await cls.get_db()["identity_grants"].create_index("digest", unique=True)
+            # Autenticación Activa (ICAO 9303-11 §6.1): un desafío emitido una
+            # sola vez. El índice único no es cosmético — es lo que impide que
+            # dos filas compartan `challenge_id` y que el consumo atómico se
+            # quede corto si algún camino insertara dos veces.
+            await cls.get_db()["cedula_aa_challenges"].create_index(
+                "challenge_id", unique=True
+            )
             # Grants de membresía (ROADMAP 1.10): el índice único sobre `jti`
             # ES el mecanismo de un solo uso. Sin él, dos peticiones
             # simultáneas con el mismo JWT crearían dos reclamos y la

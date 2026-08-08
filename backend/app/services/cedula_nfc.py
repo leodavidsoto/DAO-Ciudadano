@@ -22,21 +22,29 @@ El `subject_key` se deriva del RUN con el pepper del servidor, igual que el
 resto del sistema: es un índice ciego. El RUN en claro no se guarda, no se
 registra y no sale de esta función.
 
-Riesgo declarado, no mitigado: replay
--------------------------------------
+Replay: por qué la Pasiva sola no bastaba
+-----------------------------------------
 La Autenticación Pasiva demuestra que los datos los firmó Chile. NO demuestra
 que el chip esté presente ahora. Quien consiga los bytes de un SOD y sus DG
 —leyendo la cédula ajena con el CAN, o interceptando un payload— puede
-reenviarlos y obtener un grant para ESE titular. Lo que cierra ese hueco es la
-Autenticación Activa o Chip Authentication, donde el chip firma un desafío
-nuestro; no está implementada (ni en el móvil ni aquí).
+reenviarlos y obtener un grant para ESE titular.
 
-Lo que sí acota el daño hoy: el `subject_key` es el del titular del documento,
-no el de quien envía. Un replay no crea una identidad nueva ni permite
-duplicar la de nadie —el árbol de identidades es idempotente por sujeto—, así
-que el ataque se reduce a suplantar a una persona concreta cuyo documento ya
-se leyó físicamente. Sigue siendo grave y sigue abierto: está en el ROADMAP,
-no disimulado detrás de un booleano.
+Eso lo cierra la **Autenticación Activa** (`active_auth`): el chip firma un
+desafío que emite el servidor y que solo vale una vez (`aa_challenge`). Una
+captura completa —SOD, data groups, desafío y firma— no sirve dos veces: el
+desafío ya está quemado, y para el siguiente haría falta la clave privada del
+chip, que no se puede extraer.
+
+Los dos niveles que emite este módulo dicen exactamente qué se comprobó:
+
+  * ``CEDULA_NFC_PASSIVE`` — el documento es auténtico. No prueba presencia
+    del chip, y por tanto sigue siendo replicable por quien capture los bytes.
+  * ``CEDULA_NFC_ACTIVE``  — además, el chip respondió a un desafío nuestro.
+
+En producción solo se admite el segundo (`settings.cedula_requires_active_auth`):
+mientras el camino pasivo pueda producir un grant, el agujero sigue abierto
+para quien lo use. Es una decisión de política y está donde se puede leer, no
+escondida en un `if`.
 """
 
 from __future__ import annotations
@@ -48,7 +56,9 @@ import re
 from dataclasses import dataclass
 from typing import Mapping, Optional
 
+from ..core.config import settings
 from ..core.identity import lookup_key
+from . import active_auth as active_auth_module
 from . import mrz as mrz_module
 from . import passive_auth
 
@@ -56,11 +66,21 @@ logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "cedula-nfc"
 
-#: Nivel que acredita esta vía, y nada más. El nombre dice exactamente qué se
-#: comprobó —Autenticación Pasiva del eMRTD— para no dejar que el grant afirme
-#: presencia del chip ni del titular: sin Autenticación Activa, un replay del
-#: SOD llega hasta aquí (ver el riesgo declarado arriba).
-ASSURANCE_LEVEL = "CEDULA_NFC_PASSIVE"
+#: Autenticación Pasiva y nada más: el documento es auténtico, pero nadie
+#: demostró que el chip estuviera presente. El nombre lo dice para que el
+#: consumidor del grant pueda decidir con esa información delante.
+ASSURANCE_LEVEL_PASSIVE = "CEDULA_NFC_PASSIVE"
+
+#: Pasiva + Activa: además del documento auténtico, el chip firmó un desafío
+#: del servidor que solo valía una vez.
+ASSURANCE_LEVEL_ACTIVE = "CEDULA_NFC_ACTIVE"
+
+#: EF.DG15 (clave pública de AA) y EF.DG14 (SecurityInfos, que declara el hash
+#: cuando la clave es ECDSA). Van dentro de `data_groups` a propósito: así la
+#: Autenticación Pasiva comprueba su hash contra el SOD como el de cualquier
+#: otro archivo, y la clave de AA queda ligada a la firma del Registro Civil.
+DG_ACTIVE_AUTH_PUBLIC_KEY = 15
+DG_SECURITY_INFOS = 14
 
 # Dominio propio para el índice ciego: el mismo RUN nunca debe producir la
 # misma clave aquí y en `lookup_key(rut)` del registro por formulario.
@@ -87,12 +107,28 @@ class CedulaVerificationError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ActiveAuthentication:
+    """Respuesta del chip a un desafío ya resuelto por el servidor.
+
+    El desafío llega en BYTES, no como el identificador que mandó el cliente:
+    quien construye esto tiene que haberlo consumido antes contra
+    `aa_challenge`. Si este dato pudiera venir del cliente, la Autenticación
+    Activa no probaría nada — firmaría un desafío de su elección.
+    """
+
+    challenge: bytes
+    signature: bytes
+
+
+@dataclass(frozen=True)
 class VerifiedCedula:
     #: Índice ciego derivado del RUN. Es lo único que sale de aquí y que
     #: identifica a la persona.
     subject_key: str
     document_number: str
     expires_on: str
+    #: `CEDULA_NFC_PASSIVE` o `CEDULA_NFC_ACTIVE`, según lo que se comprobó.
+    assurance_level: str
     #: Detalle criptográfico para auditoría. Sin datos del titular.
     verification: dict
 
@@ -195,14 +231,80 @@ def _run_check_digit(body: str) -> str:
     return str(remainder)
 
 
-def verify_reading(sod: str, data_groups: Mapping[str, str]) -> VerifiedCedula:
+def _verify_active_authentication(
+    groups: Mapping[int, bytes],
+    result: passive_auth.PassiveAuthResult,
+    active: ActiveAuthentication,
+) -> dict:
+    """Comprueba que el chip firmó NUESTRO desafío con la clave que firmó Chile.
+
+    Las dos mitades tienen que darse. La firma sola no prueba nada: un atacante
+    que fabricara un DG15 con su propia clave pública firmaría el desafío
+    perfectamente. Lo que convierte esa firma en identidad es que el hash del
+    DG15 esté declarado en el EF.SOD — y eso lo comprueba la Autenticación
+    Pasiva, que ya corrió sobre TODOS los data groups recibidos.
+
+    Por eso aquí se exige que 15 aparezca entre `verified_data_groups` y no
+    basta con que venga en la lectura: sin esa comprobación, la Autenticación
+    Activa sería un teatro caro.
+    """
+    dg15 = groups.get(DG_ACTIVE_AUTH_PUBLIC_KEY)
+    if dg15 is None:
+        raise CedulaVerificationError(
+            "La lectura trae una firma de Autenticación Activa pero no el "
+            "EF.DG15 con el que comprobarla."
+        )
+    if DG_ACTIVE_AUTH_PUBLIC_KEY not in result.verified_data_groups:
+        # No debería poder ocurrir —`passive_auth.verify` lanza antes de
+        # llegar aquí si un DG recibido no cuadra con el SOD—, pero la
+        # afirmación es el punto entero de la Autenticación Activa y no se
+        # deja depender de que otro módulo siga comportándose igual mañana.
+        raise CedulaVerificationError(
+            "El EF.DG15 no quedó respaldado por la firma del EF.SOD: la clave "
+            "pública del chip no la puso el Registro Civil."
+        )
+
+    dg14 = groups.get(DG_SECURITY_INFOS)
+    if dg14 is not None and DG_SECURITY_INFOS not in result.verified_data_groups:
+        raise CedulaVerificationError(
+            "El EF.DG14 no quedó respaldado por la firma del EF.SOD."
+        )
+
+    try:
+        outcome = active_auth_module.verify(
+            dg15=dg15,
+            challenge=active.challenge,
+            signature=active.signature,
+            dg14=dg14,
+        )
+    except active_auth_module.ActiveAuthError as exc:
+        raise CedulaVerificationError(str(exc)) from exc
+
+    return outcome.as_dict()
+
+
+def verify_reading(
+    sod: str,
+    data_groups: Mapping[str, str],
+    active: Optional[ActiveAuthentication] = None,
+) -> VerifiedCedula:
     """Verifica una lectura NFC completa y devuelve el sujeto ciego.
 
     Lanza `CedulaVerificationError` en cuanto algo falla. No hay ningún camino
-    que devuelva un `VerifiedCedula` sin haber pasado las cinco condiciones.
+    que devuelva un `VerifiedCedula` sin haber pasado las cinco condiciones —
+    ni, cuando la política lo exige, sin Autenticación Activa.
     """
     sod_der = _decode(sod, "el EF.SOD")
     groups = _decode_data_groups(data_groups)
+
+    if active is None and settings.cedula_requires_active_auth:
+        # Antes de gastar trabajo criptográfico: en este despliegue una lectura
+        # sin Autenticación Activa no puede producir un grant, venga como venga.
+        raise CedulaVerificationError(
+            "Este servidor exige Autenticación Activa: el chip tiene que firmar "
+            "un desafío del servidor. Una lectura sin ella no acredita que la "
+            "cédula esté presente, solo que alguien tuvo sus datos alguna vez."
+        )
 
     # 1. Autenticación Pasiva. Es lo primero: sin ella, los datos del DG1 no
     #    son más que bytes que alguien envió.
@@ -262,9 +364,18 @@ def verify_reading(sod: str, data_groups: Mapping[str, str]) -> VerifiedCedula:
         )
         raise
 
+    verification = result.as_dict()
+    assurance_level = ASSURANCE_LEVEL_PASSIVE
+    if active is not None:
+        verification["active_authentication"] = _verify_active_authentication(
+            groups, result, active
+        )
+        assurance_level = ASSURANCE_LEVEL_ACTIVE
+
     # Nunca se registra el RUN ni el número de documento.
     logger.info(
-        "Cédula verificada por Autenticación Pasiva (ancla: %s)",
+        "Cédula verificada (%s, ancla: %s)",
+        assurance_level,
         result.trust_anchor_subject,
     )
 
@@ -272,5 +383,6 @@ def verify_reading(sod: str, data_groups: Mapping[str, str]) -> VerifiedCedula:
         subject_key=lookup_key(run, SUBJECT_DOMAIN),
         document_number=mrz.document_number,
         expires_on=mrz.date_of_expiry,
-        verification=result.as_dict(),
+        assurance_level=assurance_level,
+        verification=verification,
     )

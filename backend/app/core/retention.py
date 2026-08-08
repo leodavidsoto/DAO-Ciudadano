@@ -73,6 +73,21 @@ def rules() -> List[RetentionRule]:
             ),
         ),
         RetentionRule(
+            collection="cedula_aa_challenges",
+            field="created_at",
+            # Holgado a propósito respecto de la vida del desafío: la fila
+            # tiene que sobrevivir a su propia validez. Si el índice TTL la
+            # borrara antes, `consume` vería un desafío desconocido y
+            # rechazaría una lectura legítima; borrarla después no reabre nada,
+            # porque un desafío caducado se rechaza igual por su `expires_at`.
+            ttl_seconds=max(600, 4 * settings.CEDULA_AA_CHALLENGE_TTL_SECONDS),
+            reason=(
+                "Desafío de Autenticación Activa: 8 bytes aleatorios sin "
+                "relación con ninguna persona. Solo se conserva mientras puede "
+                "usarse y un poco más, para que quemarlo signifique algo."
+            ),
+        ),
+        RetentionRule(
             collection="identity_grants",
             field="created_at",
             ttl_seconds=grant_days * SECONDS_PER_DAY if grant_days else None,

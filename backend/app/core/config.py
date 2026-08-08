@@ -224,6 +224,26 @@ class Settings(BaseSettings):
     # valor que la desactive.
     CSCA_TRUST_STORE_PATH: str = os.environ.get("CSCA_TRUST_STORE_PATH", "")
 
+    # === Autenticación Activa del eMRTD (ICAO 9303-11 §6.1) ===
+    # Vida del desafío que el servidor emite y el chip firma. Entre pedirlo y
+    # apoyar la cédula pasan segundos; una ventana larga solo alarga el rato
+    # durante el cual una firma capturada sigue sirviendo.
+    CEDULA_AA_CHALLENGE_TTL_SECONDS: int = int(
+        os.environ.get("CEDULA_AA_CHALLENGE_TTL_SECONDS", "180")
+    )
+    # ¿Se EXIGE Autenticación Activa para emitir un grant por cédula?
+    #
+    # Vacío = se decide por entorno: obligatoria en producción, opcional fuera.
+    # Ese valor por defecto es deliberado y es una decisión de política, no
+    # técnica: mientras el camino pasivo siga emitiendo grants, un `curl` con
+    # los bytes de una lectura ajena sigue obteniendo una membresía a nombre de
+    # otro. El precio es que una cédula sin EF.DG15 deja de poder darse de alta
+    # en producción. "true"/"false" fuerza el comportamiento en cualquier
+    # entorno; ningún valor lo desactiva a medias.
+    CEDULA_REQUIRE_ACTIVE_AUTH: str = os.environ.get(
+        "CEDULA_REQUIRE_ACTIVE_AUTH", ""
+    )
+
     # === ClaveÚnica / OIDC (ROADMAP 4.1) ===
     # NINGÚN valor por defecto, tampoco los endpoints: los entrega la División
     # de Gobierno Digital al habilitar el cliente, y escribir aquí una URL "de
@@ -293,6 +313,22 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.APP_ENV == "production"
+
+    @property
+    def cedula_requires_active_auth(self) -> bool:
+        """¿Una lectura sin Autenticación Activa puede producir un grant?
+
+        Por defecto no en producción y sí fuera: la suite y el desarrollo usan
+        documentos sintéticos, y muchos no traen EF.DG15. Lo que NO cambia con
+        el entorno es qué declara el grant — sin AA sale `CEDULA_NFC_PASSIVE`,
+        y ese nombre dice exactamente lo que se comprobó.
+        """
+        value = self.CEDULA_REQUIRE_ACTIVE_AUTH.strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+        return self.is_production
 
     @property
     def session_cookie_samesite(self) -> Literal["lax", "strict", "none"]:

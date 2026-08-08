@@ -23,6 +23,22 @@ import React
  * distribución la instala como `cscaMasterList.pem` después de verificar su
  * huella SHA-256 (ver `scripts/install-csca-master-list.sh`). Si el recurso no
  * existe, el lector ni siquiera inicia y devuelve un error explícito.
+ *
+ * Autenticación Activa (ICAO 9303-11 §6.1)
+ * ────────────────────────────────────────
+ * La Pasiva demuestra que Chile firmó esos datos; no demuestra que el chip
+ * esté aquí. Cuando el servidor manda un desafío se le pasa a la librería
+ * (`aaChallenge:`), que lo envía en INTERNAL AUTHENTICATE en vez de generar
+ * uno propio. Esa sustitución es el anti-replay entero: un desafío que elija
+ * el teléfono se captura junto a su firma y se reenvía.
+ *
+ * La firma NO se verifica aquí. `passport.activeAuthenticationPassed` existe y
+ * se ignora a propósito: viaja la firma en crudo y decide el backend, que es
+ * quien conserva el desafío original y quien comprueba que la clave de DG15
+ * esté declarada en el EF.SOD.
+ *
+ * Si el documento no declara DG15 en EF.COM, la librería no lo lee y el
+ * resultado dice `supported: false` con su motivo. No se finge una firma.
  */
 @objc(PassportReader)
 final class PassportReaderBridge: NSObject {
@@ -30,14 +46,38 @@ final class PassportReaderBridge: NSObject {
   private var scanInFlight = false
   private var activeReader: NFCPassportReader.PassportReader?
 
-  @objc(startPACESession:dob:doe:withResolver:withRejecter:)
+  /// ICAO 9303-11 §6.1: el desafío de la Autenticación Activa son 8 bytes.
+  private static let activeAuthChallengeBytes = 8
+
+  @objc(startPACESession:dob:doe:aaChallenge:withResolver:withRejecter:)
   func startPACESession(
     _ can: String,
     dob: String,
     doe: String,
+    aaChallenge: String,
     resolve: @escaping RCTPromiseResolveBlock,
     reject: @escaping RCTPromiseRejectBlock
   ) {
+    // Cadena vacía = esta lectura no lleva Autenticación Activa. El desafío
+    // NUNCA se genera aquí: uno elegido por el cliente no prueba presencia del
+    // chip, porque quien captura la lectura captura también el par.
+    var challenge: [UInt8]?
+    let trimmedChallenge = aaChallenge.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmedChallenge.isEmpty {
+      guard let decoded = Data(base64Encoded: trimmedChallenge),
+            decoded.count == Self.activeAuthChallengeBytes
+      else {
+        reject(
+          "E_INVALID_AA_CHALLENGE",
+          "El desafío de Autenticación Activa debe venir en base64 y medir "
+            + "\(Self.activeAuthChallengeBytes) bytes.",
+          nil
+        )
+        return
+      }
+      challenge = [UInt8](decoded)
+    }
+
     let normalizedCan = can.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     let canLength = normalizedCan.utf8.count
     let isAlphanumeric = normalizedCan.utf8.allSatisfy { byte in
@@ -88,9 +128,18 @@ final class PassportReaderBridge: NSObject {
         // ejecute `verifyPassport(masterListURL:)` sobre el modelo resultante.
         let reader = NFCPassportReader.PassportReader(masterListURL: masterListURL)
         self.setActiveReader(reader)
+        // DG15 (clave del chip) y DG14 (que declara el hash cuando firma con
+        // ECDSA) solo se piden si hay Autenticación Activa: leer archivos que
+        // nadie va a usar alarga la lectura y da más ocasiones de que la
+        // cédula se despegue.
+        var tags: [DataGroupId] = [.DG1, .DG2, .SOD]
+        if challenge != nil {
+          tags.append(contentsOf: [.DG14, .DG15])
+        }
         let passport = try await reader.readPassport(
           mrzKey: normalizedCan,
-          tags: [.DG1, .DG2, .SOD],
+          tags: tags,
+          aaChallenge: challenge,
           paceKeyReference: 0x02,
           allowBACFallback: false
         )
@@ -235,11 +284,42 @@ final class PassportReaderBridge: NSObject {
         // cabecera. Solo viajan si la verificación local pasó.
         var files: [String: String] = [:]
         if passed {
-          for (key, tag) in [("sod", DataGroupId.SOD), ("dg1", .DG1), ("dg2", .DG2)] {
+          // DG15/DG14 solo aparecen si de verdad se leyeron. Un DG15 ausente
+          // tiene que llegar al backend como ausente, no como cadena vacía: su
+          // decodificador estricto la tomaría por un archivo corrupto.
+          let candidates: [(String, DataGroupId)] = [
+            ("sod", .SOD), ("dg1", .DG1), ("dg2", .DG2), ("dg14", .DG14), ("dg15", .DG15),
+          ]
+          for (key, tag) in candidates {
             if let raw = passport.dataGroupsRead[tag]?.data {
               files[key] = Data(raw).base64EncodedString()
             }
           }
+        }
+
+        // `activeAuthenticationPassed` de la librería se ignora a propósito:
+        // el veredicto lo da el backend sobre estos bytes. Lo que se informa
+        // aquí es qué ocurrió, no si estuvo bien.
+        let aaSupported = passport.activeAuthenticationSupported
+        let aaSignature = passport.activeAuthenticationSignature
+        let aaPerformed = challenge != nil && !aaSignature.isEmpty
+        var activeAuthentication: [String: Any] = [
+          "requested": challenge != nil,
+          "supported": aaSupported,
+          "performed": aaPerformed,
+        ]
+        if aaPerformed && passed {
+          activeAuthentication["signature"] = Data(aaSignature).base64EncodedString()
+        }
+        if challenge == nil {
+          activeAuthentication["reason"] =
+            "El servidor no pidió Autenticación Activa en esta lectura."
+        } else if !aaSupported {
+          activeAuthentication["reason"] =
+            "El documento no incluye EF.DG15: no admite Autenticación Activa."
+        } else if !aaPerformed {
+          activeAuthentication["reason"] =
+            "El chip no respondió a INTERNAL AUTHENTICATE."
         }
 
         resolve([
@@ -247,6 +327,7 @@ final class PassportReaderBridge: NSObject {
           "data": data,
           "files": files,
           "verification": verification,
+          "activeAuthentication": activeAuthentication,
         ])
       } catch {
         reject(

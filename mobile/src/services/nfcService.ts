@@ -37,8 +37,27 @@ export function isValidCAN(value: string): boolean {
 }
 
 interface NativePassportReaderModule {
-    startPACESession(can: string, dob: string, doe: string): Promise<unknown>;
+    startPACESession(
+        can: string,
+        dob: string,
+        doe: string,
+        aaChallenge: string,
+    ): Promise<unknown>;
     cancelPACESession?: () => void;
+}
+
+/**
+ * Server-issued Active Authentication challenge (ICAO 9303-11 §6.1).
+ *
+ * The id travels back to the backend; the bytes go to the chip. The challenge
+ * is never chosen here: one picked by this device proves nothing, because
+ * whoever captures a reading captures the challenge/signature pair with it and
+ * can replay both.
+ */
+export interface ActiveAuthChallenge {
+    challengeId: string;
+    /** Base64 of the 8 bytes the chip must sign. */
+    challenge: string;
 }
 
 export interface PassportPhoto {
@@ -76,6 +95,32 @@ export interface RawDocumentFiles {
     sod: string;
     dg1: string;
     dg2: string;
+    /**
+     * EF.DG15, the chip's Active Authentication public key. Optional because
+     * not every document carries one — but when it is present the backend
+     * checks its hash against EF.SOD, which is what makes the AA signature
+     * mean anything at all.
+     */
+    dg15?: string;
+    /** EF.DG14: carries the signature hash when the chip signs with ECDSA. */
+    dg14?: string;
+}
+
+/**
+ * The chip's answer to INTERNAL AUTHENTICATE.
+ *
+ * `performed` is a fact about what happened, never a verdict: this device does
+ * not verify the signature. The backend does, because it is the side that
+ * holds the original challenge and the CSCA trust store.
+ */
+export interface ActiveAuthResult {
+    requested: boolean;
+    supported: boolean;
+    performed: boolean;
+    /** Raw chip signature, base64. Only present when `performed`. */
+    signature?: string;
+    /** Why it did not happen. Present whenever `performed` is false. */
+    reason?: string;
 }
 
 /** Passive-auth evidence returned by the native module (ADR-004). */
@@ -119,6 +164,8 @@ export interface VerifiedNFCReadResult {
     data: ChileanIDData;
     files: RawDocumentFiles;
     verification: VerifiedPassiveAuthResult;
+    /** Absent when no challenge was supplied for this read. */
+    activeAuthentication?: ActiveAuthResult;
 }
 
 export interface UnverifiedNFCReadResult {
@@ -240,6 +287,18 @@ function normalizedBase64File(value: unknown): string | null {
     return BASE64_PATTERN.test(normalized) ? normalized : null;
 }
 
+/**
+ * Optional raw file: absent is fine, malformed is not.
+ *
+ * Returning `undefined` for a present-but-invalid value would let a corrupt
+ * DG15 pass as "this document has no DG15", which silently downgrades the
+ * reading from active to passive authentication. `null` means fail closed.
+ */
+function normalizedOptionalBase64File(value: unknown): string | null | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    return normalizedBase64File(value);
+}
+
 function parseRawDocumentFiles(value: unknown): RawDocumentFiles | null {
     if (!isRecord(value)) return null;
 
@@ -248,7 +307,41 @@ function parseRawDocumentFiles(value: unknown): RawDocumentFiles | null {
     const dg2 = normalizedBase64File(value.dg2);
     if (!sod || !dg1 || !dg2) return null;
 
-    return { sod, dg1, dg2 };
+    const dg15 = normalizedOptionalBase64File(value.dg15);
+    const dg14 = normalizedOptionalBase64File(value.dg14);
+    if (dg15 === null || dg14 === null) return null;
+
+    const files: RawDocumentFiles = { sod, dg1, dg2 };
+    if (dg15) files.dg15 = dg15;
+    if (dg14) files.dg14 = dg14;
+    return files;
+}
+
+/** Strict base64 for the chip signature: same decoder rules as the files. */
+function parseActiveAuthResult(value: unknown): ActiveAuthResult | null {
+    if (!isRecord(value)) return null;
+
+    const { requested, supported, performed } = value;
+    if (
+        typeof requested !== 'boolean' ||
+        typeof supported !== 'boolean' ||
+        typeof performed !== 'boolean'
+    ) {
+        return null;
+    }
+
+    const signature = normalizedOptionalBase64File(value.signature);
+    if (signature === null) return null;
+    // A read that claims to have performed Active Authentication without a
+    // signature has nothing to prove it. Treating it as done would hand the
+    // backend an "active" reading with no chip response in it.
+    if (performed && !signature) return null;
+
+    const result: ActiveAuthResult = { requested, supported, performed };
+    if (signature) result.signature = signature;
+    const reason = normalizedOptionalString(value.reason);
+    if (reason) result.reason = reason;
+    return result;
 }
 
 function parsePassiveAuthResult(value: unknown): PassiveAuthResult | null {
@@ -307,8 +400,26 @@ function requiredEvidenceFailures(
     data: ChileanIDData | null,
     files: RawDocumentFiles | null,
     verification: PassiveAuthResult | null,
+    activeAuthentication?: ActiveAuthResult | null,
 ): string[] {
     const failures: string[] = [];
+
+    // Only checked when a challenge was actually sent. A read without Active
+    // Authentication is still a legitimate read — the backend decides whether
+    // its assurance level is enough, and it is the only side that can, since
+    // it holds the policy and the challenge.
+    if (activeAuthentication?.requested) {
+        if (!activeAuthentication.performed || !activeAuthentication.signature) {
+            failures.push(
+                activeAuthentication.reason ??
+                    'El chip no firmó el desafío de Autenticación Activa.',
+            );
+        } else if (!files?.dg15) {
+            // A signature with no public key to check it against is not
+            // evidence of anything.
+            failures.push('Falta EF.DG15: la firma del chip no se puede comprobar.');
+        }
+    }
 
     if (!nativeIdentityVerified) failures.push('El módulo nativo no verificó la identidad.');
     if (!data) failures.push('Faltan campos obligatorios autenticados de DG1.');
@@ -418,11 +529,29 @@ export function parseNativePassportReadResult(value: unknown): NFCReadResult {
             errorCode: 'E_INVALID_NATIVE_RESPONSE',
         };
     }
+
+    // Absent is fine (no challenge was sent); present-but-malformed is a bridge
+    // defect and must not be read as "no Active Authentication".
+    const activeAuthentication =
+        value.activeAuthentication === undefined
+            ? undefined
+            : parseActiveAuthResult(value.activeAuthentication);
+    if (activeAuthentication === null) {
+        return {
+            status: 'failed',
+            readCompleted: false,
+            identityVerified: false,
+            error: 'PassportReader devolvió una Autenticación Activa con formato inválido.',
+            errorCode: 'E_INVALID_NATIVE_RESPONSE',
+        };
+    }
+
     const evidenceFailures = requiredEvidenceFailures(
         nativeIdentityVerified,
         data,
         files,
         verification,
+        activeAuthentication,
     );
 
     if (data && files && evidenceFailures.length === 0) {
@@ -433,6 +562,7 @@ export function parseNativePassportReadResult(value: unknown): NFCReadResult {
             data,
             files,
             verification: asVerifiedPassiveAuth(verification),
+            ...(activeAuthentication ? { activeAuthentication } : {}),
         };
     }
 

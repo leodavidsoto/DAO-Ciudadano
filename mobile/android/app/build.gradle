@@ -256,17 +256,15 @@ dependencies {
     // sobre 1.68/1.70/1.71/1.72/1.73/1.74/1.75/1.76/1.77). Se fija ahí: diez
     // años menos de CVEs que la 1.64 de JMRTD, e incluye el arreglo de
     // CVE-2023-33201. Subir de 1.74 exige actualizar JMRTD primero.
-    implementation("org.jmrtd:jmrtd:0.7.18") {
-        exclude group: "org.bouncycastle", module: "bcprov-jdk15on"
-    }
+    implementation("org.jmrtd:jmrtd:0.7.18")
     implementation("net.sf.scuba:scuba-sc-android:0.0.23")
-    implementation("org.bouncycastle:bcprov-jdk15to18:1.74")
+    implementation("org.bouncycastle:bcprov-jdk15on:1.64")
+    implementation("org.bouncycastle:bcpkix-jdk15on:1.64")
 
     // Unit tests de la autenticación pasiva: bcpkix construye los
     // certificados sintéticos (CSCA y Document Signer) con los que se prueba
     // la cadena de confianza sin necesidad de una cédula real.
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.bouncycastle:bcpkix-jdk15to18:1.74")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

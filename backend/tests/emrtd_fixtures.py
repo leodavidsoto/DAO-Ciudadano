@@ -25,7 +25,8 @@ from asn1crypto import algos, cms, core
 from asn1crypto import x509 as a1x509
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from cryptography.x509.oid import NameOID
 
 from app.services.passive_auth import LDS_SECURITY_OBJECT_OID
@@ -362,6 +363,151 @@ def dg1(mrz_text: str) -> bytes:
     body = mrz_text.encode("ascii")
     inner = b"\x5f\x1f" + bytes([len(body)]) + body
     return b"\x61" + bytes([len(inner)]) + inner
+
+
+# ===========================================================================
+# Autenticación Activa (ICAO 9303-11 §6.1)
+# ===========================================================================
+
+
+def _der_tlv(tag: int, content: bytes) -> bytes:
+    """Envuelve `content` en un TLV con longitud DER."""
+    length = len(content)
+    if length < 0x80:
+        header = bytes([tag, length])
+    else:
+        encoded = length.to_bytes((length.bit_length() + 7) // 8, "big")
+        header = bytes([tag, 0x80 | len(encoded)]) + encoded
+    return header + content
+
+
+def dg15(public_key) -> bytes:
+    """EF.DG15: la SubjectPublicKeyInfo del chip dentro de un TLV `6F`.
+
+    El envoltorio no es decorativo. Un verificador que cargue el archivo entero
+    como SPKI —sin quitarlo— falla contra cualquier documento real, y como el
+    fallo es "no pude leer la clave" se confunde con un documento inválido.
+    """
+    spki = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return _der_tlv(0x6F, spki)
+
+
+class _SecurityInfo(core.Sequence):
+    _fields = [
+        ("protocol", core.ObjectIdentifier),
+        ("required_data", core.Any),
+        ("optional_data", core.Any, {"optional": True}),
+    ]
+
+
+class _SecurityInfos(core.SetOf):
+    _child_spec = _SecurityInfo
+
+
+def dg14(signature_algorithm_oid: str, version: int = 1) -> bytes:
+    """EF.DG14 con un `ActiveAuthenticationInfo` que declara el hash de firma.
+
+    Es obligatorio cuando el chip firma con ECDSA: ICAO no fija un hash por
+    defecto, así que sin este archivo no hay con qué verificar.
+    """
+    info = _SecurityInfo(
+        {
+            "protocol": "2.23.136.1.1.5",
+            "required_data": core.Integer(version),
+            "optional_data": core.ObjectIdentifier(signature_algorithm_oid),
+        }
+    )
+    return _der_tlv(0x6E, _SecurityInfos([info]).dump())
+
+
+def iso9796_2_ds1_block(
+    block_length: int,
+    challenge: bytes,
+    *,
+    digest: str = "sha1",
+    m1: Optional[bytes] = None,
+) -> bytes:
+    """Representante `F` de ISO/IEC 9796-2 Scheme 1, con tráiler implícito.
+
+        cabecera 0x6A | M1 (relleno del chip) | H(M1 ‖ desafío) | 0xBC
+
+    `0x6A` es recuperación PARCIAL sin relleno: el desafío no viaja dentro del
+    representante —es lo que el verificador tiene que aportar— y M1 se
+    dimensiona para llenar el bloque exacto.
+
+    Se construye a partir del esquema, no del verificador. `test_active_auth.py`
+    lo ancla a un vector conocido: con el M1 de ese vector, esta función más la
+    operación privada de RSA reproducen su firma BYTE A BYTE. Sin ese ancla, un
+    fixture y un verificador que compartieran el mismo malentendido se darían
+    la razón mutuamente y la suite no probaría nada — que es exactamente lo que
+    pasó con P-97 y P-101.
+    """
+    digest_size = hashlib.new(digest).digest_size
+    # Un byte de cabecera y uno de tráiler implícito.
+    recovered_length = block_length - digest_size - 2
+    if recovered_length < 0:
+        raise ValueError("El bloque es demasiado pequeño para este hash.")
+
+    if m1 is None:
+        # El chip genera este relleno; su contenido da igual, lo que importa es
+        # que el hash lo cubra junto al desafío.
+        m1 = bytes((index * 7 + 11) % 256 for index in range(recovered_length))
+    if len(m1) != recovered_length:
+        raise ValueError(
+            f"M1 debe medir {recovered_length} bytes para este bloque y hash, "
+            f"no {len(m1)}."
+        )
+
+    return (
+        bytes([0x6A])
+        + m1
+        + hashlib.new(digest, m1 + challenge).digest()
+        + bytes([0xBC])
+    )
+
+
+def iso9796_2_ds1_signature(
+    private_key: rsa.RSAPrivateKey,
+    challenge: bytes,
+    *,
+    digest: str = "sha1",
+    m1: Optional[bytes] = None,
+    least_absolute_residue: bool = False,
+) -> bytes:
+    """Firma de Autenticación Activa RSA, según ISO/IEC 9796-2 Scheme 1.
+
+    `least_absolute_residue` produce `n − s` en vez de `s`: las dos son firmas
+    válidas del mismo representante (ISO/IEC 9796-2 §8.3) y un verificador
+    tiene que abrir las dos (B.7).
+    """
+    numbers = private_key.private_numbers()
+    modulus = numbers.public_numbers.n
+    block_length = (modulus.bit_length() + 7) // 8
+
+    block = iso9796_2_ds1_block(
+        block_length, challenge, digest=digest, m1=m1
+    )
+    signature = pow(int.from_bytes(block, "big"), numbers.d, modulus)
+    if least_absolute_residue:
+        signature = modulus - signature
+    return signature.to_bytes(block_length, "big")
+
+
+def ecdsa_plain_signature(
+    private_key: ec.EllipticCurvePrivateKey, challenge: bytes, digest: str = "sha256"
+) -> bytes:
+    """Firma AA con ECDSA en el formato plano `r ‖ s` de BSI TR-03111.
+
+    No es DER: los chips devuelven las dos coordenadas concatenadas y rellenas
+    a la longitud de la curva.
+    """
+    algorithm = {"sha1": hashes.SHA1, "sha256": hashes.SHA256}[digest]()
+    r, s = decode_dss_signature(private_key.sign(challenge, ec.ECDSA(algorithm)))
+    component = (private_key.curve.key_size + 7) // 8
+    return r.to_bytes(component, "big") + s.to_bytes(component, "big")
 
 
 def trust_store_pem(*certificates: x509.Certificate) -> bytes:
