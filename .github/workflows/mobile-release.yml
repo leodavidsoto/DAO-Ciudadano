@@ -23,7 +23,7 @@ jobs:
       source_date_epoch: ${{ steps.metadata.outputs.source_date_epoch }}
       version: ${{ steps.metadata.outputs.version }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -68,7 +68,7 @@ jobs:
       run:
         working-directory: mobile
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Validate Gradle Wrapper
@@ -113,7 +113,7 @@ jobs:
       SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.source_date_epoch }}
       TZ: UTC
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4 # v4.4.0
@@ -234,7 +234,7 @@ jobs:
       SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.source_date_epoch }}
       TZ: UTC
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4 # v4.4.0
