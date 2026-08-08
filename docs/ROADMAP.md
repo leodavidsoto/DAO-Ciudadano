@@ -184,12 +184,12 @@ Objetivo: cerrar C-4 en su raíz, A-3 y A-8. Los tiempos dependen de organismos 
 | # | Tarea |
 |---|---|
 | 5.1 | ✅ **Completada** (04-08-2026). El script `5.1-transfer-roles.js` transfirió `DEFAULT_ADMIN_ROLE` al `TREASURY_SAFE_ADDRESS` base y asignó los roles `ROOT_MANAGER_ROLE`, `PAUSER_ROLE`, y `REVOKER_ROLE` a Safes distintos en Sepolia. La EOA renunció a los privilegios. | Ejecutado en cadena |
-| 5.2 | ✅ **Completada** (04-08-2026). Definición del proceso de revocación redactada en `ADR-003-Revocation.md`. |
-| 5.3 | ✅ **Completada** (04-08-2026). Guardrails y evaluación de Render free tier documentados en `ADR-004-Observability.md`. |
-| 5.4 | ✅ **Completada** (04-08-2026). Arquitectura de observabilidad y Sentry/OTel definidas en `ADR-004-Observability.md`. |
-| 5.5 | ✅ **Completada** (04-08-2026). Requisito ineludible de auditoría externa establecido en `ADR-005-Mainnet.md`. |
+| 5.2 | ✅ **Completada** (04-08-2026). Definición del proceso de revocación redactada en [`adr/003-revocacion.md`](./adr/003-revocacion.md). |
+| 5.3 | ✅ **Completada** (04-08-2026). Guardrails y evaluación de Render free tier documentados en [`adr/004-observabilidad.md`](./adr/004-observabilidad.md). |
+| 5.4 | ✅ **Completada** (04-08-2026). Arquitectura de observabilidad y Sentry/OTel definidas en [`adr/004-observabilidad.md`](./adr/004-observabilidad.md). |
+| 5.5 | ✅ **Completada** (04-08-2026). Requisito ineludible de auditoría externa establecido en [`adr/005-mainnet-y-auditoria-externa.md`](./adr/005-mainnet-y-auditoria-externa.md). |
 | 5.6 | ✅ **Completada** (04-08-2026). Política de privacidad, estatutos y consentimiento versionado para Ley 21.719 en `PRIVACY.md`. |
-| 5.7 | ✅ **Completada** (04-08-2026). Proceso de selección de red L2 (Arbitrum/Polygon) establecido en `ADR-005-Mainnet.md`. |
+| 5.7 | ✅ **Completada** (04-08-2026). Proceso de selección de red L2 (Arbitrum/Polygon) establecido en [`adr/005-mainnet-y-auditoria-externa.md`](./adr/005-mainnet-y-auditoria-externa.md). |
 | 5.8 | **Seguridad NFC (P-83 / P-84)**: Obtener e inyectar del Gobierno de Chile (Registro Civil) / ICAO los CRLs oficiales (Certificate Revocation Lists) para evitar lectura de cédulas robadas/revocadas (P-83), y habilitar verificación de Autenticación Activa (AA/CA) para impedir clonación del chip (P-84). Fase bloqueada hasta conseguir este material criptográfico oficial. |
 
 ---
@@ -363,3 +363,83 @@ ni reconstruible desde las papeletas** (ROADMAP 3.5).
 por `/elections/{election_id}`: FastAPI resuelve por orden de registro, así
 que "ballot-schema" se interpretaba como un id de elección y devolvía 404. Se
 reordenó y quedó anotado en el código para que no se repita.
+
+---
+
+## Estado al 08-08-2026 — qué separa el piloto de una demo
+
+La ruta crítica cambió. La identidad civil por cédula NFC **ya funciona** contra
+un documento físico (P-97 y P-101 cerrados) y el contrato **ya está desplegado y
+verificado** en Sepolia. Lo que queda son dos piezas de código y una lista de
+configuración.
+
+### Las dos que cambian si el piloto es real
+
+| Pieza | Por qué bloquea | Encargo |
+|---|---|---|
+| **Minteo móvil** (P-102) | La app llega hasta el `membership_grant` y ahí se queda: `apiService.mintSBT` llama a `/membership/mint`, bloqueado en producción. Sin esto, quien lee su cédula no obtiene membresía. | `docs/PROMPT_MINTEO_MOVIL.md` |
+| **Anti-replay de la cédula** | La Autenticación Pasiva prueba que Chile firmó los datos, **no que el chip esté presente**. Quien consiga los bytes del SOD y los DG puede reenviarlos y obtener un grant de ese titular. | `docs/PROMPT_ANTI_REPLAY.md` |
+
+### D-1 · Minteo — enmendado
+
+Se mantiene lo del 02-08: el camino custodial se eliminó y no vuelve.
+
+**Nuevo (08-08):** la app móvil mintea por `POST /membership/mint-zk` —el
+relayer de la DAO envía la prueba y paga el gas— en lugar de por ERC-4337.
+Registrado como **Enmienda 1 del ADR-001**. Motivo: ERC-4337 + Safe sigue sin
+credenciales de Pimlico ni Safe desplegada, y nunca ejecutó un envío.
+
+La prueba Groth16 se genera **en el dispositivo**, en un WebView local con
+snarkjs. El secreto del ciudadano no sale del teléfono. Hermes no ejecuta WASM,
+y `@iden3/react-native-rapidsnark` (`0.0.1-beta.2`) ni siquiera calcula el
+testigo.
+
+🟡 **Pendiente de medir:** el tiempo de generación en un teléfono real. El
+circuito es pequeño (6.658 restricciones no lineales) y debería bastar, pero
+nadie lo ha cronometrado.
+
+### D-3 · Gobernanza MACI — el tally está roto, no pendiente
+
+Corrección importante respecto a la sección del 02-08: no es que falte
+desplegar el coordinador. Es que **las señales públicas no cuadran**.
+
+```
+contrato  → [messageChain, signUpCount, tallyCommitment]
+circuito  → [stateRoot, currentResultsCommitment, newResultsCommitment]
+```
+
+La posición `[1]` del circuito es un Poseidon de ~254 bits y el contrato pone
+ahí el número de inscritos. **Ninguna prueba auténtica puede satisfacer eso.**
+Reproducido en `contracts/test/MACI.test.js:264` y en `npx hardhat maci:tally`,
+que sale con estado 1.
+
+🔴 `private_voting: false` es un hecho verificado, no un ajuste pendiente.
+Encargo: `docs/PROMPT_MACI_TALLY_D3.md`.
+
+### Onboarding web — sin camino de identidad civil
+
+El frontend web está sano (90 tests verdes con `craco test`), pero su única vía
+de identidad es ClaveÚnica, que no está configurada. La cédula NFC es exclusiva
+del móvil. **Hoy el onboarding web no puede completarse en producción.** Hay
+tres salidas y ninguna está decidida: configurar ClaveÚnica, dar a la web un
+camino de cédula, o asumir que el alta es solo por móvil.
+
+### Restricción operativa que condiciona las pruebas
+
+Cada cédula sirve para **exactamente un minteo por despliegue**. El contrato
+nunca limpia `_usedNullifiers`, ni al revocar, ni con `REVOKER_ROLE` (P-103).
+Decide antes de la primera prueba end-to-end si se gasta una cédula real o se
+despliega un contrato aparte para pruebas.
+
+### Lo que no es código
+
+- Configuración de producción: enumerada variable a variable en
+  `docs/PRODUCCION_SEPOLIA.md`, con la línea de `readiness.py` que exige cada una.
+- **P-98** — BouncyCastle 1.64 reintroduce CVE-2023-33201. Medir si volver a
+  1.74 rompe de verdad `PACEKeySpec.createMRZKey`. No publicar APK sin decidirlo.
+- Ceremonia multi-parte de los tres circuitos. Mientras siga siendo de una sola
+  parte, ningún minteo por este camino puede llamarse "producción".
+- Credenciales de ClaveÚnica, Master List oficial del Registro Civil, CRL/OCSP.
+- `TREASURY_SAFE_ADDRESS`, sin el cual la tesorería queda no disponible.
+- Separar los roles del contrato: hoy una sola EOA es admin, root manager,
+  pauser, revoker **y** relayer.

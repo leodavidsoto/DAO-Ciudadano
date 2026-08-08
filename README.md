@@ -7,14 +7,23 @@
 ![React](https://img.shields.io/badge/React-19-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.140-teal)
 
-> ⚠️ **Estado actual (agosto 2026): piloto técnico, no servicio de identidad.**
-> ClaveÚnica, NFC y liveness siguen siendo demostraciones y están bloqueados con
-> `APP_ENV=production`. Minteo y acciones mutantes de gobernanza exigen SIWE, pero la
-> creación de membresías de producción permanece cerrada hasta implementar un
-> permiso de verificación de un solo uso y desplegar un contrato compatible. El
-> contrato histórico de Sepolia no es compatible con el código actual y tiene
-> `totalSupply() == 0`. Revisa el estado y el plan en [`docs/`](./docs):
-> [AUDIT](./docs/AUDIT.md) · [ROADMAP](./docs/ROADMAP.md) · [HANDOFF](./docs/HANDOFF.md) · [SECURITY RUNBOOK](./docs/SECURITY_RUNBOOK.md).
+> ⚠️ **Estado actual (08-08-2026): piloto en testnet, todavía no servicio de identidad.**
+>
+> - **La cédula chilena por NFC ya funciona** contra un documento físico:
+>   Autenticación Pasiva verificada contra anclas CSCA reales del Registro Civil,
+>   con emisión de credenciales. ClaveÚnica y liveness siguen siendo
+>   demostraciones y devuelven 503 con `APP_ENV=production`.
+> - **El contrato está desplegado y verificado** en Sepolia
+>   (`0x6C6C7D0ceC1b7267cB2fa146519FBF9ef6319d56`, Sourcify `exact_match`).
+>   Su `totalSupply()` es 0 porque nadie ha minteado todavía, no porque esté
+>   roto. La dirección histórica `0x813fd3…` usa otra ABI y no debe configurarse.
+> - **Nada de esto es «producción».** La ceremonia de confianza de los circuitos
+>   ZK es de una sola parte (`trustedSetup: single-host-development-integration`),
+>   así que quien la ejecutó podría falsificar pruebas. Vale para un piloto en
+>   testnet y no para membresías vinculantes.
+>
+> Estado completo y plan en [`docs/`](./docs):
+> [HANDOFF](./docs/HANDOFF.md) · [AUDIT](./docs/AUDIT.md) · [ROADMAP](./docs/ROADMAP.md) · [PRODUCCIÓN](./docs/PRODUCCION_SEPOLIA.md) · [ADR](./docs/adr/) · [SECURITY RUNBOOK](./docs/SECURITY_RUNBOOK.md).
 
 ## 🎯 Descripción
 
@@ -22,10 +31,14 @@ DAO Ciudadana explora una plataforma de participación y membresía digital. Hoy
 permite probar la experiencia y la gobernanza autenticada por wallet, pero **no
 verifica identidad civil ni emite una credencial on-chain en producción**.
 
+- **Cédula por NFC**: real. Lee el chip ICAO, repite la Autenticación Pasiva en
+  el servidor contra anclas CSCA del Registro Civil y emite las credenciales.
+  Probada en Android contra una cédula física; iOS aún sin probar en dispositivo.
+- **ClaveÚnica y liveness**: recorridos demostrativos, bloqueados en producción.
 - **Cuenta piloto**: RUT/email cifrados; son datos declarados, no acreditación.
-- **ClaveÚnica, NFC y liveness**: recorridos demostrativos, bloqueados en producción.
 - **Wallet**: challenge/verify SIWE real para probar control de la dirección.
-- **Membresía**: demo off-chain explícito; producción falla cerrado.
+- **Membresía**: el camino ZK (`/membership/mint-zk`) está listo y nunca se ha
+  ejecutado; `totalSupply()` sigue en 0. La app móvil todavía no mintea.
 
 ## 🚀 Quick Start
 
@@ -79,8 +92,11 @@ DAO-Ciudadano/
 
 | Endpoint | Método | Descripción |
 |----------|--------|-------------|
+| `/api/auth/cedula/verify` | POST | **Real.** Autenticación Pasiva ICAO del chip contra anclas CSCA; emite las credenciales |
+| `/api/auth/cedula/aa-challenge` | POST | **Real.** Desafío de Autenticación Activa, de un solo uso, emitido por el servidor |
+| `/api/auth/cedula/trust-store` | GET | Anclas CSCA que el servidor acepta |
 | `/api/auth/clave-unica` | POST | Demo de ClaveÚnica (bloqueado en producción) |
-| `/api/auth/nfc` | POST | Demo NFC (no verifica identidad; bloqueado en producción) |
+| `/api/auth/nfc` | POST | Demo de Web NFC — **no** es la cédula real; nunca se acepta como verificada |
 | `/api/auth/liveness` | POST | Demo de liveness (bloqueado en producción) |
 | `/api/wallet/challenge` | POST | Crear desafío SIWE de un solo uso |
 | `/api/wallet/verify` | POST | Verificar firma SIWE y emitir sesión |

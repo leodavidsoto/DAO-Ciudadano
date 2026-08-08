@@ -27,6 +27,45 @@ La gobernanza no será puramente on-chain por costos, ni puramente off-chain sin
 *   **Democracia Líquida:** Delegación transitiva de votos.
 *   **Ejecución (SafeSnap / Reality.eth):** La tesorería estará en un Safe multisig. El oráculo de Reality.eth permitirá ejecutar las decisiones off-chain de manera on-chain y trustless.
 
+---
+
+## Enmienda 1 (08-08-2026) — el móvil mintea por relayer, no por ERC-4337
+
+**Estado:** aprobado por el dueño del proyecto. No sustituye a la decisión 2, la acota.
+
+El titular de la decisión 2 nombra ERC-4337. El camino ERC-4337 + Safe está
+implementado en el frontend web (`prepare-mint`/`submit-mint`, no custodial),
+pero **nunca ejecutó un envío**: no hay credenciales de Pimlico ni Safe
+desplegada (`ROADMAP.md`, sección D-1). Exigirlo en el móvil implicaría
+desplegar una Safe por ciudadano desde el teléfono y contratar el paymaster
+antes de poder probar nada.
+
+Por eso la app móvil mintea por `POST /membership/mint-zk`: el relayer de la
+DAO envía la prueba y paga el gas.
+
+**Esto respeta el cuerpo de la decisión 2**, que admite literalmente «un
+*Relayer* o *Paymaster* de la DAO patrocina el gas», y mantiene las dos
+propiedades que motivaron el ADR: no custodial (el secreto del ciudadano nunca
+sale del dispositivo; la prueba Groth16 se genera en local) y fricción cero (el
+ciudadano no necesita ETH). **Se aparta de su letra**, y por eso queda escrito
+aquí en vez de como desviación silenciosa.
+
+**Lo que esta enmienda no resuelve:**
+
+- El gas de la DAO lo protege solo la sesión SIWE. El circuito liga `recipient`
+  en la hoja y `mint_operations` da idempotencia por nullifier, así que nadie
+  redirige un minteo ajeno; lo que queda expuesto es que un usuario autenticado
+  queme gas con pruebas inválidas repetidas.
+- La ceremonia de confianza sigue siendo de una sola parte
+  (`circuits/artifact-manifest.json`: `productionReady: false`,
+  `trustedSetup: "single-host-development-integration"`). Un minteo por este
+  camino es válido para el piloto en testnet y **no debe llamarse producción**.
+
+Cuando existan credenciales de Pimlico y una Safe desplegada, se reevalúa
+volver a la letra del ADR.
+
+---
+
 ## Consecuencias y Siguientes Pasos
 *   Se deben integrar librerías de ZK (`snarkjs`, `circomlib`) en el stack de contratos y frontend.
 *   Se requiere desplegar infraestrucutra de relayer/paymaster.

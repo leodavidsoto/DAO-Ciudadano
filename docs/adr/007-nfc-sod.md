@@ -1,4 +1,7 @@
-# ADR 004: Verificación Criptográfica del SOD (CSCA y Document Signer)
+# ADR-007: Verificación Criptográfica del SOD (CSCA y Document Signer)
+
+> Renumerado el 08-08-2026: antes era **ADR-004** en `docs/adr/`, número que ya
+> ocupaba otro ADR en `docs/`. El contenido no cambió.
 
 ## Estado
 **Aceptado e implementado en Android (03-08-2026), sin ancla de confianza todavía.**

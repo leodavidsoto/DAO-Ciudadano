@@ -1,4 +1,7 @@
-# ADR 003: Estrategia de implementación NFC y PACE para la Cédula de Identidad
+# ADR-006: Estrategia de implementación NFC y PACE para la Cédula de Identidad
+
+> Renumerado el 08-08-2026: antes era **ADR-003** en `docs/adr/`, número que ya
+> ocupaba otro ADR en `docs/`. El contenido no cambió.
 
 ## Estado
 **Aceptado e implementado en Android (03-08-2026); iOS pendiente de dependencia.**

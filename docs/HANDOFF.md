@@ -1,7 +1,7 @@
 # Handoff — DAO Ciudadana
 
 **Para:** Codex (o cualquier agente/desarrollador que retome el proyecto)
-**Actualizado:** 6 de agosto de 2026 · base `0db034b`, rama local `codex/produccion-ci`
+**Actualizado:** 8 de agosto de 2026 · base `bbe06d6`, rama local `codex/produccion-ci`
 **Documentos hermanos:** [`AUDIT.md`](./AUDIT.md) · [`ROADMAP.md`](./ROADMAP.md) · [`SECURITY_RUNBOOK.md`](./SECURITY_RUNBOOK.md) · [`../AGENTS.md`](../AGENTS.md)
 
 ---
@@ -12,7 +12,7 @@ Este proyecto **parece** más terminado de lo que está. La UI es pulida y las
 suites pasan, pero el servicio público sigue siendo un piloto y aún ejecuta la
 versión anterior a los guardrails de esta rama.
 
-Los cuatro hechos que tienes que interiorizar antes de tocar una línea:
+Los cinco hechos que tienes que interiorizar antes de tocar una línea:
 
 1. **Ya existe un despliegue compatible, y `totalSupply()` sigue en 0.** El
    `DAOCiudadanaSBT` del modelo ZK vive en
@@ -21,22 +21,27 @@ Los cuatro hechos que tienes que interiorizar antes de tocar una línea:
    todavía. La dirección **histórica** `0x813fd3…` usa Ownable/`string`, es
    incompatible y no debe configurarse.
 2. **Minteo y acciones mutantes de gobernanza exigen una sesión EIP-4361 y actuar
-   como la misma wallet.** Producción también rechaza miembros demo/legacy, pero falta integrar
-   la verificación civil de un solo uso antes de habilitar nuevas membresías.
-3. **La identidad real sigue pendiente.** ClaveÚnica, NFC, liveness y RUT/email
-   son demos rotuladas y devuelven 503 con `APP_ENV=production`.
-4. **Hay una llave de proveedor expuesta en el historial Git público.** Debe
+   como la misma wallet.** Producción también rechaza miembros demo/legacy.
+3. **La identidad civil por cédula NFC ya funciona contra un documento físico**
+   (07-08-2026, ver P-101 en `AUDIT.md`): Autenticación Pasiva contra ancla CSCA
+   real, `identity_grant` + `membership_grant` emitidos. Lo que sigue pendiente
+   es ClaveÚnica (sin credenciales), la Master List oficial, CRL/OCSP y el
+   anti-replay. Web NFC nunca se acepta como cédula verificada.
+4. **Un minteo con una cédula es irreversible para esa cédula.** El contrato
+   nunca limpia `_usedNullifiers`, ni siquiera al revocar
+   (`DAOCiudadanaSBT.sol:280`). Ver la trampa 16.
+5. **Hay una llave de proveedor expuesta en el historial Git público.** Debe
    revocarse/rotarse de inmediato y revisarse su uso/facturación; no copies su valor
    desde commits antiguos.
 
 Nada de esto es un descuido reciente: está documentado, medido y priorizado en `AUDIT.md` y `ROADMAP.md`. El proyecto avanza deliberadamente de "simulado" a "real", y va a mitad de camino.
 
 ```bash
-# Compruébalo tú mismo — 5 segundos
+# Compruébalo tú mismo — 5 segundos (contrato VIGENTE, no el histórico)
 curl -s -X POST https://ethereum-sepolia-rpc.publicnode.com \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0x813fd379F715107b2451553d97f29408d8185f0e","data":"0x18160ddd"},"latest"],"id":1}'
-# result: 0x0...0  → cero SBT minteados
+  -d '{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0x6C6C7D0ceC1b7267cB2fa146519FBF9ef6319d56","data":"0x18160ddd"},"latest"],"id":1}'
+# result: 0x0...0  → cero SBT minteados (comprobado el 08-08-2026)
 ```
 
 ---
@@ -53,18 +58,19 @@ credencial on-chain de producción está habilitada.
 
 | Área | Estado | Detalle |
 |---|---|---|
-| **Contrato SBT** | 🟡 Código probado | AccessControl, soulbound y revocación; 31 tests. **No existe despliegue compatible.** La dirección histórica tiene supply 0 y otra ABI. |
+| **Contrato SBT** | ✅ Desplegado y verificado | AccessControl, soulbound y revocación; 31 tests. Despliegue compatible en `0x6C6C7D0c…` (Sepolia), Sourcify `exact_match`, relayer con `ROOT_MANAGER_ROLE`. `totalSupply()` = 0. La dirección histórica `0x813fd3…` es otra ABI y no debe configurarse. |
 | **Gobernanza** | 🟡 Propuestas verificables | Propuestas con papeletas EIP-712, nonce único y endpoint público de reverificación. Elecciones existen, pero votar queda bloqueado en producción hasta firmar sus papeletas; falta tally transaccional. |
 | **Dashboard** | ✅ Montado | `/dashboard` con 5 secciones. Router funcionando. |
 | **Despliegue** | 🟡 Servicio histórico activo | La versión pública anterior responde; esta rama separa liveness/readiness y aún no fue publicada. |
 | **Autenticación** | ✅ Wallet / 🟡 identidad | Challenge EIP-4361, JWT corto y gates self/active. No equivale a identidad civil. |
-| **Minteo on-chain** | 🔒 Bloqueado por despliegue | El camino ZK (`/membership/mint-zk`) ya no tiene defectos conocidos: se corrigió una precondición que exigía un `MINTER_ROLE` inexistente y hacía imposible todo minteo (P-87), y la reconciliación cadena↔Mongo está implementada (P-89). Falta un despliegue compatible del contrato. `/membership/mint` **no puede mintear on-chain** y lo dice. |
-| **Identidad real** | ❌ Pendiente | Demos bloqueadas en producción; Web NFC nunca se acepta como cédula verificada. |
+| **Minteo on-chain** | 🟡 Camino listo, nunca ejecutado | `/membership/mint-zk` no tiene defectos conocidos (P-87 y P-89 cerrados) y el contrato ya está desplegado. Nadie ha minteado todavía. `/membership/mint` **no puede mintear on-chain** y lo dice: sus tres modos están bloqueados en producción. |
+| **Identidad real** | 🟡 Cédula NFC sí, el resto no | Cédula chilena por NFC probada contra documento físico (P-97, P-101). ClaveÚnica, liveness y RUT/email siguen siendo demos y devuelven 503 en producción. Web NFC nunca se acepta como cédula verificada. Falta anti-replay, Master List oficial y CRL/OCSP. |
+| **Frontend web** | 🟡 Sano, sin identidad civil | 90 tests verdes (`craco test`, 07-08-2026). Mintea por ERC-4337 + Safe. Su única vía de identidad es ClaveÚnica, que no está configurada: **hoy el onboarding web no puede completarse en producción.** |
 | **PII** | 🟡 Código nuevo cifrado | Altas nuevas usan Fernet + índices HMAC. Datos legacy no fueron migrados/auditados; snapshot y migración son bloqueantes. |
 | **Identidad ZK (D-2)** | 🟡 Implementada, sin proveedor | Circuito `MembershipEligibility(25)` con `recipient` ligado en la hoja; emisor con árbol Merkle de 25 niveles y firma EIP-191. Bloqueado: no existe proveedor civil que emita `identity_grant`, y la ceremonia de confianza es de una sola parte. |
-| **Gobernanza MACI (D-3)** | 🟡 Circuitos listos, pipeline no | `MACICoordinator.sol` (24 tests), `maci_tally.circom` y `processMessages.circom` compilados y probados con testigo. Falta desplegar coordinador, ceremonia real y cerrar P-54. `/maci/status` mantiene `private_voting: false`. |
+| **Gobernanza MACI (D-3)** | 🔴 Tally roto | `MACICoordinator.sol` (24 tests), `maci_tally.circom` y `processMessages.circom` compilados. **Las señales públicas del contrato y las del circuito no coinciden**, así que una prueba auténtica es rechazada por `publishTally` (`contracts/test/MACI.test.js:264`). Falta además desplegar coordinador, ceremonia real y cerrar P-54. `/maci/status` mantiene `private_voting: false`, y eso es un hecho, no un ajuste. |
 | **ERC-4337 (D-1)** | 🟡 No custodial, sin verificar | El backend prepara y retransmite; firma el ciudadano. Sin credenciales de Pimlico ni Safe desplegada: nunca se ejecutó un envío. Apagado por configuración; el minteo va por el relayer EOA. |
-| **App móvil** | ⚠️ Experimental | TypeScript, 15 tests, lint y auditoría npm pasan localmente y tienen un job CI. Release falla cerrado sin keystore externo; faltan PACE real y build/publicación nativos reproducibles. |
+| **App móvil** | ⚠️ Lee cédulas, no mintea | 76 tests verdes (07-08-2026). Lectura NFC probada contra cédula real en Android; iOS sin probar físicamente. **No puede mintear en producción** (P-102): `apiService.mintSBT` llama a `/membership/mint`, que está bloqueado. Release falla cerrado sin keystore externo. P-98 (BouncyCastle 1.64 → CVE-2023-33201) sigue abierto: no publicar APK así. |
 
 ---
 
@@ -123,6 +129,59 @@ Suite final: **524 tests verdes** (los fallos son de la pasada paralela NFC).
 `0db034b` — `feat(core): completar autenticación pasiva ICAO, parche de memoria
 JNI en Mobile y setup MACI` (30 archivos, +2377 −167).
 
+
+## Sesión 07/08-08-2026 — primera alta civil y tres frentes en paralelo
+
+### Lo que se cerró
+
+- **P-101 (crítica).** El RUN se leía del campo opcional equivocado de la MRZ.
+  Corregido con `MRZ.national_number`. Con eso, el camino de identidad civil
+  funcionó de extremo a extremo contra una cédula chilena física.
+- **`production_ready` era inalcanzable por construcción** (`046b570`). `ready`
+  exigía que `/membership/mint` estuviera disponible, pero ese endpoint tiene
+  sus tres modos bloqueados en producción a propósito. Ningún despliegue podía
+  dar verde. Ahora en producción se exige el relayer ZK, que es el camino real.
+- **Documentación de despliegue:** [`PRODUCCION_SEPOLIA.md`](./PRODUCCION_SEPOLIA.md)
+  enumera cada variable que falta con la línea de `readiness.py` que la exige.
+
+### Tres encargos en curso, uno por terminal
+
+Cada uno tiene su prompt de arranque autocontenido y toca directorios distintos
+para no pisarse:
+
+| Encargo | Prompt | Ficheros | Estado |
+|---|---|---|---|
+| Minteo móvil | [`PROMPT_MINTEO_MOVIL.md`](./PROMPT_MINTEO_MOVIL.md) | `mobile/src/`, `backend/app/routers/membership.py` | En curso |
+| Anti-replay de la cédula | [`PROMPT_ANTI_REPLAY.md`](./PROMPT_ANTI_REPLAY.md) | `backend/app/services/`, módulos nativos | En curso |
+| D-3 · tally MACI | [`PROMPT_MACI_TALLY_D3.md`](./PROMPT_MACI_TALLY_D3.md) | `circuits/`, `contracts/` | En curso |
+
+**Se rozan en `mobile/src/services/nfcService.ts` y en los lectores nativos.**
+Ya pasó en la sesión anterior que dos agentes se pisaran esos archivos y
+dejaran 16 tests rojos. Coordina ahí.
+
+### Decisiones tomadas en esta sesión
+
+- **El móvil mintea por el relayer** (`/membership/mint-zk`), no por ERC-4337.
+  Es una enmienda a la letra del ADR-001 —ver
+  [`ADR-001`](./adr/001-arquitectura-vanguardia.md), "Enmienda 1"—, forzada por
+  que el camino ERC-4337 no tiene credenciales de Pimlico ni Safe desplegada y
+  nunca ejecutó un envío.
+- **La prueba Groth16 se genera en un WebView local con snarkjs.** Hermes no
+  ejecuta WASM; `@iden3/react-native-rapidsnark` está en `0.0.1-beta.2` y ni
+  siquiera calcula el testigo. El circuito es pequeño (6.658 restricciones no
+  lineales, wasm 2,1 MB, zkey 5,9 MB), así que el WebView debería bastar —
+  pero **es una medición pendiente, no una predicción**: hay que cronometrarlo
+  en un teléfono real y publicar el número.
+
+### Deuda que se pierde si nadie la rescata
+
+El trabajo del **MACI relayer** sigue sin commitear en el worktree
+`subagent-MACI-Relayer-Engineer-…` (`a8e5cb9`). Si alguien limpia ese worktree,
+`maci_relayer.py`, sus tests y los cambios de `governance.py` desaparecen.
+Urgente por frágil, no por difícil. Lo mismo, con menos riesgo, para
+`5f2a315` (E2E Playwright).
+
+---
 
 ## Hallazgos abiertos (de `AUDIT.md`)
 
@@ -254,8 +313,11 @@ Cosas que te van a costar tiempo si no las sabes de antemano:
 2. **La dirección Sepolia histórica es incompatible.** La ABI/hook manuales del
    frontend se eliminaron; el nuevo despliegue sale de artifacts del contrato actual.
 
-3. **El minteo actual es server-side con `MINTER_ROLE`, provisional.** Falta
-   ratificar D-1 y resolver reconciliación/idempotencia entre recibo y Mongo.
+3. **`MINTER_ROLE` no existe en este contrato.** El rol que hay que mirar es
+   `ROOT_MANAGER_ROLE`, y ya lo tiene el relayer. Exigir `MINTER_ROLE` fue el
+   bug P-87, que hacía imposible todo minteo; no lo reintroduzcas guiándote por
+   documentación vieja. La reconciliación recibo↔Mongo sí está implementada
+   (P-89, `mint_operations.py`).
 
 4. **`requirements.txt` está deliberadamente mínimo.** `python-multipart` y `pymongo` **no aparecen en ningún `import`** pero son obligatorias: la primera la exige FastAPI para `UploadFile` en `/api/auth/liveness`, la segunda la arrastra `motor` con un rango estrecho. Están documentadas en el propio archivo. No las quites por parecer huérfanas.
 
@@ -313,13 +375,35 @@ Cosas que te van a costar tiempo si no las sabes de antemano:
     pero pasar a cookie `HttpOnly` exige un cambio coordinado de emisión/logout,
     CORS con credenciales y defensa CSRF; no hagas una migración parcial.
 
+16. **Revocar un SBT no libera el nullifier, y eso es deliberado.**
+    `executeRevocation` (`DAOCiudadanaSBT.sol:261`, requiere `REVOKER_ROLE`)
+    quema el token, libera la wallet y decrementa el suministro activo, pero
+    `_usedNullifiers` **nunca** se limpia — el propio contrato lo dice en la
+    línea 280. Consecuencia práctica: **cada cédula sirve para exactamente un
+    minteo por despliegue, y ni el admin puede deshacerlo.** No es un descuido:
+    si se pudiera limpiar, quien tenga `REVOKER_ROLE` fabricaría membresías
+    ilimitadas desde una sola cédula, que es justo el ataque que el nullifier
+    cierra. Planifica las pruebas de alta en consecuencia: para repetirlas hace
+    falta otra cédula o un despliegue nuevo. El flujo de revocación es en dos
+    pasos con `REVOCATION_COOLDOWN = 3 days` entre `requestRevocation` y
+    `executeRevocation`.
+
+17. **La app móvil no comparte camino de minteo con la web.** La web usa
+    ERC-4337 + Safe (`prepare-mint`/`submit-mint`); el móvil llamaba a
+    `/membership/mint`, que está bloqueado en producción (P-102). Si tocas uno
+    de los dos, no supongas que el otro hace lo mismo.
+
 ---
 
 ## Decisiones pendientes — bloquean la Fase 1
 
 No son decisiones técnicas que un agente deba tomar solo: definen custodia de llaves privadas, qué se publica de forma permanente e irreversible sobre cada ciudadano, y qué garantías reales ofrece la DAO. Detalle completo en `ROADMAP.md`.
 
-- **D-1 · ¿Quién mintea el SBT?** Backend custodial (lo que el contrato ya permite), usuario con voucher firmado EIP-712, o relayer con meta-transacciones. Las dos últimas exigen redesplegar el contrato.
+- **D-1 · ¿Quién mintea el SBT?** Resuelto en ADR-001 como ERC-4337, y
+  enmendado el 08-08-2026: el móvil va por el relayer porque ERC-4337 está
+  bloqueado por credenciales que no existen. El camino custodial se eliminó y
+  no vuelve. Queda pendiente ratificar quién paga el gas a largo plazo y que el
+  admin del contrato deje de ser la misma EOA que el relayer.
 - **D-2 · ¿Qué se escribe on-chain como `identityHash`?** Las altas nuevas usan HMAC-SHA256 de 32 bytes, pero falta ratificar el diseño, llevar el pepper a KMS y migrar/purgar el esquema legacy reversible.
 - **D-3 · ¿La gobernanza es on-chain u off-chain?** Las propuestas ya usan firmas EIP-712 off-chain; falta decidir el modelo definitivo, firmar elecciones y hacer el tally reconstruible/transaccional.
 
@@ -329,23 +413,48 @@ Cuando se tomen, déjalas escritas como ADR en `docs/`.
 
 ## Por dónde seguir
 
-**Ruta crítica (sin cambio):** proveedor de identidad + grant → desplegar contrato
-compatible → minteo idempotente → verificador on-chain → desplegar esta rama.
+**Ruta crítica actualizada (08-08-2026):** la identidad civil por cédula y el
+contrato desplegado ya no bloquean. Lo que queda entre el piloto y una demo son
+**dos cosas**: que el móvil pueda mintear, y que la cédula resista un replay.
+El resto es configuración, trámites con terceros o decisiones tuyas.
 
-**Trabajo desbloqueado tras esta sesión, en orden de impacto:**
+**En orden de impacto:**
 
-1. **Desplegar el contrato en Sepolia real** — el despliegue local simulado se completó, falta el real en testnet.
-2. **Validar antifraude contra Redis real** — el subagente se encuentra trabajándolo.
-3. **Ceremonia multi-parte** — los 3 circuitos ZK tienen una sola contribución
-   Phase 2. Necesitan participantes independientes y beacon final.
-6. **Identidad civil** — ClaveÚnica (sandbox DGD), Master List CSCA (Registro
-   Civil/ICAO), CRLs y AA/CA. Bloqueado por terceros.
-7. **Branch protection/ruleset en `main`** — CI informa pero no impide merges
-   con checks rojos.
+1. **Minteo móvil** (P-102) — en curso, `PROMPT_MINTEO_MOVIL.md`.
+2. **Anti-replay de la cédula** — en curso, `PROMPT_ANTI_REPLAY.md`. Hoy quien
+   consiga los bytes del SOD y los DG puede reenviarlos y obtener un grant de
+   ese titular: la Autenticación Pasiva prueba que Chile firmó los datos, no
+   que el chip esté presente.
+3. **D-3 · tally MACI** — en curso, `PROMPT_MACI_TALLY_D3.md`.
+4. **Configuración de producción** — enumerada variable por variable en
+   [`PRODUCCION_SEPOLIA.md`](./PRODUCCION_SEPOLIA.md), con la línea de
+   `readiness.py` que exige cada una.
+5. **P-98 · BouncyCastle 1.64** — mide si volver a 1.74 rompe de verdad
+   `PACEKeySpec.createMRZKey` en un teléfono. Nadie lo midió; se bajó y con eso
+   volvió CVE-2023-33201.
+6. **Ceremonia multi-parte** — los 3 circuitos ZK tienen una sola contribución
+   Phase 2. Necesitan participantes independientes y beacon final. Es el mismo
+   problema que hace que el minteo móvil, aun funcionando, **no sea
+   "producción"**.
+7. **Rescatar el worktree del MACI relayer** (`a8e5cb9`) antes de que alguien lo
+   limpie.
+8. **Identidad civil de terceros** — ClaveÚnica (sandbox DGD), Master List CSCA
+   (Registro Civil/ICAO), CRLs. Bloqueado por terceros.
+9. **Onboarding web sin identidad civil** — la web solo tiene ClaveÚnica. O se
+   configura, o se le da un camino de cédula, o el alta es solo por móvil.
+10. **Branch protection/ruleset en `main`** — CI informa pero no impide merges
+    con checks rojos.
+11. **Separar roles del contrato** — una sola EOA es admin, root manager, pauser,
+    revoker y relayer. El contrato espera un Safe como admin.
 
-**Lo que ya NO bloquea (cerrado en esta sesión y por los subagentes):**
-- Anclaje poll↔propuesta on-chain en MACI (D-3, P-94) y habilitación de `private_voting: true`.
-- Despliegue simulado del SBT en Hardhat local con la asignación de `ROOT_MANAGER_ROLE` al relayer zk.
+**Lo que ya NO bloquea:**
+- Lectura de la cédula chilena por NFC: formato del CAN (P-97) y posición del
+  RUN en la MRZ (P-101), ambos descubiertos contra un documento físico.
+- `production_ready` inalcanzable por construcción (`046b570`).
+- Anclaje poll↔propuesta on-chain en MACI (D-3, P-94). **Ojo: esto no habilitó
+  `private_voting`, que sigue en `false` porque el tally está roto.**
+- Despliegue real del SBT en Sepolia, verificado en Sourcify, con
+  `ROOT_MANAGER_ROLE` asignado al relayer zk.
 - Build nativo iOS con autolinking de `react-native-quick-crypto` y corrección de llave CAN en bridge PACE.
 - Minteo con `MINTER_ROLE` inexistente (P-87).
 - Doble gasto de gas por timeout de recibo (P-89).

@@ -1,10 +1,12 @@
 # Producción en Sepolia — qué falta y cómo comprobarlo
 
-Estado verificado el 07-08-2026 contra el código y contra la cadena, no contra
-la documentación.
+Estado verificado el 07-08-2026 y recomprobado el 08-08-2026 contra el código y
+contra la cadena, no contra la documentación.
 
-La conclusión corta: **el código ya no bloquea nada.** Lo que falta es
-configuración de despliegue y tres decisiones que no le tocan a un agente.
+La conclusión corta: **el backend ya no bloquea el alta.** Lo que falta es
+configuración de despliegue, tres decisiones que no le tocan a un agente, y
+**una pieza de código real: el cliente móvil no está conectado al camino de
+minteo** (P-102, abajo).
 
 ---
 
@@ -24,7 +26,9 @@ Y en la cadena, `0x6C6C7D0ceC1b7267cB2fa146519FBF9ef6319d56` (Sepolia,
 chain 11155111) responde a la ABI actual: el backend le lee `membershipScope()`,
 no está pausado, y la wallet del relayer tiene `ROOT_MANAGER_ROLE`.
 
-`totalSupply()` es 0 porque nadie ha minteado todavía.
+`totalSupply()` es 0 porque nadie ha minteado todavía (recomprobado el
+08-08-2026). El relayer `0x118d2C9e…` tiene ~0,0480 ETH, suficiente para
+mintear.
 
 ---
 
@@ -92,6 +96,38 @@ lo fijan (`test_readiness.py`).
 ---
 
 ## Lo que sigue abierto de verdad
+
+### P-102 (alta) — la app móvil no puede mintear
+
+`mobile/src/services/apiService.ts:121` llama a `POST /membership/mint`, cuyos
+tres modos están bloqueados en producción a propósito. La app llega hasta el
+`membership_grant` y ahí se queda, así que **quien lee su cédula con el teléfono
+no obtiene membresía**. El camino real es `/membership/mint-zk`.
+
+La web no comparte este camino: usa ERC-4337 + Safe. En curso, con la decisión
+ya tomada (relayer + prueba Groth16 en WebView local): ver
+`docs/PROMPT_MINTEO_MOVIL.md` y la Enmienda 1 del ADR-001.
+
+### Antes del primer minteo: es irreversible para esa cédula
+
+El contrato nunca limpia `_usedNullifiers`, ni siquiera al revocar
+(`DAOCiudadanaSBT.sol:280`). `executeRevocation` quema el SBT y libera la
+wallet, pero **la cédula no puede volver a mintear jamás en ese despliegue**, y
+ni el admin puede deshacerlo (P-103). Es la propiedad anti-doble-minteo, no un
+defecto.
+
+Decide antes de la primera prueba end-to-end si gastas una cédula real o
+despliegas un contrato aparte para pruebas. Desplegar es barato en Sepolia y
+`contracts/` ya tiene los scripts — pero recuerda que `membershipScope` se
+deriva de `address(this)`, así que las credenciales de un despliegue no valen
+en otro.
+
+### El minteo del piloto no es "producción", aunque funcione
+
+`circuits/artifact-manifest.json` declara `productionReady: false` y
+`trustedSetup: "single-host-development-integration"`. Quien corrió esa
+ceremonia puede falsificar pruebas. Sirve para el piloto en testnet; no lo
+llames producción en ningún commit, documento ni pantalla.
 
 ### P-98 (alta) — BouncyCastle bajado a 1.64
 

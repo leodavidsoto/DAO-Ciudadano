@@ -59,6 +59,13 @@ yarn-error.log
 # Bundle artifact
 *.jsbundle
 
+# Salida de `react-native bundle`. No es fuente: el bundle pesa ~8 MB y las
+# imágenes son copias de node_modules con nombre aplanado. Los iconos de la app
+# viven en res/mipmap-*/ y res/drawable/, que sí se versionan.
+android/app/src/main/assets/index.android.bundle
+android/app/src/main/res/drawable-*/
+android/app/src/main/res/raw/
+
 # Ruby / CocoaPods
 **/Pods/
 /vendor/bundle/

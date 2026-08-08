@@ -1,4 +1,7 @@
-# ADR-005: Elección de Red Mainnet para Producción
+# ADR-008: Elección de Red L2 para Producción
+
+> Renumerado el 08-08-2026: antes era **ADR-005** en `docs/adr/`, número que ya
+> ocupaba otro ADR en `docs/`. El contenido no cambió.
 
 ## Estado
 Propuesto

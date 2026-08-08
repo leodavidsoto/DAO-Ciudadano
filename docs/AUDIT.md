@@ -1,8 +1,30 @@
 # Auditoría técnica — DAO Ciudadana
 
-> **Estado vigente:** lee primero “Hallazgos nuevos (cuarta pasada,
-> 01-08-2026)” al final. El resumen y las secciones anteriores se conservan
-> como registro histórico del commit `f2902ca` y no describen el HEAD actual.
+## Hallazgos abiertos (al 08-08-2026)
+
+Este documento son 2.400 líneas y veintidós pasadas. Esto es lo único que sigue
+abierto; todo lo demás está corregido y se conserva como registro.
+
+| # | Severidad | Qué es | Estado |
+|---|---|---|---|
+| P-54 | Alta (integridad electoral) | El coordinador MACI puede excluir mensajes declarándolos mal firmados, y nadie puede distinguirlo de una exclusión legítima porque el contenido va cifrado | 🔴 Aceptado a sabiendas para el piloto. No apto para elección vinculante |
+| P-80 | Alta | No hay Master List chilena con procedencia aprobada: hoy son 5 anclas CSCA en un PEM del repositorio | 🔴 Abierto, depende del Registro Civil |
+| P-83 | Alta | No se consulta revocación documental (CRL/OCSP) de la cadena CSCA | 🔴 Abierto |
+| P-84 | Alta | La Autenticación Pasiva prueba que Chile firmó los datos, no que el chip esté presente ni que quien lo presenta sea el titular | 🟡 La mitad del «chip presente» la cierra la Autenticación Activa, en curso. La correspondencia DG2 ↔ titular sigue abierta |
+| P-93 | Alta | Llave de proveedor expuesta en el historial Git público | 🟡 Mitigado con `gitleaks` en CI; **la rotación sigue pendiente** |
+| P-98 | Alta | BouncyCastle bajado de 1.74 a 1.64 reintroduce CVE-2023-33201 | 🔴 Sin corregir. No publicar APK así |
+| P-100 | Media | `ScanScreen.tsx:405` pinta el formulario encima del título con el teclado abierto | 🔴 Sin corregir |
+| P-102 | Alta | La app móvil no puede mintear: `apiService.ts:121` llama a `/membership/mint`, bloqueado en producción | 🟡 En curso |
+| P-103 | Informativa | Revocar no libera el nullifier: cada cédula sirve para un solo minteo por despliegue | ⚪ Por diseño. Consecuencia operativa, no defecto |
+| — | Alta | **D-3: el tally MACI está roto.** Las señales públicas del contrato y las del circuito no coinciden, así que ninguna prueba auténtica pasa `publishTally` | 🔴 En curso |
+
+Fuera de esta tabla, dos límites que no son hallazgos sino propiedades del
+piloto: la ceremonia de confianza de los circuitos es de **una sola parte**, y
+una **única EOA** concentra admin, root manager, pauser, revoker y relayer.
+
+> **Registro histórico:** el resumen y las secciones anteriores describen el
+> commit `f2902ca` y no el HEAD actual. Las pasadas están en orden cronológico;
+> la más reciente es la vigesimosegunda, al final.
 
 **Fecha:** 26 de julio de 2026
 **Commit auditado:** `f2902ca` (`main`) — *Add React Native mobile app with NFC chip reading support*
@@ -2293,3 +2315,120 @@ Lo que sigue bloqueando el minteo es `MINT_MODE=disabled`, no la identidad.
 El `InsecureKeyLengthWarning` de 14 bytes que aparece en desarrollo es la `SECRET_KEY` por
 defecto (`dev-secret-key`, en `config.py:42`). **No es un hallazgo:** `readiness.py:71` ya
 la trata como placeholder y exige 32 caracteres o más, así que producción falla cerrado.
+
+---
+
+## Vigesimosegunda pasada (08-08-2026) — minteo móvil, revocación y ADR-001
+
+Pasada de estado, no de código nuevo: tres agentes trabajan en paralelo sobre
+esta misma rama. Lo que sigue es lo que se verificó contra el código y contra
+la cadena mientras tanto.
+
+### P-102 (alta, en curso): la app móvil no puede mintear en producción
+
+`mobile/src/services/apiService.ts:121` llama a `POST /membership/mint`. Ese
+endpoint tiene **sus tres modos bloqueados en producción a propósito**, así que
+la app llega hasta el `membership_grant` y ahí se queda. El frontend web no
+comparte este camino: usa ERC-4337 + Safe (`prepare-mint`/`submit-mint`).
+
+No es un bug de configuración. Es que el cliente móvil nunca se conectó al
+camino real (`/membership/mint-zk`).
+
+El trabajo duro no es el endpoint, es generar la prueba Groth16 en el
+dispositivo: Hermes no ejecuta WASM. Decisión tomada: **WebView local con
+snarkjs**, reutilizando lo que ya hace `frontend/src/lib/zk.js`.
+`@iden3/react-native-rapidsnark` se descartó por estar en `0.0.1-beta.2` y no
+calcular el testigo. El circuito es pequeño —6.658 restricciones no lineales,
+wasm 2,1 MB, zkey 5,9 MB según `circuits/artifact-manifest.json`— pero **el
+tiempo en un teléfono real es una medición pendiente, no una predicción**.
+
+Encargo en curso: `docs/PROMPT_MINTEO_MOVIL.md`.
+
+### P-103 (informativa, por diseño): revocar no libera el nullifier
+
+Comprobado en el contrato y contra Sepolia, no en la documentación.
+
+```solidity
+// DAOCiudadanaSBT.sol:261 — executeRevocation, onlyRole(REVOKER_ROLE)
+_burn(tokenId);
+_memberTokens[member] = 0;
+delete _tokenNullifiers[tokenId];
+delete _tokenIdentityRoots[tokenId];
+// _usedNullifiers is deliberately never cleared.   ← línea 280
+```
+
+| | |
+|---|---|
+| El SBT se quema | ✅ |
+| La wallet queda libre para otra membresía | ✅ |
+| El suministro activo baja | ✅ |
+| La cédula puede volver a mintear | ❌ nunca |
+
+`REVOKER_ROLE` está concedido a `0x118d2C9eec35bdfc2C84B5A33299AcCc16Ed60d4`
+—la misma EOA que es admin y relayer—, comprobado con `hasRole()` contra
+Sepolia. El flujo es en dos pasos con `REVOCATION_COOLDOWN = 3 days`.
+
+**No es un defecto, es la propiedad anti-doble-minteo.** Si el nullifier se
+pudiera limpiar, quien tuviera `REVOKER_ROLE` fabricaría membresías ilimitadas
+desde una sola cédula. Se registra porque tiene una consecuencia operativa que
+conviene saber **antes** y no después: cada cédula sirve para exactamente un
+minteo por despliegue, y ni el admin puede deshacerlo. Para repetir pruebas de
+alta hace falta otra cédula o un despliegue nuevo.
+
+Recordatorio relacionado: `membershipScope` se deriva de `address(this)`, así
+que redesplegar invalida toda credencial ya emitida.
+
+### P-104 (media, documentación): la letra del ADR-001 y la ejecución divergen
+
+El titular de la decisión 2 del ADR-001 es «Resolución de D-1: Account
+Abstraction (ERC-4337)». El camino real del móvil es el relayer EOA. El cuerpo
+del ADR sí lo admite («un *Relayer* o *Paymaster* de la DAO patrocina el gas»),
+pero el titular no.
+
+Se corrigió registrando una **Enmienda 1** en el propio ADR en vez de dejarlo
+como desviación silenciosa. Cerrado.
+
+### Nota de alcance: qué significa "minteo real" mientras la ceremonia sea de una parte
+
+`circuits/artifact-manifest.json` declara `productionReady: false` y
+`trustedSetup: "single-host-development-integration"`. Quien corrió esa
+ceremonia puede falsificar pruebas. El minteo móvil, cuando funcione, **hereda
+esa limitación**: sirve para el piloto en testnet y no debe llamarse producción
+en ningún commit, doc ni pantalla. Es el mismo problema de ceremonia de una
+sola parte que arrastran los tres circuitos.
+
+### Estado verificado el 08-08-2026 contra Sepolia
+
+| Comprobación | Resultado |
+|---|---|
+| `totalSupply()` de `0x6C6C7D0c…` | `0` — sigue sin mintearse nada |
+| Saldo del relayer `0x118d2C9e…` | ~0,0480 ETH — suficiente para mintear |
+
+### Suites verificadas el 07-08-2026
+
+| Suite | Runner | Resultado |
+|---|---|---|
+| Frontend web | `craco test` | 90 verdes |
+| Mobile | `jest` del proyecto | 76 verdes |
+
+Aviso metodológico: invocar `jest` directamente sobre `frontend/` falla con un
+error del parser de Babel. No es un test roto, es el runner equivocado — CRA
+necesita `craco test`. No lo diagnostiques como fallo de la suite.
+
+### Deuda sin commitear
+
+El **MACI relayer** vive solo en el worktree
+`subagent-MACI-Relayer-Engineer-…` (`a8e5cb9`), sin commitear a la rama. Si se
+limpia ese worktree, `maci_relayer.py`, sus tests y los cambios de
+`governance.py` se pierden. Igual, con menos riesgo, `5f2a315` (E2E Playwright)
+y `bdb78cf` (primer intento de Active Auth — **ojo, ver aviso abajo**).
+
+### Aviso sobre el Active Auth de `bdb78cf`
+
+La implementación de Autenticación Activa de ese worktree **usa PKCS1v15 para
+RSA**, y su propio comentario admite que ICAO 9303 exige ISO/IEC 9796-2 Scheme
+1. Rechazaría todos los chips reales. Sus tests pasan porque se escribieron
+contra la misma suposición equivocada — exactamente el patrón que ocultó P-97 y
+P-101 durante meses. No se fusiona tal cual. El encargo en curso
+(`docs/PROMPT_ANTI_REPLAY.md`) parte de vectores de prueba de ICAO, no de la
+propia implementación.
