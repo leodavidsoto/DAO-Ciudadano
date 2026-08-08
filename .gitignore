@@ -135,3 +135,11 @@ contracts/deployments/
 
 # Local Netlify folder
 .netlify
+
+# Herramientas de terceros del ICAO PKD. No son fuente y pesan 180 MB: el
+# instalador de OpenJDK para Windows superaba por sí solo el límite de 100 MB
+# de GitHub y bloqueaba el push. Se descargan del PKD del ICAO cuando hagan
+# falta. Los datos que sí importan —la Master List .ml y el LDIF del que se
+# extraen las anclas CSCA— siguen versionados.
+icao/**/*.msi
+icao/**/*.jar
