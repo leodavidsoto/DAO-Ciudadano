@@ -186,7 +186,7 @@ jobs:
             > outputs/release-checksums.sha256
       - name: Attest Android artifacts
         if: github.event.repository.visibility == 'public' || vars.ENABLE_MOBILE_ATTESTATION == 'true'
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             mobile/android/app/build/outputs/apk/release/app-release.apk
@@ -459,7 +459,7 @@ jobs:
             > ios-release-checksums.sha256
       - name: Attest iOS artifacts
         if: github.event.repository.visibility == 'public' || vars.ENABLE_MOBILE_ATTESTATION == 'true'
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/DAOCiudadanaApp.ipa
