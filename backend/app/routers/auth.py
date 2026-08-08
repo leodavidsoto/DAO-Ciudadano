@@ -1,27 +1,63 @@
 """
 Authentication Router
-Handles ClaveÚnica, NFC, and Liveness detection endpoints
+Handles Liveness detection and the RUT+email pilot registration.
+
+ClaveÚnica y NFC ya NO viven aquí: sus simuladores se eliminaron y sus
+caminos reales están en `clave_unica.py` y `cedula.py`, fuera de este router
+porque este apaga todos sus endpoints en producción. Lo que queda son los
+`410 Gone` que dicen a los clientes desplegados adónde ir.
 """
-from fastapi import APIRouter, File, UploadFile, HTTPException
-from typing import Optional
+
+from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
 import logging
 import asyncio
+import re
 import uuid
 import base64
 import io
 from PIL import Image
 
 from ..models import (
-    ClaveUnicaRequest, ClaveUnicaResponse,
-    NFCRequest, NFCResponse, LivenessResponse, IdentityEvent
+    LivenessResponse,
+    User,
+    UserRegisterRequest,
+    UserLoginRequest,
+    UserResponse,
 )
-from ..core.security import generate_short_hash
-from ..core.database import identity_events_collection
+from ..core import readiness
 from ..core.config import settings
+from ..core.crypto import encrypt, decrypt
+from ..core.database import users_collection
+from ..core.identity import lookup_key, lookup_key_candidates
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+DEMO_ASSURANCE_LEVEL = "DEMO_UNVERIFIED"
+
+
+def require_non_production_identity_demo() -> None:
+    """Fail closed when a simulated identity flow reaches production.
+
+    None of these routes currently authenticates civil identity: ClaveUnica
+    and NFC are simulations, a single-image LLM is not a liveness verifier,
+    and RUT + email only proves knowledge of submitted data. A router-level
+    dependency runs before endpoint logic and before any database mutation.
+    """
+    if settings.is_production:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Los flujos de identidad de este piloto están deshabilitados "
+                "en producción hasta integrar un verificador de identidad real."
+            ),
+        )
+
+
+router = APIRouter(
+    prefix="/auth",
+    tags=["Authentication"],
+    dependencies=[Depends(require_non_production_identity_demo)],
+)
 
 
 async def mock_delay(seconds: float = 0.1):
@@ -29,212 +65,191 @@ async def mock_delay(seconds: float = 0.1):
     await asyncio.sleep(seconds)
 
 
-@router.post("/clave-unica", response_model=ClaveUnicaResponse)
-async def authenticate_clave_unica(request: ClaveUnicaRequest):
+@router.post("/clave-unica", deprecated=True)
+async def clave_unica_simulation_removed():
+    """El simulador de ClaveÚnica se eliminó (ROADMAP 4.1).
+
+    Devolvía `demo:clave-unica:<uuid>` y un `assurance_level` inventado para
+    cualquier RUT con formato válido: no autenticaba a nadie. Ahora existe el
+    flujo OIDC real, así que mantener el simulador dejaría dos puertas donde
+    una finge ser identidad civil (AGENTS.md, regla 2).
+
+    Queda esta señal en vez de un 404 mudo porque hay clientes desplegados
+    llamando aquí: así reciben qué usar en su lugar y no un error opaco.
     """
-    Authenticate user with ClaveÚnica (Chilean government SSO)
-    
-    In production, this would redirect to the official ClaveÚnica portal.
-    Currently uses mock authentication for development.
-    """
-    try:
-        await mock_delay(0.12)
-        
-        if not request.rut or len(request.rut) < 8:
-            return ClaveUnicaResponse(ok=False, error="RUT inválido")
-        
-        # Mock successful authentication
-        subject_id = f"claveunica:{request.rut}"
-        
-        # Store identity event
-        event = IdentityEvent(
-            user_id=request.rut,
-            event_type="clave_unica",
-            hash_value=generate_short_hash(request.rut),
-            verifier="claveunica_gov"
-        )
-        await identity_events_collection().insert_one(event.model_dump())
-        
-        return ClaveUnicaResponse(
-            ok=True,
-            subject_id=subject_id,
-            assurance_level="AL2"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error in ClaveÚnica auth: {e}")
-        return ClaveUnicaResponse(ok=False, error=str(e))
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "El simulador de ClaveÚnica se eliminó. Usa el flujo real: "
+            "POST /api/auth/clave-unica/authorize y luego "
+            "POST /api/auth/clave-unica/callback."
+        ),
+    )
 
 
-@router.post("/nfc", response_model=NFCResponse)
-async def authenticate_nfc(request: Optional[NFCRequest] = None):
-    """
-    Authenticate using NFC chip in Chilean ID card
+@router.post("/nfc", deprecated=True)
+async def nfc_simulation_removed():
+    """El simulador de NFC se eliminó (ROADMAP 5.8).
 
-    DEMO MODE: no cryptographic verification of the chip happens yet
-    (real PACE reading is ROADMAP task 4.2). If the client sends the chip
-    serial it captured, it is used as-is; otherwise a demo serial is generated.
-    """
-    try:
-        await mock_delay(0.16)
+    Devolvía `ok: true` con un `chip_serial` y un `doc_hash` derivados de lo
+    que el cliente quisiera mandar —o de un UUID aleatorio si no mandaba
+    nada—. No leía ningún chip ni comprobaba ninguna firma: acreditaba
+    identidad a cualquiera que llamase al endpoint.
 
-        if request and request.chip_serial:
-            chip_serial = request.chip_serial
-        else:
-            chip_serial = f"NFC-CL-CH-{uuid.uuid4().hex[:8].upper()}"
-        doc_hash = f"0x{generate_short_hash('nfc_doc_' + chip_serial)}"
-        
-        # Store identity event
-        event = IdentityEvent(
-            user_id=chip_serial,
-            event_type="nfc",
-            hash_value=doc_hash,
-            verifier="chile_gov_nfc"
-        )
-        await identity_events_collection().insert_one(event.model_dump())
-        
-        return NFCResponse(
-            ok=True,
-            chip_serial=chip_serial,
-            doc_hash=doc_hash
-        )
-        
-    except Exception as e:
-        logger.error(f"Error in NFC auth: {e}")
-        return NFCResponse(ok=False, error=str(e))
+    Ahora existe la verificación real: `POST /api/auth/cedula/verify` recibe
+    los bytes del EF.SOD y de los data groups, repite la Autenticación Pasiva
+    contra las CSCA del Registro Civil y sólo entonces emite un grant civil.
+
+    Queda esta señal en vez de un 404 mudo porque hay clientes desplegados
+    llamando aquí: así reciben qué usar en su lugar (AGENTS.md, regla 2).
+    """
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "El simulador de NFC se eliminó. Usa la verificación real: "
+            "POST /api/auth/cedula/verify con el EF.SOD y los data groups "
+            "leídos del chip."
+        ),
+    )
 
 
 @router.post("/liveness", response_model=LivenessResponse)
 async def analyze_liveness(file: UploadFile = File(...)):
     """
-    Analyze uploaded image for liveness detection
-    
-    Uses AI vision to determine if the image shows a real person
-    taking a live selfie vs a photo, video, or deepfake.
+    Run a demo-only visual heuristic over an uploaded image.
+
+    A single still image cannot prove liveness. This route stays useful for
+    interface testing outside production, but its result is not identity
+    evidence and is never persisted as one.
     """
     try:
-        if not file.content_type or not file.content_type.startswith('image/'):
+        if not file.content_type or not file.content_type.startswith("image/"):
             return LivenessResponse(ok=False, error="El archivo debe ser una imagen")
-        
+
         # Read and validate image
         contents = await file.read()
         if len(contents) > 10 * 1024 * 1024:  # 10MB limit
             return LivenessResponse(ok=False, error="Imagen muy grande (máximo 10MB)")
-        
+
         try:
             image = Image.open(io.BytesIO(contents))
             image.verify()
         except Exception:
             return LivenessResponse(ok=False, error="Imagen inválida")
-        
+
         # Convert to base64 for LLM
-        base64_image = base64.b64encode(contents).decode('utf-8')
-        
+        base64_image = base64.b64encode(contents).decode("utf-8")
+
         # Check for API key
         api_key = settings.EMERGENT_LLM_KEY
         if not api_key:
-            # Return mock response if no API key
-            logger.warning("No EMERGENT_LLM_KEY configured, using mock liveness")
-            score = 0.85
-            analysis = "Mock liveness detection: imagen parece ser genuina (API key no configurada)"
+            # No provider, no score. Returning a fixed 0.85 here is exactly the
+            # fabricated-value pattern AGENTS.md forbids: the client cannot
+            # tell it apart from a real measurement, and this project already
+            # shipped that number to production once.
+            logger.warning("No EMERGENT_LLM_KEY configured; liveness returns no score")
+            score = None
+            analysis = (
+                "DEMO: no hay proveedor de análisis configurado, así que no se "
+                "calculó ningún puntaje. Este flujo no verifica presencia en vivo."
+            )
         else:
             # Real LLM analysis
             try:
-                from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
-                
+                from emergentintegrations.llm.chat import (
+                    LlmChat,
+                    UserMessage,
+                    ImageContent,
+                )
+
                 chat = LlmChat(
                     api_key=api_key,
                     session_id=f"liveness_{uuid.uuid4()}",
-                    system_message="""Eres un experto en detección de vida (liveness detection). 
-                    Analiza esta imagen y determina si muestra una persona real en vivo o si es una foto/video/deepfake.
-                    
-                    Evalúa:
-                    1. Naturalidad de la pose y expresión
-                    2. Calidad de la imagen (¿parece tomada en vivo?)
-                    3. Signos de vida como micro-movimientos o inconsistencias de deepfake
-                    4. Contexto y fondo
-                    
-                    Responde con un score de 0.0 a 1.0 donde:
-                    - 0.0-0.3: Definitivamente no es una persona real
-                    - 0.4-0.6: Dudoso, posible foto o video
-                    - 0.7-0.9: Probablemente una persona real
-                    - 0.9-1.0: Definitivamente una persona real en vivo
-                    
-                    Formato: "SCORE: 0.85 | ANÁLISIS: [tu análisis detallado]" """
+                    system_message="""Evalúa solo indicios visuales en esta imagen.
+                    Una imagen estática no permite verificar presencia en vivo,
+                    así que no afirmes que la identidad o el liveness están
+                    verificados. El score representa únicamente qué tan
+                    consistente parece la imagen con un selfie normal.
+
+                    Formato: "SCORE: 0.85 | ANÁLISIS: [tu análisis detallado]" """,
                 ).with_model("openai", "gpt-4o")
-                
+
                 image_content = ImageContent(image_base64=base64_image)
                 user_message = UserMessage(
-                    text="Analiza esta imagen para detección de vida (liveness detection). ¿Es una persona real tomándose un selfie ahora mismo?",
-                    file_contents=[image_content]
+                    text=(
+                        "Describe indicios visuales de un selfie sin afirmar que "
+                        "la presencia en vivo está verificada."
+                    ),
+                    file_contents=[image_content],
                 )
-                
+
                 response = await chat.send_message(user_message)
-                
+
                 # Parse response
                 score = 0.5
                 analysis = response
-                
+
                 if "SCORE:" in response:
                     try:
                         score_part = response.split("SCORE:")[1].split("|")[0].strip()
                         score = float(score_part)
                         if "|" in response:
-                            analysis = response.split("|", 1)[1].replace("ANÁLISIS:", "").strip()
-                    except:
+                            analysis = (
+                                response.split("|", 1)[1]
+                                .replace("ANÁLISIS:", "")
+                                .strip()
+                            )
+                    except (ValueError, IndexError):
                         pass
-                        
+
             except ImportError:
-                logger.warning("emergentintegrations not available, using mock")
-                score = 0.85
-                analysis = "Mock liveness: biblioteca no disponible"
+                logger.warning(
+                    "emergentintegrations not available; liveness returns no score"
+                )
+                score = None
+                analysis = (
+                    "DEMO: la biblioteca de análisis no está disponible, así "
+                    "que no se calculó ningún puntaje. Este flujo no verifica "
+                    "presencia en vivo."
+                )
             except Exception as e:
+                # Never surface the provider's error text (it can carry URLs,
+                # model ids or key fragments) as if it were an analysis result.
                 logger.error(f"LLM error: {e}")
-                score = 0.5
-                analysis = f"Error en análisis: {str(e)}"
-        
-        # Store identity event
-        event = IdentityEvent(
-            user_id=generate_short_hash(base64_image[:100]),
-            event_type="liveness",
-            hash_value=generate_short_hash(f"liveness_{score}"),
-            verifier="llm_vision_ai"
-        )
-        await identity_events_collection().insert_one(event.model_dump())
-        
-        return LivenessResponse(
-            ok=True,
-            score=score,
-            analysis=analysis
-        )
-        
+                score = None
+                analysis = (
+                    "DEMO: el análisis falló; no se calculó ningún puntaje. "
+                    "Este flujo no verifica presencia en vivo."
+                )
+
+        if not analysis.startswith("DEMO:"):
+            analysis = (
+                "DEMO: heurística sobre una sola imagen; no constituye una "
+                f"verificación de presencia en vivo. {analysis}"
+            )
+
+        return LivenessResponse(ok=True, score=score, analysis=analysis)
+
     except Exception as e:
         logger.error(f"Error in liveness detection: {e}")
-        return LivenessResponse(ok=False, error=f"Error en análisis: {str(e)}")
+        return LivenessResponse(ok=False, error="No se pudo procesar la imagen.")
 
 
 # === RUT + Email Authentication (Simple registration while awaiting ClaveÚnica sandbox) ===
-
-from ..models import User, UserRegisterRequest, UserLoginRequest, UserResponse
-from ..core.database import users_collection
-from ..core import readiness
-from ..core.crypto import encrypt, decrypt
-from ..core.identity import lookup_key
-import re
 
 
 def validate_rut(rut: str) -> bool:
     """Validate Chilean RUT format and check digit"""
     # Clean RUT
     rut = rut.replace(".", "").replace("-", "").upper()
-    
+
     if len(rut) < 8 or len(rut) > 12:
         return False
-    
+
     # Separate number and check digit
     body = rut[:-1]
     check = rut[-1]
-    
+
     try:
         # Calculate check digit
         sum_val = 0
@@ -242,7 +257,7 @@ def validate_rut(rut: str) -> bool:
         for digit in reversed(body):
             sum_val += int(digit) * multiplier
             multiplier = multiplier + 1 if multiplier < 7 else 2
-        
+
         remainder = 11 - (sum_val % 11)
         if remainder == 11:
             expected = "0"
@@ -250,7 +265,7 @@ def validate_rut(rut: str) -> bool:
             expected = "K"
         else:
             expected = str(remainder)
-        
+
         return check == expected
     except ValueError:
         return False
@@ -261,14 +276,14 @@ def format_rut(rut: str) -> str:
     rut = rut.replace(".", "").replace("-", "").upper()
     body = rut[:-1]
     check = rut[-1]
-    
+
     # Format with dots
     formatted = ""
     for i, char in enumerate(reversed(body)):
         if i > 0 and i % 3 == 0:
             formatted = "." + formatted
         formatted = char + formatted
-    
+
     return f"{formatted}-{check}"
 
 
@@ -290,13 +305,15 @@ async def register_user(request: UserRegisterRequest):
 
         # Validate RUT
         if not validate_rut(request.rut):
-            return UserResponse(ok=False, error="RUT inválido. Verifica el formato (ej: 12345678-9)")
+            return UserResponse(
+                ok=False, error="RUT inválido. Verifica el formato (ej: 12345678-9)"
+            )
 
         # Format RUT
         formatted_rut = format_rut(request.rut)
 
         # Validate email
-        email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        email_regex = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
         if not re.match(email_regex, request.email):
             return UserResponse(ok=False, error="Email inválido")
 
@@ -305,12 +322,25 @@ async def register_user(request: UserRegisterRequest):
         email_key = lookup_key(normalized_email, domain="email")
 
         # Check if RUT already registered (por índice ciego, no por el
-        # valor cifrado -- dos cifrados del mismo RUT no son iguales)
-        existing = await users_collection().find_one({"rut_key": rut_key})
+        # valor cifrado -- dos cifrados del mismo RUT no son iguales).
+        #
+        # Se buscan también las claves derivadas del pepper anterior: durante
+        # una rotación, mirar solo la vigente daría "no existe" para alguien ya
+        # registrado y crearía un duplicado que el índice único rechazaría con
+        # un error opaco.
+        existing = await users_collection().find_one(
+            {"rut_key": {"$in": lookup_key_candidates(formatted_rut, domain="rut")}}
+        )
         if existing:
             return UserResponse(ok=False, error="Este RUT ya está registrado")
 
-        existing_email = await users_collection().find_one({"email_key": email_key})
+        existing_email = await users_collection().find_one(
+            {
+                "email_key": {
+                    "$in": lookup_key_candidates(normalized_email, domain="email")
+                }
+            }
+        )
         if existing_email:
             return UserResponse(ok=False, error="Este email ya está registrado")
 
@@ -326,16 +356,6 @@ async def register_user(request: UserRegisterRequest):
 
         await users_collection().insert_one(user.model_dump())
 
-        # Store identity event -- usa el hash de identidad (D-2), no un
-        # sha256 sin sal sobre RUT+email en texto plano
-        event = IdentityEvent(
-            user_id=rut_key,
-            event_type="rut_email",
-            hash_value=generate_short_hash(rut_key + email_key),
-            verifier="dao_ciudadana_registration"
-        )
-        await identity_events_collection().insert_one(event.model_dump())
-
         logger.info(f"New user registered (rut_key={rut_key[:8]}...)")
 
         return UserResponse(
@@ -344,15 +364,17 @@ async def register_user(request: UserRegisterRequest):
             rut=formatted_rut,
             email=normalized_email,
             nombre=request.nombre,
-            subject_id=f"rut:{rut_key}",
-            assurance_level="AL1"  # Lower assurance since not verified with ClaveÚnica
+            subject_id=f"demo:user:{user.id}",
+            assurance_level=DEMO_ASSURANCE_LEVEL,
         )
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in registration: {e}")
-        return UserResponse(ok=False, error="No se pudo completar el registro. Intenta de nuevo.")
+        return UserResponse(
+            ok=False, error="No se pudo completar el registro. Intenta de nuevo."
+        )
 
 
 @router.post("/login", response_model=UserResponse)
@@ -371,13 +393,19 @@ async def login_user(request: UserLoginRequest):
 
         formatted_rut = format_rut(request.rut)
         normalized_email = request.email.lower()
-        rut_key = lookup_key(formatted_rut, domain="rut")
-        email_key = lookup_key(normalized_email, domain="email")
 
-        user_doc = await users_collection().find_one({
-            "rut_key": rut_key,
-            "email_key": email_key,
-        })
+        # `$in` con las claves del pepper vigente y del anterior: durante una
+        # rotación, un usuario aún no reindexado tiene que poder entrar. Fuera
+        # de una rotación la lista tiene un solo elemento y la consulta es la
+        # misma de siempre.
+        user_doc = await users_collection().find_one(
+            {
+                "rut_key": {"$in": lookup_key_candidates(formatted_rut, domain="rut")},
+                "email_key": {
+                    "$in": lookup_key_candidates(normalized_email, domain="email")
+                },
+            }
+        )
 
         if not user_doc:
             return UserResponse(ok=False, error="RUT o email incorrectos")
@@ -385,15 +413,9 @@ async def login_user(request: UserLoginRequest):
         if user_doc.get("status") != "active":
             return UserResponse(ok=False, error="Cuenta desactivada")
 
-        event = IdentityEvent(
-            user_id=rut_key,
-            event_type="rut_email_login",
-            hash_value=generate_short_hash(f"login_{rut_key}"),
-            verifier="dao_ciudadana_login"
-        )
-        await identity_events_collection().insert_one(event.model_dump())
-
-        logger.info(f"User logged in (rut_key={rut_key[:8]}...)")
+        # Se registra la clave REAL del documento, no la recalculada: durante
+        # una rotación pueden diferir, y la útil para rastrear es la guardada.
+        logger.info(f"User logged in (rut_key={str(user_doc.get('rut_key'))[:8]}...)")
 
         try:
             nombre = decrypt(user_doc.get("nombre"))
@@ -406,13 +428,14 @@ async def login_user(request: UserLoginRequest):
             rut=formatted_rut,
             email=normalized_email,
             nombre=nombre,
-            subject_id=f"rut:{rut_key}",
-            assurance_level="AL1"
+            subject_id=f"demo:user:{user_doc.get('id')}",
+            assurance_level=DEMO_ASSURANCE_LEVEL,
         )
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in login: {e}")
-        return UserResponse(ok=False, error="No se pudo iniciar sesión. Intenta de nuevo.")
-
+        return UserResponse(
+            ok=False, error="No se pudo iniciar sesión. Intenta de nuevo."
+        )

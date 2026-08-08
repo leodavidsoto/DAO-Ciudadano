@@ -2,7 +2,16 @@
  * Wallet Connection Step - Real MetaMask Integration
  */
 import React, { useState, useEffect } from 'react';
-import { Wallet, Globe, AlertCircle, ExternalLink, RefreshCw, Loader2, ArrowRight } from 'lucide-react';
+import {
+    Wallet,
+    Globe,
+    AlertCircle,
+    ExternalLink,
+    RefreshCw,
+    Loader2,
+    ArrowRight,
+    LogOut,
+} from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { CyberPanel, CyberLoader, SuccessDisplay } from './CyberUI';
@@ -10,31 +19,51 @@ import { useOnboarding } from '@/context';
 import { useWallet } from '@/hooks';
 
 const WalletStep = () => {
-    const { setWallet, setStep, setMint, wallet: onboardingWallet, fetchExistingMembership } = useOnboarding();
+    const {
+        setWallet,
+        setStep,
+        setMint,
+        setIdentity,
+        setError,
+        wallet: onboardingWallet,
+        fetchExistingMembership,
+        requestIdentityCredential,
+        zk,
+    } = useOnboarding();
     const {
         connect,
         address,
         balance,
         chainId,
+        eip1193Provider,
         networkInfo,
         shortAddress,
         isConnecting,
         error,
         isMetaMaskInstalled,
         isConnected,
-        switchNetwork
+        switchNetwork,
+        disconnect,
+        isDisconnecting,
     } = useWallet();
 
     const [isChecking, setIsChecking] = useState(true);
     const [existingToken, setExistingToken] = useState(null);
     const [checkingMembership, setCheckingMembership] = useState(false);
+    const [membershipLookupComplete, setMembershipLookupComplete] = useState(false);
 
-    // Chain the SBT contract is deployed on (see frontend/src/contracts/SBTContract.js)
+    // The current on-chain integration, once re-enabled, targets Sepolia.
     const REQUIRED_CHAIN_ID = 11155111; // Sepolia
     const isWrongNetwork = isConnected && chainId != null && Number(chainId) !== REQUIRED_CHAIN_ID;
 
-    const goToMint = () => {
-        setWallet({ address, chainId });
+    const goToMint = async () => {
+        if (!eip1193Provider || typeof eip1193Provider.request !== 'function') {
+            setError('MetaMask se desconectó; vuelve a conectarlo antes de autorizar la operación.');
+            return;
+        }
+        const connectedWallet = { address, chainId, eip1193Provider };
+        setWallet(connectedWallet);
+        await requestIdentityCredential(connectedWallet);
         setStep('mint');
     };
 
@@ -42,27 +71,74 @@ const WalletStep = () => {
     // reconnects on mount and handleConnect never runs. Without this effect the
     // flow renders "WALLET CONECTADA" and stops there forever.
     useEffect(() => {
-        if (!isConnected || !address) return;
-        if (onboardingWallet.address === address) return;
-        setWallet({ address, chainId });
-    }, [isConnected, address, chainId, onboardingWallet.address, setWallet]);
+        if (!isConnected || !address || !eip1193Provider) {
+            if (onboardingWallet.address) {
+                setWallet({});
+                setIdentity(null);
+                setMint({});
+            }
+            return;
+        }
+        const sameAddress =
+            onboardingWallet.address?.toLowerCase() === address.toLowerCase();
+        const sameChain =
+            onboardingWallet.chainId != null &&
+            chainId != null &&
+            Number(onboardingWallet.chainId) === Number(chainId);
+        const sameProvider = onboardingWallet.eip1193Provider === eip1193Provider;
+        if (sameAddress && sameChain && sameProvider) return;
+        if (onboardingWallet.address && (!sameAddress || !sameChain)) {
+            setIdentity(null);
+            setMint({});
+        }
+        setWallet({ address, chainId, eip1193Provider });
+    }, [
+        isConnected,
+        address,
+        chainId,
+        eip1193Provider,
+        onboardingWallet.address,
+        onboardingWallet.chainId,
+        onboardingWallet.eip1193Provider,
+        setIdentity,
+        setMint,
+        setWallet,
+    ]);
 
     // A wallet that already holds an SBT must not be sent to the mint step:
     // the backend rejects duplicates and the user hits a dead end reading
     // "Ya existe un SBT para esta wallet". Detect it here and offer to
     // continue with the membership they already have.
     useEffect(() => {
-        if (!isConnected || !address) return;
+        if (!isConnected || !address) {
+            setExistingToken(null);
+            setCheckingMembership(false);
+            setMembershipLookupComplete(false);
+            return;
+        }
         let alive = true;
+        setExistingToken(null);
         setCheckingMembership(true);
+        setMembershipLookupComplete(false);
         fetchExistingMembership(address)
             .then((member) => { if (alive) setExistingToken(member); })
-            .finally(() => { if (alive) setCheckingMembership(false); });
+            .finally(() => {
+                if (alive) {
+                    setCheckingMembership(false);
+                    setMembershipLookupComplete(true);
+                }
+            });
         return () => { alive = false; };
     }, [isConnected, address, fetchExistingMembership]);
 
     const continueWithExisting = () => {
-        setMint({ ok: true, token_id: existingToken.token_id, tx_hash: existingToken.tx_hash || null });
+        if (existingToken?.status !== 'active' || existingToken?.valid !== true) return;
+        setMint({
+            ok: true,
+            token_id: existingToken.token_id,
+            tx_hash: existingToken.tx_hash || null,
+            status: 'active',
+        });
         setStep('success');
     };
 
@@ -81,9 +157,8 @@ const WalletStep = () => {
             setWallet({
                 address: result.address,
                 chainId: result.chainId,
+                eip1193Provider: result.eip1193Provider,
             });
-            // Auto advance to next step
-            setTimeout(() => setStep('mint'), 1500);
         }
     };
 
@@ -92,14 +167,19 @@ const WalletStep = () => {
         setTimeout(() => setIsChecking(false), 1000);
     };
 
-    // Already connected from context (mock or previous connection)
-    const walletConnected = isConnected || onboardingWallet.address;
-    const displayAddress = address || onboardingWallet.address;
+    // Already connected from context or a previous connection.
+    const walletConnected = isConnected && Boolean(eip1193Provider);
+    const displayAddress = walletConnected ? address : null;
+    const activeMembership = existingToken?.status === 'active' && existingToken?.valid === true
+        ? existingToken
+        : null;
+    const inactiveMembership = existingToken && !activeMembership ? existingToken : null;
+    const membershipLookupPending = walletConnected && (checkingMembership || !membershipLookupComplete);
 
     return (
         <CyberPanel
-            title="CONEXIÓN DE WALLET BLOCKCHAIN"
-            description="Estableciendo enlace con billetera digital descentralizada"
+            title="CONEXIÓN DE WALLET"
+            description="Firma un desafío SIWE para demostrar control de la dirección"
             icon={<Wallet className="h-8 w-8" />}
         >
             <div className="flex flex-col items-center gap-6">
@@ -198,10 +278,23 @@ const WalletStep = () => {
                             </p>
                         )}
 
+                        <Button
+                            type="button"
+                            onClick={() => void disconnect()}
+                            disabled={isDisconnecting}
+                            aria-busy={isDisconnecting}
+                            variant="outline"
+                            size="sm"
+                            className="mt-4 border-gray-600 text-gray-400 hover:text-white"
+                        >
+                            <LogOut className="w-4 h-4 mr-2" />
+                            {isDisconnecting ? 'CERRANDO SESIÓN…' : 'CERRAR SESIÓN'}
+                        </Button>
+
                         {isWrongNetwork && (
                             <div className="mt-4 p-3 rounded-lg border border-yellow-500/40 bg-yellow-500/10 text-left">
                                 <p className="text-yellow-300 text-xs font-mono mb-2">
-                                    El contrato SBT vive en Sepolia. Cambia de red para continuar.
+                                    El piloto de wallet está configurado para Sepolia. Cambia de red para continuar.
                                 </p>
                                 <Button
                                     onClick={() => switchNetwork(REQUIRED_CHAIN_ID)}
@@ -212,17 +305,17 @@ const WalletStep = () => {
                             </div>
                         )}
 
-                        {checkingMembership && (
+                        {membershipLookupPending && (
                             <p className="text-xs text-gray-400 font-mono mt-4">
                                 Verificando membresía existente...
                             </p>
                         )}
 
-                        {!checkingMembership && existingToken && (
+                        {membershipLookupComplete && activeMembership && (
                             <div className="mt-4 p-3 rounded-lg border border-green-500/40 bg-green-500/10 text-left">
                                 <p className="text-green-300 text-xs font-mono mb-2">
-                                    Esta wallet ya tiene membresía (Token #{existingToken.token_id}).
-                                    No hace falta mintear de nuevo.
+                                    Esta wallet ya tiene un registro de membresía activo (#{activeMembership.token_id}).
+                                    No hace falta crear otro registro.
                                 </p>
                                 <Button onClick={continueWithExisting} className="cyber-button-premium w-full group">
                                     CONTINUAR CON MI MEMBRESÍA
@@ -231,14 +324,40 @@ const WalletStep = () => {
                             </div>
                         )}
 
-                        {!checkingMembership && !existingToken && (
+                        {membershipLookupComplete && inactiveMembership && (
+                            <div className="mt-4 p-3 rounded-lg border border-red-500/40 bg-red-500/10 text-left">
+                                <p className="text-red-300 text-xs font-mono mb-2">
+                                    La membresía #{inactiveMembership.token_id} no es válida
+                                    ({inactiveMembership.status || 'estado desconocido'}). No puede usarse como
+                                    credencial vigente ni reactivarse desde este flujo.
+                                </p>
+                                <Button
+                                    onClick={() => setStep('method')}
+                                    variant="outline"
+                                    className="w-full border-red-500/40 text-red-200"
+                                >
+                                    VOLVER A LOS RECORRIDOS
+                                </Button>
+                            </div>
+                        )}
+
+                        {membershipLookupComplete && !existingToken && (
                             <Button
                                 onClick={goToMint}
-                                disabled={isWrongNetwork}
+                                disabled={isWrongNetwork || zk.status === 'enrolling'}
                                 className="cyber-button-premium mt-5 w-full group"
                             >
-                                CONTINUAR
-                                <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+                                {zk.status === 'enrolling' ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                        EMITIENDO CREDENCIAL ZK...
+                                    </>
+                                ) : (
+                                    <>
+                                        CONTINUAR
+                                        <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+                                    </>
+                                )}
                             </Button>
                         )}
                     </SuccessDisplay>

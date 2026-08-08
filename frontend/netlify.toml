@@ -5,12 +5,28 @@
 
 # Environment variables
 # IMPORTANTE: REACT_APP_BACKEND_URL cambia si se recrea el servicio en Render.
-# Al actualizarla aquí hay que actualizar también CORS_ORIGINS en el backend
-# con este mismo dominio de Netlify, o el navegador bloqueará las peticiones.
+# El backend debe permitir como CORS_ORIGINS el origen canónico del frontend
+# (https://estamosdao.cl), no el dominio de la API. SIWE_DOMAIN y SIWE_URI deben
+# apuntar al mismo host canónico o el challenge de wallet fallará cerrado.
 # Ver backend/DEPLOY.md, paso 3.
 [build.environment]
   REACT_APP_BACKEND_URL = "https://api.estamosdao.cl"
-  REACT_APP_SBT_CONTRACT_SEPOLIA = "0x813fd379F715107b2451553d97f29408d8185f0e"
+
+# El origen que firma SIWE debe ser único. El subdominio Netlify conocido
+# redirige antes de cargar JavaScript, conservando la ruta solicitada. Estas
+# reglas solo se aplican en el edge de Netlify: no afectan `npm start` ni los
+# deploy previews, cuyos hosts son diferentes.
+[[redirects]]
+  from = "http://regal-dieffenbachia-6e9194.netlify.app/*"
+  to = "https://estamosdao.cl/:splat"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "https://regal-dieffenbachia-6e9194.netlify.app/*"
+  to = "https://estamosdao.cl/:splat"
+  status = 301
+  force = true
 
 # SPA routing - redirect all routes to index.html
 [[redirects]]
@@ -26,4 +42,13 @@
     X-XSS-Protection = "1; mode=block"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+    Strict-Transport-Security = "max-age=31536000"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
+    Content-Security-Policy = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'; form-action 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; font-src 'self' data: https://fonts.gstatic.com https://unpkg.com; img-src 'self' data: blob:; connect-src 'self' https://api.estamosdao.cl; manifest-src 'self'; worker-src 'self' blob:; upgrade-insecure-requests"
 
+# Stable protocol paths must revalidate so a browser cannot retain a WASM from
+# one ceremony with the proving/verification keys from another deployment.
+[[headers]]
+  for = "/zk/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"

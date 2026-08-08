@@ -1,0 +1,1913 @@
+/**
+ * Sistema visual cívico — interior del sitio (dashboard y onboarding).
+ *
+ * Continúa la identidad de la landing pública (styles/landing.css): fondo
+ * claro, azul #003897, rojo #CB2C27, tinta #0B2545, Poppins + Open Sans.
+ *
+ * Antes el interior era cyberpunk (cian sobre negro, glitch, scanlines,
+ * partículas) mientras la portada era clara y cívica: quien entraba al
+ * dashboard sentía que había cambiado de sitio. Este archivo es la única
+ * fuente de verdad del interior; `App.css` y `styles/premium.css` conservan
+ * el tema cyberpunk histórico y quedan neutralizados dentro de `.civic-app`.
+ *
+ * Convención: las clases nuevas son `civic-*`. Al final hay una capa de
+ * compatibilidad que redefine el vocabulario `cyber-*` que todavía usan
+ * algunos pasos del onboarding, para que ninguna pantalla quede oscura.
+ */
+
+.civic-app {
+    --civic-azul: #003897;
+    --civic-azul-hover: #002B75;
+    --civic-azul-suave: #EAF0FB;
+    --civic-azul-borde: #C2D2EC;
+
+    --civic-rojo: #CB2C27;
+    --civic-rojo-hover: #A9211D;
+    --civic-rojo-suave: #FBEAE8;
+
+    --civic-verde: #2E8B57;
+    --civic-verde-texto: #1F6B45;
+    --civic-verde-suave: #E9F1EC;
+
+    --civic-ambar: #B7791F;
+    --civic-ambar-suave: #FDF6E7;
+    --civic-ambar-borde: #F0DCA8;
+
+    --civic-tinta: #0B2545;
+    --civic-texto: #33456B;
+    --civic-suave: #5C7099;
+    --civic-tenue: #8090AD;
+
+    --civic-fondo: #F7F9FC;
+    --civic-superficie: #FFFFFF;
+    --civic-borde: #E5EBF5;
+    --civic-borde-fuerte: #DCE5F3;
+
+    --civic-radio: 12px;
+    --civic-radio-sm: 8px;
+    --civic-sombra: 0 4px 12px rgba(0, 56, 151, 0.04);
+    --civic-sombra-alta: 0 16px 34px rgba(11, 37, 69, 0.10);
+
+    --civic-titulo: "Poppins", system-ui, sans-serif;
+    --civic-cuerpo: "Open Sans", system-ui, sans-serif;
+
+    background: var(--civic-fondo);
+    color: var(--civic-texto);
+    font-family: var(--civic-cuerpo);
+    min-height: 100vh;
+    position: relative;
+    z-index: 1;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Neutraliza los efectos cyberpunk que App.css cuelga del body/.App: rejilla
+   animada, lluvia matrix y gradientes. Sin esto se ven por debajo del fondo
+   claro y el interior queda a medio camino entre los dos temas. */
+.civic-app::before,
+.civic-app::after,
+.civic-app ~ .matrix-rain,
+.civic-app .matrix-rain,
+.civic-app .particles-container,
+.civic-app .scanline-overlay {
+    display: none !important;
+}
+
+body:has(.civic-app) {
+    background: var(--civic-fondo) !important;
+    animation: none !important;
+}
+
+body:has(.civic-app)::before,
+body:has(.civic-app)::after,
+.App:has(.civic-app)::before,
+.App:has(.civic-app)::after {
+    display: none !important;
+}
+
+/* App.css define una barra cian/magenta para el tema cyberpunk histórico.
+   El panel cívico necesita una barra neutra y legible sobre fondo claro. */
+body:has(.civic-app)::-webkit-scrollbar-track {
+    background: #F7F9FC;
+    border: 0;
+}
+
+body:has(.civic-app)::-webkit-scrollbar-thumb,
+body:has(.civic-app)::-webkit-scrollbar-thumb:hover {
+    background: #B7C5DB;
+    border-radius: 4px;
+    box-shadow: none;
+}
+
+.civic-app *::-webkit-scrollbar {
+    width: 8px;
+    height: 6px;
+}
+
+.civic-app *::-webkit-scrollbar-track {
+    background: #EDF1F8;
+    border: 0;
+}
+
+.civic-app *::-webkit-scrollbar-thumb,
+.civic-app *::-webkit-scrollbar-thumb:hover {
+    background: #B7C5DB;
+    border-radius: 4px;
+    box-shadow: none;
+}
+
+.civic-app *:focus-visible {
+    outline: 2px solid var(--civic-rojo);
+    outline-offset: 2px;
+}
+
+.civic-app h1,
+.civic-app h2,
+.civic-app h3,
+.civic-app h4 {
+    font-family: var(--civic-titulo);
+    color: var(--civic-tinta);
+    letter-spacing: normal;
+    text-transform: none;
+    text-shadow: none;
+}
+
+/* === Cascarón: encabezado, navegación, pie === */
+
+.civic-shell {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 24px;
+}
+
+.civic-header {
+    background: var(--civic-superficie);
+    border-bottom: 1px solid var(--civic-borde);
+}
+
+.civic-header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 18px 0;
+}
+
+.civic-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+}
+
+.civic-brand-mark {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    background: var(--civic-azul);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.civic-brand-name {
+    font-family: var(--civic-titulo);
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--civic-tinta);
+    line-height: 1.2;
+    margin: 0;
+}
+
+.civic-brand-sub {
+    font-family: var(--civic-cuerpo);
+    font-size: 12px;
+    color: var(--civic-suave);
+    margin: 2px 0 0;
+}
+
+.civic-nav {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    padding-bottom: 2px;
+}
+
+.civic-nav-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: var(--civic-radio-sm);
+    font-family: var(--civic-titulo);
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--civic-suave);
+    border: 1px solid transparent;
+    transition: color .2s ease, background .2s ease, border-color .2s ease;
+}
+
+.civic-nav-item:hover {
+    color: var(--civic-azul);
+    background: var(--civic-azul-suave);
+}
+
+.civic-nav-item.is-active {
+    color: var(--civic-azul);
+    background: var(--civic-azul-suave);
+    border-color: var(--civic-azul-borde);
+}
+
+.civic-footer {
+    border-top: 1px solid var(--civic-borde);
+    padding: 24px 0 32px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--civic-tenue);
+}
+
+/* === Superficies === */
+
+.civic-card {
+    background: var(--civic-superficie);
+    border: 1px solid var(--civic-borde);
+    border-radius: var(--civic-radio);
+    box-shadow: var(--civic-sombra);
+}
+
+.civic-card-pad {
+    padding: 20px;
+}
+
+.civic-card-hover {
+    transition: box-shadow .25s ease, transform .25s ease, border-color .25s ease;
+}
+
+.civic-card-hover:hover {
+    box-shadow: var(--civic-sombra-alta);
+    transform: translateY(-3px);
+    border-color: var(--civic-azul-borde);
+}
+
+.civic-section-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--civic-titulo);
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--civic-tinta);
+    margin: 0;
+}
+
+.civic-section-title svg {
+    color: var(--civic-azul);
+}
+
+.civic-eyebrow {
+    font-family: var(--civic-titulo);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--civic-suave);
+}
+
+.civic-muted { color: var(--civic-suave); }
+.civic-faint { color: var(--civic-tenue); }
+.civic-ink { color: var(--civic-tinta); }
+.civic-mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+}
+
+/* === Botones === */
+
+.civic-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-radius: var(--civic-radio-sm);
+    border: 1px solid transparent;
+    font-family: var(--civic-titulo);
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .2s ease, border-color .2s ease, color .2s ease;
+    white-space: nowrap;
+}
+
+.civic-btn:disabled {
+    opacity: .55;
+    cursor: not-allowed;
+}
+
+.civic-btn-primary {
+    background: var(--civic-azul);
+    color: #ffffff;
+}
+.civic-btn-primary:hover:not(:disabled) { background: var(--civic-azul-hover); }
+
+.civic-btn-red {
+    background: var(--civic-rojo);
+    color: #ffffff;
+}
+.civic-btn-red:hover:not(:disabled) { background: var(--civic-rojo-hover); }
+
+.civic-btn-ghost {
+    background: var(--civic-superficie);
+    border-color: var(--civic-azul-borde);
+    color: var(--civic-azul);
+}
+.civic-btn-ghost:hover:not(:disabled) { border-color: var(--civic-azul); }
+
+.civic-btn-quiet {
+    background: transparent;
+    border-color: var(--civic-borde-fuerte);
+    color: var(--civic-suave);
+}
+.civic-btn-quiet:hover:not(:disabled) {
+    border-color: var(--civic-azul-borde);
+    color: var(--civic-azul);
+}
+
+.civic-btn-sm {
+    padding: 7px 12px;
+    font-size: 12.5px;
+}
+
+/* Botones de voto: a favor / en contra / abstención */
+.civic-vote {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 9px 10px;
+    border-radius: var(--civic-radio-sm);
+    font-family: var(--civic-titulo);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid;
+    transition: background .2s ease;
+}
+.civic-vote:disabled { opacity: .55; cursor: not-allowed; }
+
+.civic-vote-for {
+    background: var(--civic-verde-suave);
+    border-color: #BFD9C9;
+    color: var(--civic-verde-texto);
+}
+.civic-vote-for:hover:not(:disabled) { background: #D8E9DF; }
+
+.civic-vote-against {
+    background: var(--civic-rojo-suave);
+    border-color: #F0C6C3;
+    color: var(--civic-rojo-hover);
+}
+.civic-vote-against:hover:not(:disabled) { background: #F6D8D6; }
+
+.civic-vote-abstain {
+    background: #F1F4F9;
+    border-color: var(--civic-borde-fuerte);
+    color: var(--civic-suave);
+}
+.civic-vote-abstain:hover:not(:disabled) { background: #E7ECF4; }
+
+/* === Etiquetas de estado === */
+
+.civic-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-family: var(--civic-titulo);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+}
+
+.civic-tag-blue   { background: var(--civic-azul-suave); color: var(--civic-azul); border-color: var(--civic-azul-borde); }
+.civic-tag-red    { background: var(--civic-rojo-suave); color: var(--civic-rojo-hover); border-color: #F0C6C3; }
+.civic-tag-green  { background: var(--civic-verde-suave); color: var(--civic-verde-texto); border-color: #BFD9C9; }
+.civic-tag-amber  { background: var(--civic-ambar-suave); color: var(--civic-ambar); border-color: var(--civic-ambar-borde); }
+.civic-tag-neutral{ background: #F1F4F9; color: var(--civic-suave); border-color: var(--civic-borde-fuerte); }
+
+/* Chip de wallet conectada */
+.civic-wallet {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: var(--civic-azul-suave);
+    border: 1px solid var(--civic-azul-borde);
+    color: var(--civic-azul);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+/* === Avisos === */
+
+.civic-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: var(--civic-radio-sm);
+    border: 1px solid;
+    font-size: 13.5px;
+    line-height: 1.55;
+}
+
+.civic-note-info  { background: var(--civic-azul-suave); border-color: var(--civic-azul-borde); color: #24406F; }
+.civic-note-warn  { background: var(--civic-ambar-suave); border-color: var(--civic-ambar-borde); color: #7A5510; }
+.civic-note-error { background: var(--civic-rojo-suave); border-color: #F0C6C3; color: var(--civic-rojo-hover); }
+.civic-note-ok    { background: var(--civic-verde-suave); border-color: #BFD9C9; color: var(--civic-verde-texto); }
+
+.civic-note svg { flex-shrink: 0; margin-top: 2px; }
+
+/* === Formularios === */
+
+.civic-label {
+    display: block;
+    font-family: var(--civic-titulo);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--civic-tinta);
+    margin-bottom: 6px;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.civic-field {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--civic-borde-fuerte);
+    border-radius: var(--civic-radio-sm);
+    font-family: var(--civic-cuerpo);
+    font-size: 14px;
+    color: var(--civic-texto);
+    background: var(--civic-superficie);
+    transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.civic-field:focus {
+    outline: none;
+    border-color: var(--civic-azul);
+    box-shadow: 0 0 0 3px rgba(0, 56, 151, 0.1);
+}
+
+.civic-field::placeholder { color: #A0B2D0; }
+
+.civic-help {
+    font-size: 12px;
+    color: var(--civic-tenue);
+    margin-top: 5px;
+}
+
+/* === Barras de progreso / resultados === */
+
+.civic-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: #EDF1F8;
+    overflow: hidden;
+    display: flex;
+}
+
+.civic-bar-for     { background: var(--civic-verde); transition: width .3s ease; }
+.civic-bar-against { background: var(--civic-rojo); transition: width .3s ease; }
+.civic-bar-blue    { background: var(--civic-azul); transition: width .3s ease; }
+
+/* === Métricas === */
+
+.civic-stat {
+    background: var(--civic-superficie);
+    border: 1px solid var(--civic-borde);
+    border-radius: var(--civic-radio);
+    padding: 18px;
+    box-shadow: var(--civic-sombra);
+}
+
+.civic-stat-value {
+    font-family: var(--civic-titulo);
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--civic-tinta);
+    line-height: 1.1;
+}
+
+.civic-stat-label {
+    font-size: 12.5px;
+    color: var(--civic-suave);
+    margin-top: 4px;
+}
+
+/* === Estado vacío ===
+   Este proyecto prohíbe rellenar la interfaz con datos inventados: cuando no
+   hay nada que mostrar, se muestra esto y no un marcador de posición. */
+
+.civic-empty {
+    text-align: center;
+    padding: 44px 24px;
+    background: var(--civic-superficie);
+    border: 1px dashed var(--civic-borde-fuerte);
+    border-radius: var(--civic-radio);
+}
+
+.civic-empty svg {
+    color: var(--civic-azul-borde);
+    margin: 0 auto 12px;
+}
+
+.civic-empty-title {
+    font-family: var(--civic-titulo);
+    font-weight: 600;
+    color: var(--civic-tinta);
+    margin-bottom: 4px;
+}
+
+.civic-empty-desc {
+    font-size: 13.5px;
+    color: var(--civic-suave);
+}
+
+/* === Carga === */
+
+.civic-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 36px;
+    color: var(--civic-suave);
+    font-size: 13.5px;
+}
+
+.civic-loading-copy {
+    display: grid;
+    gap: 3px;
+    text-align: left;
+}
+
+.civic-loading-title {
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .015em;
+}
+
+.civic-loading-detail {
+    max-width: 460px;
+    color: var(--civic-suave);
+    font-family: var(--civic-cuerpo);
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
+.civic-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--civic-azul-borde);
+    border-top-color: var(--civic-azul);
+    border-radius: 50%;
+    animation: civicSpin .7s linear infinite;
+}
+
+.civic-spinner-light {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border-color: rgba(255, 255, 255, .45);
+    border-top-color: #ffffff;
+}
+
+/* === Subsidized smart-account operation ===
+   This is an event-driven state rail, not a timer or a fake percentage. */
+
+.civic-aa-terminal {
+    width: min(100%, 720px);
+    overflow: hidden;
+    background: var(--civic-superficie);
+    border: 1px solid var(--civic-azul-borde);
+    border-top: 3px solid var(--civic-rojo);
+    border-radius: var(--civic-radio);
+    box-shadow: 0 14px 34px rgba(11, 37, 69, .09);
+    color: var(--civic-texto);
+}
+
+.civic-aa-header {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 36px;
+    align-items: start;
+    gap: 14px;
+    padding: 22px 24px 18px;
+    background: linear-gradient(110deg, #FFFFFF 45%, #F3F6FC 100%);
+    border-bottom: 1px solid var(--civic-borde);
+}
+
+.civic-aa-seal,
+.civic-aa-signal {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.civic-aa-seal {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    background: var(--civic-azul);
+    color: #FFFFFF;
+    box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .14);
+}
+
+.civic-aa-seal svg { width: 22px; height: 22px; }
+
+.civic-aa-heading {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.civic-aa-kicker {
+    color: var(--civic-azul);
+    font-family: var(--civic-titulo);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+}
+
+.civic-aa-heading strong {
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 17px;
+    line-height: 1.3;
+}
+
+.civic-aa-heading > span:last-child {
+    color: var(--civic-suave);
+    font-size: 12.5px;
+    line-height: 1.55;
+}
+
+.civic-aa-signal {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--civic-azul-suave);
+    color: var(--civic-azul);
+}
+
+.civic-aa-signal svg { width: 17px; height: 17px; }
+.civic-aa-signal.is-active svg { animation: civicSpin .9s linear infinite; }
+.civic-aa-signal.is-confirmed {
+    background: var(--civic-verde-suave);
+    color: var(--civic-verde-texto);
+}
+
+.civic-aa-signal.is-warning {
+    background: var(--civic-ambar-suave);
+    color: var(--civic-ambar);
+}
+
+.civic-aa-signal.is-error {
+    background: var(--civic-rojo-suave);
+    color: var(--civic-rojo);
+}
+
+.civic-aa-sponsorship {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin: 16px 24px 0;
+    padding: 6px 10px;
+    border: 1px solid #BFD9C9;
+    border-radius: 999px;
+    background: var(--civic-verde-suave);
+    color: var(--civic-verde-texto);
+    font-family: var(--civic-titulo);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.civic-aa-sponsorship svg { width: 14px; height: 14px; }
+
+.civic-aa-rail {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0;
+    padding: 22px 24px 24px;
+    list-style: none;
+}
+
+.civic-aa-rail li {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--civic-suave);
+    font-family: var(--civic-titulo);
+    font-size: 10.5px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.civic-aa-rail li:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    z-index: 0;
+    top: 15px;
+    left: calc(50% + 18px);
+    width: calc(100% - 36px);
+    height: 2px;
+    background: var(--civic-borde-fuerte);
+}
+
+.civic-aa-rail li.is-complete:not(:last-child)::after {
+    background: var(--civic-azul);
+}
+
+.civic-aa-marker {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--civic-borde-fuerte);
+    border-radius: 50%;
+    background: var(--civic-superficie);
+    color: var(--civic-suave);
+    font-size: 11px;
+}
+
+.civic-aa-marker svg { width: 14px; height: 14px; }
+
+.civic-aa-rail li.is-active,
+.civic-aa-rail li.is-complete { color: var(--civic-azul); }
+
+.civic-aa-rail li.is-active .civic-aa-marker {
+    border-color: var(--civic-rojo);
+    color: var(--civic-rojo);
+    box-shadow: 0 0 0 5px rgba(203, 44, 39, .09);
+    animation: civicAaPulse 1.8s ease-in-out infinite;
+}
+
+.civic-aa-rail li.is-complete .civic-aa-marker {
+    border-color: var(--civic-azul);
+    background: var(--civic-azul);
+    color: #FFFFFF;
+}
+
+.civic-aa-identifier {
+    display: grid;
+    gap: 5px;
+    padding: 14px 24px 18px;
+    background: #F3F6FC;
+    border-top: 1px solid var(--civic-borde);
+}
+
+.civic-aa-identifier > span {
+    color: var(--civic-suave);
+    font-family: var(--civic-titulo);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.civic-aa-identifier code {
+    color: var(--civic-tinta);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 10.5px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.civic-app .civic-aa-authorize {
+    max-width: 100%;
+    min-height: 44px;
+    height: auto !important;
+    white-space: normal !important;
+    line-height: 1.35;
+    text-align: center;
+}
+
+@keyframes civicAaPulse {
+    50% { box-shadow: 0 0 0 8px rgba(203, 44, 39, .035); }
+}
+
+/* === Urna privada MACI === */
+
+.civic-ballot {
+    background: var(--civic-superficie);
+    border: 1px solid var(--civic-azul-borde);
+    border-left: 4px solid var(--civic-azul);
+    border-radius: var(--civic-radio);
+    box-shadow: var(--civic-sombra);
+    padding: 24px;
+}
+
+.civic-ballot-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 22px;
+}
+
+.civic-ballot-intro {
+    max-width: 660px;
+    margin: 10px 0 0;
+    font-size: 13.5px;
+    line-height: 1.6;
+}
+
+.civic-ballot-form {
+    display: grid;
+    gap: 20px;
+}
+
+.civic-ballot-form fieldset {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    min-width: 0;
+}
+
+.civic-ballot-options {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.civic-ballot-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-height: 78px;
+    padding: 14px;
+    border: 1px solid var(--civic-borde-fuerte);
+    border-radius: var(--civic-radio-sm);
+    background: #FBFCFE;
+    cursor: pointer;
+    transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+}
+
+.civic-ballot-option:hover {
+    border-color: var(--civic-azul-borde);
+    background: var(--civic-azul-suave);
+}
+
+.civic-ballot-option.is-selected {
+    border-color: var(--civic-azul);
+    background: var(--civic-azul-suave);
+    box-shadow: inset 0 0 0 1px var(--civic-azul);
+}
+
+.civic-ballot-option:has(input:focus-visible) {
+    outline: 2px solid var(--civic-rojo);
+    outline-offset: 2px;
+}
+
+.civic-ballot-option input {
+    accent-color: var(--civic-azul);
+    margin-top: 3px;
+    flex-shrink: 0;
+}
+
+.civic-ballot-option strong,
+.civic-ballot-option small {
+    display: block;
+}
+
+.civic-ballot-option strong {
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 13.5px;
+}
+
+.civic-ballot-option small {
+    color: var(--civic-suave);
+    font-size: 11.5px;
+    line-height: 1.45;
+    margin-top: 3px;
+}
+
+.civic-ballot-form fieldset:disabled .civic-ballot-option {
+    cursor: not-allowed;
+    opacity: .58;
+}
+
+.civic-ballot-privacy {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    color: var(--civic-suave);
+    font-size: 12.5px;
+    line-height: 1.55;
+}
+
+.civic-ballot-privacy svg {
+    color: var(--civic-verde-texto);
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.civic-ballot-submit {
+    justify-self: start;
+    min-width: 224px;
+}
+
+.civic-sealed-tally {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin-bottom: 16px;
+    padding: 11px 12px;
+    border: 1px solid var(--civic-azul-borde);
+    border-radius: var(--civic-radio-sm);
+    background: var(--civic-azul-suave);
+    color: var(--civic-suave);
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+
+.civic-sealed-tally svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--civic-azul);
+}
+
+.civic-sealed-tally strong {
+    display: block;
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 12px;
+}
+
+.civic-election-privacy-gate {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 15px;
+    padding: 20px;
+    border: 1px solid var(--civic-azul-borde);
+    border-left: 4px solid var(--civic-rojo);
+    border-radius: var(--civic-radio);
+    background: linear-gradient(110deg, #FFFFFF 45%, #F3F6FC 100%);
+    box-shadow: var(--civic-sombra);
+}
+
+.civic-election-privacy-seal {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    background: var(--civic-azul);
+    color: #FFFFFF;
+    box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .14);
+}
+
+.civic-election-privacy-seal svg { width: 22px; height: 22px; }
+
+.civic-election-privacy-gate h3 {
+    margin: 2px 0 7px;
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 16px;
+    line-height: 1.35;
+}
+
+.civic-election-privacy-gate p:not(.civic-eyebrow) {
+    max-width: 760px;
+    margin: 0 0 13px;
+    color: var(--civic-suave);
+    font-size: 12.5px;
+    line-height: 1.6;
+}
+
+.civic-election-vote-locked {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    flex-shrink: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--civic-borde-fuerte);
+    border-radius: var(--civic-radio-sm);
+    background: #F3F6FC;
+    color: var(--civic-suave);
+    font-family: var(--civic-titulo);
+    font-size: 10.5px;
+    font-weight: 600;
+}
+
+/* Progreso MACI basado en eventos reales; no usa porcentajes ni temporizadores. */
+.civic-maci-progress {
+    width: min(100%, 720px);
+    overflow: hidden;
+    border: 1px solid var(--civic-azul-borde);
+    border-top: 3px solid var(--civic-rojo);
+    border-radius: var(--civic-radio);
+    background: var(--civic-superficie);
+    box-shadow: 0 14px 34px rgba(11, 37, 69, .09);
+    color: var(--civic-texto);
+}
+
+.civic-maci-progress[data-maci-status="received"] {
+    border-top-color: var(--civic-verde);
+}
+
+.civic-maci-progress[data-maci-status="delivery_unknown"] {
+    border-top-color: var(--civic-ambar);
+}
+
+.civic-maci-progress-header {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 36px;
+    align-items: start;
+    gap: 14px;
+    padding: 22px 24px 18px;
+    border-bottom: 1px solid var(--civic-borde);
+    background: linear-gradient(110deg, #FFFFFF 45%, #F3F6FC 100%);
+}
+
+.civic-maci-progress-seal,
+.civic-maci-progress-signal {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.civic-maci-progress-seal {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    background: var(--civic-azul);
+    color: #FFFFFF;
+    box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .14);
+}
+
+.civic-maci-progress-seal svg { width: 22px; height: 22px; }
+
+.civic-maci-progress-copy {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.civic-maci-progress-kicker {
+    color: var(--civic-azul);
+    font-family: var(--civic-titulo);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+}
+
+.civic-maci-progress-copy strong {
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 17px;
+    line-height: 1.3;
+}
+
+.civic-maci-progress-copy > span:last-child {
+    color: var(--civic-suave);
+    font-size: 12.5px;
+    line-height: 1.55;
+}
+
+.civic-maci-progress-signal {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--civic-azul-suave);
+    color: var(--civic-azul);
+}
+
+.civic-maci-progress-signal svg { width: 17px; height: 17px; }
+
+.civic-maci-progress-signal.is-active svg,
+.civic-maci-progress-signal.is-retrying svg {
+    animation: civicMaciSpin .9s linear infinite;
+}
+
+.civic-maci-progress-signal.is-retrying,
+.civic-maci-progress-signal.is-warning {
+    background: var(--civic-ambar-suave);
+    color: var(--civic-ambar);
+}
+
+.civic-maci-progress-signal.is-failed {
+    background: var(--civic-rojo-suave);
+    color: var(--civic-rojo);
+}
+
+.civic-maci-progress-signal.is-received {
+    background: var(--civic-verde-suave);
+    color: var(--civic-verde-texto);
+}
+
+.civic-maci-rail {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    margin: 0;
+    padding: 22px 24px 24px;
+    list-style: none;
+}
+
+.civic-maci-rail li {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--civic-suave);
+    font-family: var(--civic-titulo);
+    font-size: 10.5px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.civic-maci-rail li:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    z-index: 0;
+    top: 15px;
+    left: calc(50% + 18px);
+    width: calc(100% - 36px);
+    height: 2px;
+    background: var(--civic-borde-fuerte);
+}
+
+.civic-maci-rail li.is-complete:not(:last-child)::after {
+    background: var(--civic-azul);
+}
+
+.civic-maci-marker {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--civic-borde-fuerte);
+    border-radius: 50%;
+    background: var(--civic-superficie);
+    color: var(--civic-suave);
+    font-size: 11px;
+}
+
+.civic-maci-marker svg { width: 14px; height: 14px; }
+
+.civic-maci-rail li.is-active,
+.civic-maci-rail li.is-complete { color: var(--civic-azul); }
+
+.civic-maci-rail li.is-active .civic-maci-marker {
+    border-color: var(--civic-rojo);
+    color: var(--civic-rojo);
+    box-shadow: 0 0 0 5px rgba(203, 44, 39, .09);
+    animation: civicMaciPulse 1.8s ease-in-out infinite;
+}
+
+.civic-maci-rail li.is-complete .civic-maci-marker {
+    border-color: var(--civic-azul);
+    background: var(--civic-azul);
+    color: #FFFFFF;
+}
+
+.civic-maci-rail li.is-warning {
+    color: var(--civic-ambar);
+}
+
+.civic-maci-rail li.is-warning .civic-maci-marker {
+    border-color: var(--civic-ambar);
+    background: var(--civic-ambar-suave);
+    color: var(--civic-ambar);
+}
+
+.civic-maci-rail li.is-error {
+    color: var(--civic-rojo);
+}
+
+.civic-maci-rail li.is-error .civic-maci-marker {
+    border-color: var(--civic-rojo);
+    background: var(--civic-rojo-suave);
+    color: var(--civic-rojo);
+}
+
+.civic-maci-reference {
+    display: grid;
+    gap: 5px;
+    padding: 14px 24px 18px;
+    border-top: 1px solid var(--civic-borde);
+    background: #F3F6FC;
+}
+
+.civic-maci-reference > span {
+    color: var(--civic-suave);
+    font-family: var(--civic-titulo);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.civic-maci-reference code {
+    color: var(--civic-tinta);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 10.5px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.civic-maci-reference small {
+    color: var(--civic-suave);
+    font-size: 11px;
+}
+
+@keyframes civicMaciSpin {
+    to { transform: rotate(360deg); }
+}
+
+@keyframes civicMaciPulse {
+    50% { box-shadow: 0 0 0 8px rgba(203, 44, 39, .035); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .civic-maci-progress-signal.is-active svg,
+    .civic-maci-progress-signal.is-retrying svg,
+    .civic-maci-rail li.is-active .civic-maci-marker {
+        animation: none;
+    }
+}
+
+@media (max-width: 720px) {
+    .civic-election-privacy-gate {
+        grid-template-columns: 40px minmax(0, 1fr);
+        gap: 12px;
+        padding: 18px;
+    }
+
+    .civic-election-privacy-seal { width: 40px; height: 40px; }
+
+    .civic-maci-progress-header {
+        grid-template-columns: 40px minmax(0, 1fr) 30px;
+        gap: 11px;
+        padding: 19px 18px 16px;
+    }
+
+    .civic-maci-progress-seal { width: 40px; height: 40px; }
+    .civic-maci-progress-signal { width: 30px; height: 30px; }
+
+    .civic-maci-rail {
+        grid-template-columns: 1fr;
+        gap: 14px;
+        padding: 20px 18px;
+    }
+
+    .civic-maci-rail li {
+        grid-template-columns: 32px 1fr;
+        align-items: center;
+        justify-items: start;
+        text-align: left;
+    }
+
+    .civic-maci-rail li:not(:last-child)::after {
+        top: 34px;
+        left: 15px;
+        width: 2px;
+        height: 14px;
+    }
+
+    .civic-maci-reference { padding-inline: 18px; }
+}
+
+@keyframes civicSpin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+    .civic-spinner { animation-duration: 2s; }
+    .civic-card-hover:hover { transform: none; }
+    .civic-aa-signal.is-active svg,
+    .civic-aa-rail li.is-active .civic-aa-marker { animation: none; }
+}
+
+/* === Diálogo === */
+
+.civic-dialog {
+    background: var(--civic-superficie);
+    border: 1px solid var(--civic-borde);
+    border-radius: var(--civic-radio);
+    color: var(--civic-texto);
+    box-shadow: 0 24px 48px rgba(11, 37, 69, 0.18);
+}
+
+.civic-dialog h2,
+.civic-dialog h3 { font-family: var(--civic-titulo); color: var(--civic-tinta); }
+
+/* === Responsive === */
+
+@media (max-width: 720px) {
+    .civic-shell { padding: 0 18px; }
+    .civic-nav { gap: 2px; }
+    .civic-nav-item { padding: 9px 11px; font-size: 12.5px; }
+    .civic-section-title { font-size: 18px; }
+    .civic-ballot { padding: 20px; }
+    .civic-ballot-heading { flex-direction: column; gap: 12px; }
+    .civic-ballot-options { grid-template-columns: 1fr; }
+    .civic-ballot-submit { width: 100%; }
+    .civic-aa-header {
+        grid-template-columns: 40px minmax(0, 1fr) 30px;
+        gap: 11px;
+        padding: 19px 18px 16px;
+    }
+    .civic-aa-seal { width: 40px; height: 40px; }
+    .civic-aa-signal { width: 30px; height: 30px; }
+    .civic-aa-sponsorship { margin-inline: 18px; }
+    .civic-aa-rail {
+        grid-template-columns: 1fr;
+        gap: 14px;
+        padding: 20px 18px;
+    }
+    .civic-aa-rail li {
+        grid-template-columns: 32px 1fr;
+        align-items: center;
+        justify-items: start;
+        text-align: left;
+    }
+    .civic-aa-rail li:not(:last-child)::after {
+        top: 34px;
+        left: 15px;
+        width: 2px;
+        height: 14px;
+    }
+    .civic-aa-identifier { padding-inline: 18px; }
+    .civic-app .civic-aa-authorize {
+        width: 100%;
+        padding-block: 11px;
+    }
+}
+
+/* =========================================================================
+   Capa de compatibilidad: vocabulario `cyber-*`
+   -------------------------------------------------------------------------
+   Algunos pasos del onboarding siguen escritos con estas clases. En vez de
+   reescribir su marcado (donde vive la lógica delicada de NFC, liveness,
+   wallet y minteo), se redefinen aquí en clave cívica. `!important` es
+   necesario porque App.css y premium.css declaran las mismas clases con
+   sombras, gradientes y animaciones del tema oscuro.
+   ========================================================================= */
+
+.civic-app .cyber-card,
+.civic-app .cyber-panel,
+.civic-app .cyber-stat-card,
+.civic-app .cyber-stat-card-premium {
+    background: var(--civic-superficie) !important;
+    border: 1px solid var(--civic-borde) !important;
+    border-radius: var(--civic-radio) !important;
+    box-shadow: var(--civic-sombra) !important;
+    color: var(--civic-texto) !important;
+    backdrop-filter: none !important;
+}
+
+.civic-app .cyber-title {
+    background: none !important;
+    -webkit-text-fill-color: initial !important;
+    color: var(--civic-tinta) !important;
+    font-family: var(--civic-titulo) !important;
+    text-shadow: none !important;
+    animation: none !important;
+    letter-spacing: normal !important;
+}
+
+.civic-app .cyber-title::before,
+.civic-app .cyber-title::after { display: none !important; }
+
+.civic-app .cyber-icon { color: var(--civic-azul) !important; }
+
+.civic-app .cyber-button,
+.civic-app .cyber-button-premium {
+    background: var(--civic-azul) !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: var(--civic-radio-sm) !important;
+    font-family: var(--civic-titulo) !important;
+    font-weight: 600 !important;
+    letter-spacing: normal !important;
+    text-transform: none !important;
+    box-shadow: none !important;
+    animation: none !important;
+}
+
+.civic-app .cyber-button::before,
+.civic-app .cyber-button-premium::before { display: none !important; }
+
+.civic-app .cyber-button:hover,
+.civic-app .cyber-button-premium:hover {
+    background: var(--civic-azul-hover) !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+.civic-app .cyber-badge {
+    background: var(--civic-azul-suave) !important;
+    color: var(--civic-azul) !important;
+    border: 1px solid var(--civic-azul-borde) !important;
+    border-radius: 999px !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+    font-family: var(--civic-titulo) !important;
+}
+
+.civic-app .cyber-badge.success {
+    background: var(--civic-verde-suave) !important;
+    color: var(--civic-verde-texto) !important;
+    border-color: #BFD9C9 !important;
+}
+
+.civic-app .cyber-badge.warning {
+    background: var(--civic-ambar-suave) !important;
+    color: var(--civic-ambar) !important;
+    border-color: var(--civic-ambar-borde) !important;
+}
+
+.civic-app .cyber-input,
+.civic-app .cyber-input-premium,
+.civic-app .cyber-file-input {
+    background: var(--civic-superficie) !important;
+    border: 1px solid var(--civic-borde-fuerte) !important;
+    border-radius: var(--civic-radio-sm) !important;
+    color: var(--civic-texto) !important;
+    font-family: var(--civic-cuerpo) !important;
+    box-shadow: none !important;
+}
+
+.civic-app .cyber-input:focus,
+.civic-app .cyber-input-premium:focus,
+.civic-app .cyber-file-input:focus {
+    border-color: var(--civic-azul) !important;
+    box-shadow: 0 0 0 3px rgba(0, 56, 151, 0.1) !important;
+}
+
+.civic-app .cyber-label {
+    color: var(--civic-tinta) !important;
+    font-family: var(--civic-titulo) !important;
+    text-shadow: none !important;
+    letter-spacing: normal !important;
+}
+
+.civic-app .cyber-success {
+    background: var(--civic-verde-suave) !important;
+    border: 1px solid #BFD9C9 !important;
+    color: var(--civic-verde-texto) !important;
+    box-shadow: none !important;
+}
+
+.civic-app .cyber-error {
+    background: var(--civic-rojo-suave) !important;
+    border: 1px solid #F0C6C3 !important;
+    color: var(--civic-rojo-hover) !important;
+    box-shadow: none !important;
+    animation: none !important;
+}
+
+.civic-app .cyber-progress,
+.civic-app .cyber-progress-premium {
+    background: #EDF1F8 !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.civic-app .cyber-progress-fill,
+.civic-app .cyber-progress-premium-fill {
+    background: var(--civic-azul) !important;
+    box-shadow: none !important;
+    animation: none !important;
+}
+
+.civic-app .cyber-step-number {
+    background: var(--civic-superficie) !important;
+    border: 1px solid var(--civic-borde-fuerte) !important;
+    color: var(--civic-tenue) !important;
+    box-shadow: none !important;
+    animation: none !important;
+}
+
+.civic-app .cyber-step-number.active,
+.civic-app .cyber-step-number.completed {
+    background: var(--civic-azul) !important;
+    border-color: var(--civic-azul) !important;
+    color: #ffffff !important;
+}
+
+.civic-app .cyber-step-title {
+    color: var(--civic-suave) !important;
+    text-shadow: none !important;
+    font-family: var(--civic-titulo) !important;
+}
+
+.civic-app .cyber-step-title.active,
+.civic-app .cyber-step-title.completed {
+    color: var(--civic-azul) !important;
+}
+
+.civic-app .cyber-stat-number {
+    color: var(--civic-tinta) !important;
+    font-family: var(--civic-titulo) !important;
+    text-shadow: none !important;
+    background: none !important;
+    -webkit-text-fill-color: initial !important;
+}
+
+.civic-app .cyber-stat-label { color: var(--civic-suave) !important; }
+
+.civic-app .cyber-spinner,
+.civic-app .cyber-loader-premium {
+    border-color: var(--civic-azul-borde) !important;
+    border-top-color: var(--civic-azul) !important;
+    box-shadow: none !important;
+}
+
+.civic-app .cyber-loader-dot { background: var(--civic-azul) !important; }
+
+.civic-app .cyber-tab {
+    color: var(--civic-suave) !important;
+    border-color: transparent !important;
+    background: transparent !important;
+    font-family: var(--civic-titulo) !important;
+}
+
+.civic-app .cyber-tab.active {
+    color: var(--civic-azul) !important;
+    background: var(--civic-azul-suave) !important;
+    border-color: var(--civic-azul-borde) !important;
+}
+
+.civic-app .cyber-footer {
+    background: transparent !important;
+    border-top: 1px solid var(--civic-borde) !important;
+    color: var(--civic-tenue) !important;
+}
+
+/* Superficies translúcidas heredadas del tema oscuro */
+.civic-app .glass,
+.civic-app .glass-dark {
+    background: var(--civic-superficie) !important;
+    border: 1px solid var(--civic-borde) !important;
+    backdrop-filter: none !important;
+    color: var(--civic-texto) !important;
+}
+
+/* =========================================================================
+   Utilidades Tailwind del tema oscuro, reasignadas dentro de `.civic-app`
+   -------------------------------------------------------------------------
+   Los once pasos del onboarding traen estas clases escritas en el marcado.
+   Reasignarlas acá evita editar archivos donde vive la lógica delicada de
+   NFC, liveness, wallet y minteo — el mismo criterio con el que se rediseñó
+   /unete la primera vez.
+   La lista es cerrada y corresponde exactamente a las clases que quedaban en
+   `components/onboarding/`; no es una regla general sobre Tailwind.
+   ========================================================================= */
+
+.civic-app .text-cyan-400,
+.civic-app .text-cyan-300,
+.civic-app .text-purple-400 { color: var(--civic-azul) !important; }
+
+.civic-app .text-gray-300 { color: var(--civic-texto) !important; }
+.civic-app .text-gray-400 { color: var(--civic-suave) !important; }
+.civic-app .text-gray-500 { color: var(--civic-tenue) !important; }
+.civic-app .text-white    { color: var(--civic-tinta) !important; }
+
+/* Botón fantasma cuyo hover aclaraba el texto sobre fondo oscuro: sobre
+   fondo claro dejaba la etiqueta ilegible. */
+.civic-app .hover\:text-white:hover { color: var(--civic-azul) !important; }
+
+.civic-app .border-cyan-500\/30,
+.civic-app .border-cyan-400,
+.civic-app .border-cyan-400\/50,
+.civic-app .border-purple-500,
+.civic-app .border-purple-500\/30 { border-color: var(--civic-azul-borde) !important; }
+
+.civic-app .border-gray-600 { border-color: var(--civic-borde-fuerte) !important; }
+
+.civic-app .bg-cyan-500\/5,
+.civic-app .bg-cyan-500\/10,
+.civic-app .bg-purple-500\/5 { background-color: var(--civic-azul-suave) !important; }
+
+.civic-app .bg-black\/50,
+.civic-app .bg-black\/30 {
+    background-color: var(--civic-fondo) !important;
+    border-color: var(--civic-borde) !important;
+}
+
+/* === Filtros ===
+   Un `civic-btn-ghost` junto a un `civic-btn-quiet` se distinguían solo por el
+   tono del borde: de un vistazo no se sabía qué filtro estaba aplicado. El
+   seleccionado se rellena, igual que la pestaña activa de la navegación. */
+
+.civic-filter {
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--civic-borde-fuerte);
+    background: var(--civic-superficie);
+    color: var(--civic-suave);
+    font-family: var(--civic-titulo);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .2s ease, border-color .2s ease, color .2s ease;
+}
+
+.civic-filter:hover {
+    border-color: var(--civic-azul-borde);
+    color: var(--civic-azul);
+}
+
+.civic-filter.is-active {
+    background: var(--civic-azul);
+    border-color: var(--civic-azul);
+    color: #ffffff;
+}
+
+/* Estado deshabilitado: el tema oscuro lo pintaba de un gris sólido que sobre
+   fondo claro parece un botón roto, no uno inactivo. */
+.civic-app .cyber-button:disabled,
+.civic-app .cyber-button-premium:disabled,
+.civic-app .cyber-button[disabled],
+.civic-app .cyber-button-premium[disabled] {
+    background: var(--civic-azul) !important;
+    color: #ffffff !important;
+    opacity: .45 !important;
+    cursor: not-allowed !important;
+}
+
+/* === ClaveÚnica OIDC / selección de identidad === */
+
+.civic-methods {
+    width: min(100%, 940px);
+    margin: 0 auto;
+}
+
+.civic-methods-heading {
+    max-width: 620px;
+    margin: 0 auto 24px;
+    text-align: center;
+}
+
+.civic-methods-heading .civic-section-title {
+    justify-content: center;
+    margin: 5px 0 8px;
+}
+
+.civic-methods-heading p { margin: 0; line-height: 1.65; }
+
+.civic-method-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.civic-method-card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+}
+
+.civic-method-card-primary {
+    grid-column: 1 / -1;
+    border-top: 3px solid var(--civic-rojo);
+    box-shadow: 0 14px 34px rgba(11, 37, 69, .08);
+}
+
+.civic-method-card h3,
+.civic-oidc-heading h2 {
+    margin: 8px 0 7px;
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 19px;
+    line-height: 1.25;
+}
+
+.civic-method-card p,
+.civic-oidc-heading p {
+    margin: 0;
+    color: var(--civic-suave);
+    font-size: 13.5px;
+    line-height: 1.65;
+}
+
+.civic-method-icon,
+.civic-oidc-seal {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 auto;
+    border-radius: 12px;
+    background: var(--civic-azul-suave);
+    color: var(--civic-azul);
+    font-size: 22px;
+}
+
+.civic-method-action { width: 100%; margin-top: auto; }
+
+.civic-method-note { padding: 11px 12px; font-size: 12px; }
+
+.civic-oidc {
+    width: min(100%, 760px);
+    margin: 0 auto;
+}
+
+.civic-oidc-panel {
+    display: grid;
+    gap: 22px;
+    padding: clamp(22px, 4vw, 34px);
+    border-top: 3px solid var(--civic-rojo);
+    box-shadow: 0 18px 42px rgba(11, 37, 69, .09);
+}
+
+.civic-oidc-heading { display: flex; align-items: flex-start; gap: 16px; }
+.civic-oidc-heading h2 { font-size: clamp(21px, 3vw, 27px); }
+.civic-oidc-heading p { max-width: 590px; }
+
+.civic-oidc-rail {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 1px solid var(--civic-borde);
+    border-radius: var(--civic-radio-sm);
+    overflow: hidden;
+}
+
+.civic-oidc-rail > div {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 14px;
+    color: var(--civic-suave);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.civic-oidc-rail > div + div { border-left: 1px solid var(--civic-borde); }
+.civic-oidc-rail i { color: var(--civic-azul); font-size: 17px; }
+.civic-oidc-rail strong { color: var(--civic-tinta); }
+
+.civic-oidc-loading {
+    justify-content: flex-start;
+    padding: 18px;
+    border: 1px solid var(--civic-azul-borde);
+    border-radius: var(--civic-radio-sm);
+    background: var(--civic-azul-suave);
+}
+
+.civic-oidc-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.civic-oidc-privacy {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin: 0;
+    color: var(--civic-tenue);
+    font-size: 11.5px;
+    line-height: 1.55;
+    text-align: center;
+}
+
+.civic-oidc-privacy i { color: var(--civic-azul); margin-top: 2px; }
+
+.civic-consent { width: min(100%, 820px); margin: 0 auto; }
+.civic-consent-panel { display: grid; gap: 20px; padding: clamp(22px, 4vw, 32px); }
+.civic-consent-panel > .civic-section-title { margin-top: -13px; }
+
+.civic-consent-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.civic-consent-grid > div {
+    padding: 17px;
+    border: 1px solid var(--civic-borde);
+    border-radius: var(--civic-radio-sm);
+    background: var(--civic-fondo);
+}
+
+.civic-consent-grid h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    color: var(--civic-tinta);
+    font-family: var(--civic-titulo);
+    font-size: 13px;
+}
+
+.civic-consent-grid h3 i { color: var(--civic-azul); font-size: 16px; }
+.civic-consent-grid ul { margin: 0; padding-left: 18px; }
+.civic-consent-grid li { margin: 7px 0; color: var(--civic-suave); font-size: 12.5px; line-height: 1.55; }
+
+.civic-stages {
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-top: 40px;
+    flex-wrap: wrap;
+}
+
+.civic-stage {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--civic-tenue);
+    font-family: var(--civic-titulo);
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.civic-stage-number {
+    display: grid;
+    place-items: center;
+    width: 27px;
+    height: 27px;
+    border: 1px solid var(--civic-borde-fuerte);
+    border-radius: 50%;
+    background: var(--civic-superficie);
+    color: var(--civic-suave);
+    font-size: 11px;
+}
+
+.civic-stage.is-active { color: var(--civic-tinta); }
+.civic-stage.is-active .civic-stage-number {
+    border-color: var(--civic-azul);
+    background: var(--civic-azul);
+    color: #ffffff;
+}
+
+.civic-stage.is-done { color: var(--civic-azul); }
+.civic-stage.is-done .civic-stage-number {
+    border-color: var(--civic-azul-borde);
+    background: var(--civic-azul-suave);
+    color: var(--civic-azul);
+}
+
+.civic-stage-connector {
+    width: 28px;
+    border-top: 1px solid var(--civic-borde-fuerte);
+}
+
+.civic-oidc-cleanup-failure {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: var(--civic-fondo);
+}
+
+.civic-oidc-cleanup-failure .civic-note { max-width: 620px; }
+
+@media (max-width: 760px) {
+    .civic-method-grid,
+    .civic-consent-grid { grid-template-columns: 1fr; }
+    .civic-method-card-primary { grid-column: auto; }
+    .civic-oidc-rail { grid-template-columns: 1fr; }
+    .civic-oidc-rail > div + div {
+        border-left: 0;
+        border-top: 1px solid var(--civic-borde);
+    }
+    .civic-oidc-heading { flex-direction: column; }
+    .civic-oidc-actions .civic-btn { width: 100%; }
+}

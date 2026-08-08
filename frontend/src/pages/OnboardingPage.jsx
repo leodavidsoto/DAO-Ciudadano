@@ -1,5 +1,5 @@
 /**
- * Flujo de verificación ciudadana (/unete).
+ * Flujo piloto de registro ciudadano (/unete).
  *
  * Rediseñado para continuar la identidad visual de la landing pública
  * (styles/landing.css): azul #003897, rojo #CB2C27, Poppins + Open Sans,
@@ -8,17 +8,37 @@
  * portada — quien entraba desde "ÚNETE A LA RED" sentía que había
  * cambiado de sitio.
  *
+ * El canal OIDC y sus estados nuevos usan exclusivamente el vocabulario
+ * `civic-*`. Los pasos piloto históricos conservan una capa de compatibilidad
+ * en `styles/civic.css` mientras se migran por separado.
+ *
  * Los componentes de cada paso NO se tocaron: siguen usando su vocabulario
- * de clases `cyber-*`, que styles/onboarding-estamosdao.css redefine
- * dentro del contenedor `.estamosdao-flow`. Así el rediseño no arriesga la
- * lógica del flujo (NFC, liveness, wallet, minteo), que es la parte
- * delicada.
+ * de clases `cyber-*`. Así el rediseño no arriesga la lógica del flujo
+ * (NFC, liveness, wallet, minteo), que es la parte delicada.
+ *
+ * REDISEÑO INCOMPLETO — el rediseño preveía un styles/onboarding-estamosdao.css
+ * que redefiniera esas clases `cyber-*` dentro del contenedor
+ * `.estamosdao-flow`, pero ese archivo nunca se commiteó (no existe en
+ * ninguna rama). Su `import` quedó aquí y rompía la resolución de módulos,
+ * lo que tumbaba el bundle COMPLETO: ninguna ruta compilaba y el deploy de
+ * producción caía con `Module not found`. Se retiró el import para devolver
+ * el build a verde.
+ *
+ * Consecuencia visible: los pasos posteriores al selector de método siguen
+ * con su aspecto cyberpunk sobre el fondo claro. Es una inconsistencia
+ * visual conocida, no un descuido. Cerrarla exige escribir ese stylesheet
+ * (o migrar los componentes a clases `civic-*`), y `.estamosdao-flow` no
+ * tiene reglas en ninguna parte hasta que eso ocurra.
  */
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useOnboarding } from '@/context';
 import {
-    CyberStep,
+    CLAVE_UNICA_CALLBACK_PARAMS,
+    cleanClaveUnicaCallbackUrl,
+} from '@/lib/claveUnica';
+import '../styles/civic.css';
+import {
     ErrorDisplay,
     MethodSelector,
     CivicMethodSelector,
@@ -32,28 +52,89 @@ import {
     SuccessStep,
     DashboardStep,
 } from '@/components/onboarding';
-import '../styles/onboarding-estamosdao.css';
 
 const AZUL = '#003897';
 const TINTA = '#0B2545';
+
+const CivicStep = ({ n, title, active = false, done = false }) => (
+    <div
+        className={`civic-stage${active ? ' is-active' : ''}${done ? ' is-done' : ''}`}
+        aria-current={active ? 'step' : undefined}
+    >
+        <span className="civic-stage-number" aria-hidden="true">
+            {done ? <i className="ph-bold ph-check" /> : n}
+        </span>
+        <span className="civic-stage-title">{title}</span>
+    </div>
+);
+
+const captureAndCleanCallback = () => {
+    if (typeof window === 'undefined') return null;
+    const url = new URL(window.location.href);
+    const isCallbackRoute = url.pathname === '/unete/clave-unica/callback';
+    const carriesOidcResult = CLAVE_UNICA_CALLBACK_PARAMS.some((name) =>
+        url.searchParams.has(name)
+    );
+    if (!isCallbackRoute && !carriesOidcResult) return null;
+
+    const href = url.toString();
+    try {
+        const cleanUrl = cleanClaveUnicaCallbackUrl(href);
+        window.history.replaceState(window.history.state, '', cleanUrl);
+        return { href, cleaned: true };
+    } catch {
+        return { href, cleaned: false };
+    }
+};
 
 /** Etapas visibles del recorrido. `match` son los `step` del contexto que
  *  caen en esa etapa; `after`, los que ya la dejaron atrás. */
 const ETAPAS = [
     { n: 1, title: 'Método', match: ['method', 'registro'], after: ['clave', 'nfc', 'selfie', 'consent', 'wallet', 'mint', 'success', 'dashboard'] },
-    { n: 2, title: 'Identidad', match: ['clave', 'nfc', 'selfie'], after: ['consent', 'wallet', 'mint', 'success', 'dashboard'] },
-    { n: 3, title: 'Consentimiento', match: ['consent'], after: ['wallet', 'mint', 'success', 'dashboard'] },
+    { n: 2, title: 'Prueba piloto', match: ['clave', 'nfc', 'selfie'], after: ['consent', 'wallet', 'mint', 'success', 'dashboard'] },
+    { n: 3, title: 'Limitaciones', match: ['consent'], after: ['wallet', 'mint', 'success', 'dashboard'] },
     { n: 4, title: 'Billetera', match: ['wallet'], after: ['mint', 'success', 'dashboard'] },
     { n: 5, title: 'Credencial', match: ['mint'], after: ['success', 'dashboard'] },
 ];
 
 const OnboardingPage = ({ appearance }) => {
-    const { step, progress, error, loadStats } = useOnboarding();
+    const {
+        step,
+        progress,
+        error,
+        loadStats,
+        completeClaveUnicaCallback,
+    } = useOnboarding();
     const navigate = useNavigate();
+    const callbackStarted = useRef(false);
+    const callbackCapture = useRef(undefined);
+    if (callbackCapture.current === undefined) {
+        // Scrub before React commits images or any effect starts a request.
+        callbackCapture.current = captureAndCleanCallback();
+    }
 
     useEffect(() => {
-        loadStats();
+        if (callbackStarted.current || !callbackCapture.current) return;
+        callbackStarted.current = true;
+        completeClaveUnicaCallback(callbackCapture.current.href);
+    }, [completeClaveUnicaCallback]);
+
+    useEffect(() => {
+        // Callback pages deliberately skip this unrelated request. The URL
+        // must be scrubbed and the OIDC result validated first.
+        if (!callbackCapture.current) loadStats();
     }, [loadStats]);
+
+    if (callbackCapture.current && !callbackCapture.current.cleaned) {
+        return (
+            <main className="civic-app civic-onboarding civic-oidc-cleanup-failure">
+                <div className="civic-note civic-note-error" role="alert">
+                    No se pudo retirar el retorno de ClaveÚnica de la barra de direcciones.
+                    El canje permanece bloqueado; cierra esta pestaña y vuelve a comenzar.
+                </div>
+            </main>
+        );
+    }
 
     const renderStep = () => {
         switch (step) {
@@ -72,7 +153,7 @@ const OnboardingPage = ({ appearance }) => {
     };
 
     return (
-        <div className={`estamosdao-flow ${appearance === 'civic' ? 'civic-onboarding' : ''}`}>
+        <div className={`estamosdao-flow ${appearance === 'civic' ? 'civic-app civic-onboarding' : ''}`}>
             {/* ===== Cabecera: misma marca y misma altura que la landing ===== */}
             <header
                 style={{
@@ -129,37 +210,34 @@ const OnboardingPage = ({ appearance }) => {
                         fontFamily: 'Poppins, sans-serif', fontSize: 11.5, fontWeight: 500,
                         letterSpacing: '0.06em', color: '#33456B', boxShadow: '0 2px 8px rgba(11,37,69,0.05)',
                     }}>
-                        <i className="ph-bold ph-shield-check" style={{ fontSize: 14, color: AZUL }} />
-                        UNA PERSONA, UN VOTO
+                        <i className="ph-bold ph-flask" style={{ fontSize: 14, color: AZUL }} />
+                        PILOTO TÉCNICO
                     </div>
 
                     <h1 style={{
                         fontFamily: 'Poppins, sans-serif', fontWeight: 600, fontSize: 'clamp(28px, 4.4vw, 42px)',
                         lineHeight: 1.12, letterSpacing: '-0.02em', color: AZUL, margin: '18px 0 0',
                     }}>
-                        Verifica tu identidad
+                        Prueba el registro ciudadano
                     </h1>
                     <p style={{ fontSize: 16.5, lineHeight: 1.6, color: '#46536E', margin: '14px auto 0', maxWidth: 520 }}>
-                        Una sola vez. Recibes una credencial que no se puede vender ni transferir,
-                        y con ella participas en cada votación.
+                        ClaveÚnica acredita identidad sólo cuando el canal OIDC seguro está disponible.
+                        Los recorridos NFC, imagen y registro básico continúan como demostraciones.
                     </p>
                 </div>
 
                 {/* ===== Indicador de etapas (escritorio) ===== */}
-                <div
-                    className="hidden lg:flex"
-                    style={{ alignItems: 'center', justifyContent: 'center', gap: 18, marginTop: 40, flexWrap: 'wrap' }}
-                >
+                <div className="hidden lg:flex civic-stages">
                     {ETAPAS.map((e, i) => (
                         <React.Fragment key={e.n}>
-                            <CyberStep
+                            <CivicStep
                                 n={e.n}
                                 title={e.title}
                                 active={e.match.includes(step)}
                                 done={e.after.includes(step)}
                             />
                             {i < ETAPAS.length - 1 && (
-                                <span aria-hidden="true" style={{ width: 34, height: 0, borderTop: '2px dashed #C6D5EC' }} />
+                                <span className="civic-stage-connector" aria-hidden="true" />
                             )}
                         </React.Fragment>
                     ))}
@@ -167,8 +245,8 @@ const OnboardingPage = ({ appearance }) => {
 
                 {/* ===== Progreso ===== */}
                 <div style={{ marginTop: 34, maxWidth: 560, marginLeft: 'auto', marginRight: 'auto' }}>
-                    <div className="cyber-progress-premium">
-                        <div className="cyber-progress-premium-fill" style={{ width: `${progress}%` }} />
+                    <div className="civic-bar" aria-label={`Progreso del registro: ${progress}%`}>
+                        <div className="civic-bar-blue" style={{ width: `${progress}%` }} />
                     </div>
                     <p style={{
                         textAlign: 'center', fontFamily: 'Poppins, sans-serif', fontSize: 12,
@@ -193,8 +271,8 @@ const OnboardingPage = ({ appearance }) => {
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
                     fontSize: 13, color: '#8090AD', textAlign: 'center', flexWrap: 'wrap',
                 }}>
-                    <i className="ph ph-lock-simple" style={{ fontSize: 15 }} />
-                    Tus datos se cifran antes de guardarse. EstamosDAO Chile · código abierto
+                    <i className="ph ph-info" style={{ fontSize: 15 }} />
+                    Piloto técnico con limitaciones abiertas · EstamosDAO Chile · código abierto
                 </footer>
             </div>
         </div>

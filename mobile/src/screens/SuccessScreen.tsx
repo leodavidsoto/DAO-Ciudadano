@@ -1,125 +1,184 @@
-/**
- * Success Screen - Display scan results and proceed to wallet connection
- */
+/** Display only identity data that crossed the verified NFC boundary. */
 
-import React from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
     View,
     Text,
     StyleSheet,
     TouchableOpacity,
     ScrollView,
-    Platform,
+    Animated,
+    Easing,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChileanIDData } from '../services/nfcService';
+import {
+    isVerifiedNFCReadResult,
+    type VerifiedNFCReadResult,
+} from '../services/nfcService';
+import { useOnboarding } from '../context/OnboardingContext';
+import { theme } from '../styles/theme';
+
+/** How long the check stays on screen before the flow advances itself. */
+export const AUTO_ADVANCE_DELAY_MS = 2200;
 
 interface SuccessScreenProps {
     navigation: any;
-    route: {
-        params: {
-            idData: ChileanIDData;
-            serialNumber: string;
-            identityVerified?: boolean;
+    route?: {
+        params?: {
+            result?: VerifiedNFCReadResult;
+            grantIssued?: boolean;
         };
     };
 }
 
 const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
-    const { idData, serialNumber, identityVerified = false } = route.params;
+    // Navigation is another runtime boundary. Do not trust a route boolean or
+    // display identity fields unless the full evidence object still validates.
+    const candidate = route?.params?.result;
+    const identityVerified = isVerifiedNFCReadResult(candidate);
+    const idData = identityVerified ? candidate.data : null;
+    const verification = identityVerified ? candidate.verification : null;
 
-    const handleContinue = () => {
-        navigation.navigate('Wallet', { idData, serialNumber, identityVerified });
-    };
+    const { hasUsableGrant } = useOnboarding();
+    // The route flag alone never authorizes advancing: the grant has to still
+    // be in context and unexpired, or the mint screen would open on nothing.
+    const readyToMint = identityVerified && route?.params?.grantIssued === true && hasUsableGrant();
+
+    const checkScale = useRef(new Animated.Value(0)).current;
+    const advanced = useRef(false);
+
+    const handleContinue = useCallback(() => {
+        if (advanced.current) return;
+        advanced.current = true;
+        if (!identityVerified) {
+            navigation.navigate('Scan');
+            return;
+        }
+        navigation.navigate('Wallet');
+    }, [identityVerified, navigation]);
+
+    // Success check: springs in once, then stays put.
+    useEffect(() => {
+        if (!identityVerified) return;
+        Animated.timing(checkScale, {
+            toValue: 1,
+            duration: 420,
+            easing: Easing.out(Easing.back(2)),
+            useNativeDriver: true,
+        }).start();
+    }, [identityVerified, checkScale]);
+
+    // Auto-advance only when the backend actually issued a grant. A local-only
+    // verification stops here: it is not an enrolment.
+    useEffect(() => {
+        if (!readyToMint) return;
+        const timer = setTimeout(handleContinue, AUTO_ADVANCE_DELAY_MS);
+        return () => clearTimeout(timer);
+    }, [readyToMint, handleContinue]);
 
     return (
         <SafeAreaView style={styles.container}>
             <ScrollView contentContainerStyle={styles.content}>
-                {/* Estado de lectura. El ícono y el texto reflejan si la
-                    identidad fue verificada criptográficamente o si solo se
-                    detectó un tag NFC: decir "verificado" sin serlo es
-                    justamente lo que permitía registrarse con cualquier
-                    tarjeta. */}
-                <View style={identityVerified ? styles.successIcon : styles.warningIcon}>
+                <Animated.View
+                    style={[
+                        identityVerified ? styles.successIcon : styles.warningIcon,
+                        identityVerified && { transform: [{ scale: checkScale }] },
+                    ]}
+                >
                     <Text style={identityVerified ? styles.checkmark : styles.warningMark}>
                         {identityVerified ? '✓' : '!'}
                     </Text>
-                </View>
+                </Animated.View>
 
                 <Text style={identityVerified ? styles.title : styles.titleWarning}>
-                    {identityVerified ? 'CHIP VERIFICADO' : 'CHIP DETECTADO'}
+                    {identityVerified ? 'DOCUMENTO VERIFICADO' : 'LECTURA NO VERIFICADA'}
                 </Text>
                 <Text style={styles.subtitle}>
-                    {identityVerified
-                        ? 'La identificación ha sido leída y verificada'
-                        : 'Se detectó un chip NFC, pero su identidad aún no está verificada'}
+                    {!identityVerified
+                        ? 'La evidencia de autenticación pasiva está ausente o incompleta. No se mostrarán datos del documento.'
+                        : readyToMint
+                            ? 'El servidor repitió la autenticación pasiva y emitió tu credencial de un solo uso.'
+                            : 'La app comprobó localmente los datos firmados de la cédula y su cadena CSCA chilena instalada.'}
                 </Text>
 
-                {/* Data Card */}
-                <View style={styles.dataCard}>
-                    <Text style={styles.cardTitle}>DATOS DEL CHIP</Text>
+                {/* Derivado de `readyToMint`, no de un estado propio: un flag
+                    duplicado podría anunciar un avance que el temporizador ya
+                    no va a hacer, o callarse cuando sí lo va a hacer. */}
+                {readyToMint && (
+                    <Text style={styles.autoAdvanceText}>
+                        Continuando al minteo…
+                    </Text>
+                )}
 
-                    <View style={styles.dataRow}>
-                        <Text style={styles.dataLabel}>Serial NFC:</Text>
-                        <Text style={styles.dataValue}>{serialNumber}</Text>
-                    </View>
+                {idData && verification && (
+                    <View style={styles.dataCard}>
+                        <Text style={styles.cardTitle}>DATOS AUTENTICADOS (DG1)</Text>
 
-                    {idData.documentNumber && (
                         <View style={styles.dataRow}>
                             <Text style={styles.dataLabel}>Documento:</Text>
                             <Text style={styles.dataValue}>{idData.documentNumber}</Text>
                         </View>
-                    )}
-
-                    {idData.rut && (
-                        <View style={styles.dataRow}>
-                            <Text style={styles.dataLabel}>RUT:</Text>
-                            <Text style={styles.dataValue}>{idData.rut}</Text>
-                        </View>
-                    )}
-
-                    {idData.firstName && (
                         <View style={styles.dataRow}>
                             <Text style={styles.dataLabel}>Nombre:</Text>
                             <Text style={styles.dataValue}>
                                 {idData.firstName} {idData.lastName}
                             </Text>
                         </View>
-                    )}
+                        <View style={styles.dataRow}>
+                            <Text style={styles.dataLabel}>Emisor:</Text>
+                            <Text style={styles.dataValue}>{idData.issuingState}</Text>
+                        </View>
+                        <View style={styles.dataRow}>
+                            <Text style={styles.dataLabel}>Nacionalidad:</Text>
+                            <Text style={styles.dataValue}>{idData.nationality}</Text>
+                        </View>
+                        <View style={styles.dataRow}>
+                            <Text style={styles.dataLabel}>Nacimiento:</Text>
+                            <Text style={styles.dataValue}>{idData.dateOfBirth}</Text>
+                        </View>
+                        <View style={styles.dataRow}>
+                            <Text style={styles.dataLabel}>Vencimiento:</Text>
+                            <Text style={styles.dataValue}>{idData.dateOfExpiry}</Text>
+                        </View>
 
-                    <View style={styles.hashContainer}>
-                        {/* Antes decía "Hash de Verificación", pero es el serial
-                            del tag recortado -- ni es un hash ni verifica nada. */}
-                        <Text style={styles.hashLabel}>Identificador del chip:</Text>
-                        <Text style={styles.hashValue}>
-                            {serialNumber.substring(0, 8)}...{serialNumber.substring(serialNumber.length - 4)}
-                        </Text>
+                        <View style={styles.evidenceContainer}>
+                            <Text style={styles.evidenceTitle}>EVIDENCIA VERIFICADA</Text>
+                            <Text style={styles.evidenceText}>✓ Canal PACE-CAN establecido</Text>
+                            <Text style={styles.evidenceText}>✓ DG1, DG2 y EF.SOD presentes</Text>
+                            <Text style={styles.evidenceText}>✓ Hashes de data groups</Text>
+                            <Text style={styles.evidenceText}>✓ Firma EF.SOD</Text>
+                            <Text style={styles.evidenceText}>✓ Perfil de cédula chilena</Text>
+                            <Text style={styles.evidenceText}>✓ Documento dentro de vigencia</Text>
+                            <Text style={styles.evidenceText}>✓ Ancla CSCA chilena del Registro Civil</Text>
+                            <Text style={styles.evidenceText}>
+                                ✓ Cadena CSCA ({verification.trustAnchorsInstalled} anclas instaladas)
+                            </Text>
+                        </View>
                     </View>
-                </View>
+                )}
 
-                {/* Estado real de la verificación criptográfica */}
                 {identityVerified ? (
                     <View style={styles.securityBadge}>
                         <Text style={styles.securityIcon}>🔒</Text>
                         <Text style={styles.securityText}>
-                            Verificación criptográfica completada
+                            Autenticación pasiva local completada. No comprueba revocación ni descarta por sí sola un chip clonado; la emisión sigue bloqueada hasta contar con atestación autorizada.
                         </Text>
                     </View>
                 ) : (
                     <View style={styles.pendingBadge}>
                         <Text style={styles.securityIcon}>⚠️</Text>
                         <Text style={styles.pendingText}>
-                            Lectura sin verificar: el número de serie de un chip no prueba
-                            identidad. La lectura autenticada de la cédula está en desarrollo.
+                            Flujo detenido: vuelve a escanear. Una lectura no verificada no puede continuar a membresía.
                         </Text>
                     </View>
                 )}
             </ScrollView>
 
-            {/* Continue Button */}
             <View style={styles.buttonContainer}>
                 <TouchableOpacity style={styles.button} onPress={handleContinue}>
-                    <Text style={styles.buttonText}>CONTINUAR A MI BILLETERA</Text>
+                    <Text style={styles.buttonText}>
+                        {identityVerified ? 'CONTINUAR A MEMBRESÍA' : 'VOLVER A ESCANEAR'}
+                    </Text>
                 </TouchableOpacity>
             </View>
         </SafeAreaView>
@@ -129,7 +188,7 @@ const SuccessScreen: React.FC<SuccessScreenProps> = ({ navigation, route }) => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#0a0a1a',
+        backgroundColor: theme.colors.background,
     },
     content: {
         padding: 20,
@@ -139,44 +198,43 @@ const styles = StyleSheet.create({
         width: 100,
         height: 100,
         borderRadius: 50,
-        backgroundColor: '#00FF0020',
-        borderWidth: 3,
-        borderColor: '#00FF00',
+        backgroundColor: theme.colors.successSoft,
+        borderWidth: 2,
+        borderColor: theme.colors.success,
         justifyContent: 'center',
         alignItems: 'center',
         marginVertical: 30,
+        ...theme.shadows.light,
     },
     checkmark: {
         fontSize: 48,
-        color: '#00FF00',
+        color: theme.colors.success,
     },
     title: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: '#00FF00',
-        letterSpacing: 2,
+        ...theme.typography.title,
+        color: theme.colors.success,
+        textAlign: 'center',
     },
     titleWarning: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: '#FFA500',
-        letterSpacing: 2,
+        ...theme.typography.title,
+        color: theme.colors.warning,
         textAlign: 'center',
     },
     warningIcon: {
         width: 100,
         height: 100,
         borderRadius: 50,
-        backgroundColor: '#FFA50020',
-        borderWidth: 3,
-        borderColor: '#FFA500',
+        backgroundColor: theme.colors.warningSoft,
+        borderWidth: 2,
+        borderColor: theme.colors.warning,
         justifyContent: 'center',
         alignItems: 'center',
         marginVertical: 30,
+        ...theme.shadows.light,
     },
     warningMark: {
         fontSize: 48,
-        color: '#FFA500',
+        color: theme.colors.warning,
         fontWeight: 'bold',
     },
     pendingBadge: {
@@ -184,36 +242,43 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
         marginTop: 20,
         padding: 12,
-        backgroundColor: '#FFA50010',
-        borderRadius: 8,
+        backgroundColor: theme.colors.warningSoft,
+        borderRadius: theme.radius.sm,
         borderWidth: 1,
-        borderColor: '#FFA50040',
+        borderColor: theme.colors.warning,
     },
     pendingText: {
-        color: '#FFCC80',
-        fontSize: 12,
+        ...theme.typography.caption,
+        color: theme.colors.warning,
         flex: 1,
-        lineHeight: 17,
     },
     subtitle: {
-        fontSize: 14,
-        color: '#888',
+        ...theme.typography.caption,
         marginTop: 8,
         marginBottom: 30,
         textAlign: 'center',
     },
+    autoAdvanceText: {
+        ...theme.typography.caption,
+        color: theme.colors.primary,
+        marginTop: -18,
+        marginBottom: 24,
+        textAlign: 'center',
+        fontWeight: '600',
+    },
     dataCard: {
         width: '100%',
-        backgroundColor: '#0a0a2a',
-        borderRadius: 16,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.md,
         padding: 20,
         borderWidth: 1,
-        borderColor: '#00FFFF30',
+        borderColor: theme.colors.borderLight,
+        ...theme.shadows.light,
     },
     cardTitle: {
-        fontSize: 12,
-        color: '#00FFFF',
-        letterSpacing: 1,
+        ...theme.typography.caption,
+        color: theme.colors.primary,
+        fontWeight: 'bold',
         marginBottom: 16,
         textAlign: 'center',
     },
@@ -222,65 +287,70 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         paddingVertical: 10,
         borderBottomWidth: 1,
-        borderBottomColor: '#ffffff10',
+        borderBottomColor: theme.colors.borderLight,
     },
     dataLabel: {
-        color: '#666',
-        fontSize: 14,
+        ...theme.typography.body,
+        color: theme.colors.textSoft,
     },
     dataValue: {
-        color: '#fff',
-        fontSize: 14,
+        ...theme.typography.body,
         fontWeight: '600',
+        flex: 1,
+        textAlign: 'right',
+        marginLeft: 10,
     },
-    hashContainer: {
+    evidenceContainer: {
         marginTop: 16,
         padding: 12,
-        backgroundColor: '#00FFFF10',
-        borderRadius: 8,
+        backgroundColor: theme.colors.primarySoft,
+        borderRadius: theme.radius.sm,
     },
-    hashLabel: {
-        color: '#00FFFF',
-        fontSize: 11,
-        marginBottom: 4,
+    evidenceTitle: {
+        ...theme.typography.caption,
+        color: theme.colors.primary,
+        fontWeight: 'bold',
+        marginBottom: 8,
     },
-    hashValue: {
-        color: '#00FFFF',
-        fontSize: 14,
-        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    evidenceText: {
+        ...theme.typography.caption,
+        color: theme.colors.primaryHover,
+        marginVertical: 2,
     },
     securityBadge: {
         flexDirection: 'row',
         alignItems: 'center',
         marginTop: 20,
         padding: 12,
-        backgroundColor: '#00FF0010',
-        borderRadius: 8,
+        backgroundColor: theme.colors.successSoft,
+        borderRadius: theme.radius.sm,
         borderWidth: 1,
-        borderColor: '#00FF0030',
+        borderColor: theme.colors.success,
     },
     securityIcon: {
         fontSize: 20,
         marginRight: 10,
     },
     securityText: {
-        color: '#00FF00',
-        fontSize: 12,
+        ...theme.typography.caption,
+        color: theme.colors.success,
+        flex: 1,
     },
     buttonContainer: {
         padding: 20,
     },
     button: {
-        backgroundColor: '#00FFFF',
+        backgroundColor: theme.colors.primary,
         paddingVertical: 16,
-        borderRadius: 12,
+        borderRadius: theme.radius.md,
         alignItems: 'center',
+        ...theme.shadows.light,
     },
     buttonText: {
-        color: '#000',
+        color: '#FFFFFF',
         fontSize: 16,
         fontWeight: 'bold',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
 });
 

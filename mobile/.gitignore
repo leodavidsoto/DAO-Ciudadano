@@ -21,6 +21,7 @@ DerivedData
 *.ipa
 *.xcuserstate
 **/.xcode.env.local
+!ios/.xcode.env
 
 # Android/IntelliJ
 #
@@ -33,6 +34,8 @@ local.properties
 .cxx/
 *.keystore
 !debug.keystore
+*.jks
+*.p12
 .kotlin/
 
 # node.js
@@ -56,9 +59,17 @@ yarn-error.log
 # Bundle artifact
 *.jsbundle
 
+# Salida de `react-native bundle`. No es fuente: el bundle pesa ~8 MB y las
+# imágenes son copias de node_modules con nombre aplanado. Los iconos de la app
+# viven en res/mipmap-*/ y res/drawable/, que sí se versionan.
+android/app/src/main/assets/index.android.bundle
+android/app/src/main/res/drawable-*/
+android/app/src/main/res/raw/
+
 # Ruby / CocoaPods
 **/Pods/
 /vendor/bundle/
+ios/DAOCiudadanaApp.xcworkspace/
 
 # Temporary files created by Metro to check the health of the file watcher
 .metro-health-check*

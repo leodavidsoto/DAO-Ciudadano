@@ -5,10 +5,12 @@ Uses MongoDB for persistent storage
 Security: membership gating (C-3), delegated vote weight (A-5) and
 anti-fraud checks (A-4) are enforced on every mutating endpoint.
 """
-from fastapi import APIRouter, Depends, HTTPException
-from typing import List, Optional
-from pydantic import BaseModel, Field, field_validator
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Any, List, Optional
+from pydantic import BaseModel, field_validator
 from datetime import datetime, timezone, timedelta
+from pymongo.errors import DuplicateKeyError
 import uuid
 import logging
 import re
@@ -18,18 +20,25 @@ from ..core.database import (
     votes_collection,
     delegations_collection,
     treasury_transactions_collection,
-    members_collection
+    members_collection,
 )
 from ..core.security_middleware import (
     fraud_detector,
     verify_eth_address,
     generate_nonce,
-    hash_vote_data
+    hash_vote_data,
 )
 from ..core.config import settings
-from ..services.governance_service import governance_service
-from ..services import ballot_service
-from .deps import ensure_active_member, current_address, ensure_acts_as_self
+from ..services.governance_service import MAX_DELEGATION_DEPTH, governance_service
+from ..services import ballot_service, tally_service, treasury_service
+from ..services.membership_verifier import MembershipVerificationUnavailable
+from .deps import (
+    MEMBERSHIP_UNAVAILABLE_DETAIL,
+    current_address,
+    ensure_active_member,
+    ensure_acts_as_self,
+    is_active_member,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +52,13 @@ MIN_PROPOSAL_TITLE_LENGTH = 5
 MAX_PROPOSAL_TITLE_LENGTH = 100
 MIN_PROPOSAL_DESCRIPTION_LENGTH = 20
 MAX_PROPOSAL_DESCRIPTION_LENGTH = 5000
+# Cota superior de cualquier `limit` público. Sin ella, un solo GET con
+# ?limit=10000000 obliga al servidor a materializar la colección entera.
+MAX_PAGE_SIZE = 500
 
 
 # === Models with Validation ===
+
 
 class ProposalCreate(BaseModel):
     title: str
@@ -53,49 +66,59 @@ class ProposalCreate(BaseModel):
     category: str = "general"  # general, treasury, membership, technical
     creator_address: str
     duration_days: int = 7
-    
-    @field_validator('title')
+    maci_poll_id: Optional[str] = None
+    private_voting: bool = False
+
+    @field_validator("title")
     @classmethod
     def validate_title(cls, v):
         v = v.strip()
         if len(v) < MIN_PROPOSAL_TITLE_LENGTH:
-            raise ValueError(f'Title must be at least {MIN_PROPOSAL_TITLE_LENGTH} characters')
+            raise ValueError(
+                f"Title must be at least {MIN_PROPOSAL_TITLE_LENGTH} characters"
+            )
         if len(v) > MAX_PROPOSAL_TITLE_LENGTH:
-            raise ValueError(f'Title must be less than {MAX_PROPOSAL_TITLE_LENGTH} characters')
+            raise ValueError(
+                f"Title must be less than {MAX_PROPOSAL_TITLE_LENGTH} characters"
+            )
         # Remove potential XSS
-        v = re.sub(r'<[^>]+>', '', v)
+        v = re.sub(r"<[^>]+>", "", v)
         return v
-    
-    @field_validator('description')
+
+    @field_validator("description")
     @classmethod
     def validate_description(cls, v):
         v = v.strip()
         if len(v) < MIN_PROPOSAL_DESCRIPTION_LENGTH:
-            raise ValueError(f'Description must be at least {MIN_PROPOSAL_DESCRIPTION_LENGTH} characters')
+            raise ValueError(
+                f"Description must be at least {MIN_PROPOSAL_DESCRIPTION_LENGTH} characters"
+            )
         if len(v) > MAX_PROPOSAL_DESCRIPTION_LENGTH:
-            raise ValueError(f'Description must be less than {MAX_PROPOSAL_DESCRIPTION_LENGTH} characters')
+            raise ValueError(
+                f"Description must be less than {MAX_PROPOSAL_DESCRIPTION_LENGTH} characters"
+            )
         # Remove potential XSS
-        v = re.sub(r'<script[^>]*>.*?</script>', '', v, flags=re.IGNORECASE | re.DOTALL)
+        v = re.sub(r"<script[^>]*>.*?</script>", "", v, flags=re.IGNORECASE | re.DOTALL)
         return v
-    
-    @field_validator('creator_address')
+
+    @field_validator("creator_address")
     @classmethod
     def validate_address(cls, v):
         if not verify_eth_address(v):
-            raise ValueError('Invalid Ethereum address format')
+            raise ValueError("Invalid Ethereum address format")
         return v.lower()  # Normalize to lowercase
-    
-    @field_validator('duration_days')
+
+    @field_validator("duration_days")
     @classmethod
     def validate_duration(cls, v):
         if v < 1 or v > 90:
-            raise ValueError('Duration must be between 1 and 90 days')
+            raise ValueError("Duration must be between 1 and 90 days")
         return v
-    
-    @field_validator('category')
+
+    @field_validator("category")
     @classmethod
     def validate_category(cls, v):
-        allowed = ['general', 'treasury', 'membership', 'technical']
+        allowed = ["general", "treasury", "membership", "technical"]
         if v not in allowed:
             raise ValueError(f'Category must be one of: {", ".join(allowed)}')
         return v
@@ -115,6 +138,8 @@ class ProposalResponse(BaseModel):
     quorum_required: int = 10
     created_at: datetime
     ends_at: datetime
+    maci_poll_id: Optional[str] = None
+    private_voting: bool = False
 
 
 class VoteRequest(BaseModel):
@@ -122,19 +147,21 @@ class VoteRequest(BaseModel):
     voter_address: str
     vote: str  # for, against, abstain
     nonce: Optional[str] = None  # For replay protection
-    signature: Optional[str] = None  # EIP-712 typed-data signature (ver GET /governance/ballot-schema)
+    signature: Optional[str] = (
+        None  # EIP-712 typed-data signature (ver GET /governance/ballot-schema)
+    )
 
-    @field_validator('voter_address')
+    @field_validator("voter_address")
     @classmethod
     def validate_address(cls, v):
         if not verify_eth_address(v):
-            raise ValueError('Invalid Ethereum address format')
+            raise ValueError("Invalid Ethereum address format")
         return v.lower()
-    
-    @field_validator('vote')
+
+    @field_validator("vote")
     @classmethod
     def validate_vote(cls, v):
-        allowed = ['for', 'against', 'abstain']
+        allowed = ["for", "against", "abstain"]
         if v not in allowed:
             raise ValueError(f'Vote must be one of: {", ".join(allowed)}')
         return v
@@ -148,9 +175,25 @@ class VoteResponse(BaseModel):
     weight: Optional[int] = None  # Voting power applied to this vote
 
 
+class BallotEvidence(BaseModel):
+    proposal_id: str
+    voter_address: str
+    vote: str
+    weight: int
+    nonce: str
+    vote_hash: str
+    timestamp: datetime
+    signature: Optional[str] = None
+    signature_scheme: Optional[str] = None
+    chain_id: Optional[int] = None
+    signature_valid: bool
+    integrity_hash_valid: bool
+
+
 # === Membership dependencies (C-3) ===
 # FastAPI parses the body once; each dependency re-declares the request model
 # so the membership check runs before the endpoint body executes.
+
 
 async def verified_proposal_creator(request: ProposalCreate) -> ProposalCreate:
     await ensure_active_member(request.creator_address, "crear propuestas")
@@ -164,6 +207,7 @@ async def verified_voter(request: VoteRequest) -> VoteRequest:
 
 # === Proposal Endpoints ===
 
+
 @router.post("/proposals", response_model=ProposalResponse)
 async def create_proposal(
     request: ProposalCreate = Depends(verified_proposal_creator),
@@ -174,28 +218,30 @@ async def create_proposal(
     try:
         proposal_id = str(uuid.uuid4())[:8]
         now = datetime.now(timezone.utc)
-        
-        proposal = {
+
+        proposal: dict[str, Any] = {
             "id": proposal_id,
             "title": request.title,
             "description": request.description,
             "category": request.category,
             "creator_address": request.creator_address,
             "status": "active",
-            "votes_for": 0,
-            "votes_against": 0,
-            "votes_abstain": 0,
-            "total_votes": 0,
+            # Los totales NO se persisten: se derivan de las papeletas al
+            # leerlos (ROADMAP 3.10). Guardarlos aquí dejaría en la base un
+            # `votes_for: 0` con pinta de dato autoritativo que ya nadie
+            # actualiza — justo la divergencia que esta fase elimina.
             "quorum_required": 10,
             "created_at": now,
-            "ends_at": now + timedelta(days=request.duration_days)
+            "ends_at": now + timedelta(days=request.duration_days),
+            "maci_poll_id": request.maci_poll_id,
+            "private_voting": request.private_voting,
         }
-        
+
         await proposals_collection().insert_one(proposal)
-        
+
         logger.info(f"Proposal created: {proposal_id}")
         return ProposalResponse(**proposal)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -204,48 +250,75 @@ async def create_proposal(
 
 
 @router.get("/proposals", response_model=List[ProposalResponse])
-async def get_proposals(status: Optional[str] = None, limit: int = 20):
+async def get_proposals(
+    status: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
+):
     """Get all proposals, optionally filtered by status"""
     try:
         now = datetime.now(timezone.utc)
 
         # Resolve proposals whose voting period ended
-        expired_cursor = proposals_collection().find({
-            "status": "active",
-            "ends_at": {"$lt": now}
-        })
-        async for proposal in expired_cursor:
-            if proposal.get("total_votes", 0) >= proposal.get("quorum_required", 10):
-                new_status = (
-                    "passed"
-                    if proposal.get("votes_for", 0) > proposal.get("votes_against", 0)
-                    else "rejected"
-                )
-            else:
-                new_status = "expired"
-            await proposals_collection().update_one(
-                {"id": proposal["id"], "status": "active"},
-                {"$set": {"status": new_status}}
+        expired_cursor = proposals_collection().find(
+            {"status": "active", "ends_at": {"$lt": now}}
+        )
+        expired_docs = await expired_cursor.to_list(length=1000)
+
+        if expired_docs:
+            expired_ids = [p["id"] for p in expired_docs]
+            tallies = await governance_service.compute_proposals_tallies(
+                expired_ids, votes_collection
             )
+            for proposal in expired_docs:
+                t = tallies.get(proposal["id"], {})
+                total_votes = t.get("total_votes", 0)
+                votes_for = t.get("votes_for", 0)
+                votes_against = t.get("votes_against", 0)
+
+                if total_votes >= proposal.get("quorum_required", 10):
+                    new_status = "passed" if votes_for > votes_against else "rejected"
+                else:
+                    new_status = "expired"
+                await proposals_collection().update_one(
+                    {"id": proposal["id"], "status": "active"},
+                    {"$set": {"status": new_status}},
+                )
 
         # Build query
         query = {}
         if status:
             query["status"] = status
-        
+
         # Fetch proposals
-        cursor = proposals_collection().find(query).sort("created_at", -1).limit(limit)
-        proposals = await cursor.to_list(length=limit)
-        
+        proposals = (
+            await proposals_collection()
+            .find(query)
+            .sort("created_at", -1)
+            .limit(limit)
+            .to_list(length=limit)
+        )
+
+        if proposals:
+            proposal_ids = [p["id"] for p in proposals]
+            tallies = await governance_service.compute_proposals_tallies(
+                proposal_ids, votes_collection
+            )
+            for p in proposals:
+                t = tallies.get(p["id"], {})
+                p["votes_for"] = t.get("votes_for", 0)
+                p["votes_against"] = t.get("votes_against", 0)
+                p["votes_abstain"] = t.get("votes_abstain", 0)
+                p["total_votes"] = t.get("total_votes", 0)
+
         return [ProposalResponse(**p) for p in proposals]
-        
+
     except Exception as e:
         logger.error(f"Error getting proposals: {e}")
         raise HTTPException(status_code=500, detail="Error al listar propuestas")
 
 
 @router.get("/ballot-schema")
-async def get_ballot_schema(chain_id: int = ballot_service.DEFAULT_CHAIN_ID):
+async def get_ballot_schema():
     """Types + domain EIP-712 para que el cliente arme y firme la papeleta
     con eth_signTypedData_v4 (MetaMask, wallet generada en la app móvil, etc).
 
@@ -255,18 +328,115 @@ async def get_ballot_schema(chain_id: int = ballot_service.DEFAULT_CHAIN_ID):
     return {
         "types": ballot_service.BALLOT_TYPES,
         "primaryType": "Ballot",
-        "domain": ballot_service.domain(chain_id),
+        "domain": ballot_service.domain(),
         "signed_ballots_required": settings.SIGNED_BALLOTS_REQUIRED,
     }
+
+
+@router.get("/proposals/{proposal_id}/audit")
+async def audit_proposal_tally(proposal_id: str):
+    """Recuenta la propuesta desde sus papeletas, verificando cada firma.
+
+    Público y sin autenticación a propósito: un resultado que solo puede
+    comprobar quien tiene sesión no es verificable, es una promesa.
+
+    Devuelve el recuento recomputado, el que publica la API y si coinciden.
+    `rejected` enumera cada papeleta descartada con su motivo, así que una
+    divergencia se puede investigar sin acceso a la base de datos.
+    """
+    proposal = await proposals_collection().find_one({"id": proposal_id})
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Propuesta no encontrada")
+    return await tally_service.audit_proposal(proposal_id)
 
 
 @router.get("/proposals/{proposal_id}", response_model=ProposalResponse)
 async def get_proposal(proposal_id: str):
     """Get a specific proposal by ID"""
-    proposal = await proposals_collection().find_one({"id": proposal_id})
-    if not proposal:
+    try:
+        proposal = await proposals_collection().find_one({"id": proposal_id})
+        if not proposal:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+
+        tallies = await governance_service.compute_proposals_tallies(
+            [proposal["id"]], votes_collection
+        )
+        t = tallies.get(proposal["id"], {})
+        proposal["votes_for"] = t.get("votes_for", 0)
+        proposal["votes_against"] = t.get("votes_against", 0)
+        proposal["votes_abstain"] = t.get("votes_abstain", 0)
+        proposal["total_votes"] = t.get("total_votes", 0)
+
+        return ProposalResponse(**proposal)
+    except Exception as e:
+        logger.error(f"Error getting proposal: {e}")
+        raise HTTPException(status_code=500, detail="Error al obtener la propuesta")
+
+
+@router.get(
+    "/proposals/{proposal_id}/ballots",
+    response_model=List[BallotEvidence],
+)
+async def get_ballot_evidence(
+    proposal_id: str,
+    limit: int = Query(default=100, ge=1, le=MAX_PAGE_SIZE),
+):
+    """Return public, independently recomputable ballot evidence."""
+    if not await proposals_collection().find_one({"id": proposal_id}):
         raise HTTPException(status_code=404, detail="Proposal not found")
-    return ProposalResponse(**proposal)
+
+    records = (
+        await votes_collection()
+        .find({"proposal_id": proposal_id})
+        .sort("timestamp", 1)
+        .limit(limit)
+        .to_list(limit)
+    )
+    evidence = []
+    for record in records:
+        nonce = record.get("nonce", "")
+        signature = record.get("signature")
+        chain_id = record.get("chain_id")
+        signature_valid = False
+        if signature and chain_id:
+            try:
+                recovered = ballot_service.recover_signer(
+                    proposal_id,
+                    record.get("voter_address", ""),
+                    record.get("vote", ""),
+                    nonce,
+                    signature,
+                    chain_id,
+                )
+                signature_valid = (
+                    recovered.lower() == record.get("voter_address", "").lower()
+                )
+            except Exception:
+                signature_valid = False
+
+        expected_hash = hash_vote_data(
+            proposal_id,
+            record.get("voter_address", ""),
+            record.get("vote", ""),
+            nonce,
+        )
+        evidence.append(
+            BallotEvidence(
+                proposal_id=proposal_id,
+                voter_address=record.get("voter_address", ""),
+                vote=record.get("vote", ""),
+                weight=record.get("weight", 1),
+                nonce=nonce,
+                vote_hash=record.get("vote_hash", ""),
+                timestamp=record.get("timestamp"),
+                signature=signature,
+                signature_scheme=record.get("signature_scheme"),
+                chain_id=chain_id,
+                signature_valid=signature_valid,
+                integrity_hash_valid=record.get("vote_hash") == expected_hash,
+            )
+        )
+    return evidence
 
 
 @router.post("/vote", response_model=VoteResponse)
@@ -286,21 +456,35 @@ async def cast_vote(
     """
     ensure_acts_as_self(request.voter_address, authenticated, "votar")
 
+    if settings.is_production and not settings.SIGNED_BALLOTS_REQUIRED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "La votación está bloqueada: producción requiere "
+                "SIGNED_BALLOTS_REQUIRED=true."
+            ),
+        )
     if settings.SIGNED_BALLOTS_REQUIRED and not request.signature:
         raise HTTPException(
             status_code=422,
-            detail="Esta votación requiere una papeleta firmada (EIP-712). Ver GET /governance/ballot-schema.",
+            detail=(
+                "Esta votación requiere una papeleta firmada (EIP-712). "
+                "Ver GET /governance/ballot-schema."
+            ),
         )
 
-    # Anti-fraud: rapid-voting pattern check (A-4, wired per ROADMAP 3.4)
-    suspicious, reason = fraud_detector.check_rapid_voting(
-        request.voter_address, request.proposal_id
-    )
+    # Antifraude: se COMPRUEBA aquí y se REGISTRA solo si el voto llega a
+    # guardarse (P-46). Antes esta llamada apuntaba el intento, así que diez
+    # peticiones inválidas bloqueaban con 429 a quien no había votado nunca.
+    suspicious, reason = await fraud_detector.check_rapid_voting(request.voter_address)
     if suspicious:
         logger.warning(f"Rapid voting blocked: {request.voter_address} ({reason})")
         raise HTTPException(
             status_code=429,
-            detail="Actividad de voto sospechosa: demasiados votos en poco tiempo. Intenta más tarde."
+            detail=(
+                "Actividad de voto sospechosa: demasiados votos en poco tiempo. "
+                "Intenta más tarde."
+            ),
         )
 
     # Delegated vote cannot also be cast directly (it would double-count)
@@ -314,35 +498,84 @@ async def cast_vote(
             ),
         )
 
+    # Revocar la delegación no devuelve un peso que el delegado ya emitió en
+    # esta propuesta: la papeleta ya está contada y no se reescribe (P-61).
+    spender = await governance_service.weight_already_delegated_away(
+        request.voter_address, votes_collection, "proposal_id", request.proposal_id
+    )
+    if spender:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Tu peso ya fue emitido en esta propuesta por {spender}, "
+                "a quien habías delegado. No puede contarse dos veces."
+            ),
+        )
+
     try:
         # Get proposal
         proposal = await proposals_collection().find_one({"id": request.proposal_id})
         if not proposal:
             return VoteResponse(ok=False, error="Proposal not found")
-        
-        # Check if proposal is active
-        if proposal["status"] != "active":
+        if proposal.get("private_voting"):
+            return VoteResponse(
+                ok=False,
+                error="This proposal uses private voting via MACI. Cannot cast public vote.",
+            )
+
+        # Enforce the deadline here. Relying on GET /proposals to update status
+        # allowed a write after ends_at when nobody had loaded the listing.
+        now = datetime.now(timezone.utc)
+        ends_at = proposal.get("ends_at")
+        if ends_at and ends_at.tzinfo is None:
+            ends_at = ends_at.replace(tzinfo=timezone.utc)
+        voting_ended = not ends_at or ends_at <= now
+        if proposal["status"] != "active" or voting_ended:
+            if proposal["status"] == "active" and voting_ended:
+                tallies = await governance_service.compute_proposals_tallies(
+                    [proposal["id"]], votes_collection
+                )
+                t = tallies.get(proposal["id"], {})
+                if t.get("total_votes", 0) >= proposal.get("quorum_required", 10):
+                    closed_status = (
+                        "passed"
+                        if t.get("votes_for", 0) > t.get("votes_against", 0)
+                        else "rejected"
+                    )
+                else:
+                    closed_status = "expired"
+                await proposals_collection().update_one(
+                    {"id": request.proposal_id, "status": "active"},
+                    {"$set": {"status": closed_status}},
+                )
             return VoteResponse(ok=False, error="Proposal is not active")
-        
+
         # Check if already voted
-        existing_vote = await votes_collection().find_one({
-            "proposal_id": request.proposal_id,
-            "voter_address": request.voter_address
-        })
+        existing_vote = await votes_collection().find_one(
+            {"proposal_id": request.proposal_id, "voter_address": request.voter_address}
+        )
         if existing_vote:
             return VoteResponse(ok=False, error="Already voted on this proposal")
-        
-        # Voting power: own vote + delegations from active members (A-5)
-        weight = await governance_service.voting_power(request.voter_address)
+
+        # Voting power: own vote + delegations from active members that no
+        # hayan votado ya por su cuenta en ESTA propuesta (A-5, P-61).
+        weight, counted_delegators = await governance_service.contest_vote_weight(
+            request.voter_address, votes_collection, "proposal_id", request.proposal_id
+        )
 
         if request.signature:
             # El nonce firmado debe ser el mismo que se registra: si el
             # cliente no lo mandó, no hay forma de saber cuál firmó.
             if not request.nonce:
-                return VoteResponse(ok=False, error="Falta el nonce de la papeleta firmada")
+                return VoteResponse(
+                    ok=False, error="Falta el nonce de la papeleta firmada"
+                )
             await ballot_service.verify(
-                request.proposal_id, request.voter_address, request.vote,
-                request.nonce, request.signature,
+                request.proposal_id,
+                request.voter_address,
+                request.vote,
+                request.nonce,
+                request.signature,
             )
             nonce = request.nonce
         else:
@@ -361,35 +594,44 @@ async def cast_vote(
             "voter_address": request.voter_address,
             "vote": request.vote,
             "weight": weight,
+            # Composición del peso: sin esto `weight` es un número que nadie
+            # puede recomputar desde las papeletas públicas (ROADMAP 3.2).
+            "delegators": counted_delegators,
             "nonce": nonce,
             "vote_hash": vote_hash,
-            "timestamp": datetime.now(timezone.utc)
+            "timestamp": now,
+            "signature": request.signature,
+            "signature_scheme": "EIP-712" if request.signature else None,
+            "chain_id": settings.SIWE_CHAIN_ID if request.signature else None,
         }
-        await votes_collection().insert_one(vote_record)
-        
-        # Update vote counts by the applied weight, not by 1
-        update_field = f"votes_{request.vote}" if request.vote in ["for", "against", "abstain"] else "votes_abstain"
-        await proposals_collection().update_one(
-            {"id": request.proposal_id},
-            {
-                "$inc": {update_field: weight, "total_votes": weight}
-            }
-        )
-        
+        try:
+            await votes_collection().insert_one(vote_record)
+        except DuplicateKeyError:
+            return VoteResponse(ok=False, error="Already voted on this proposal")
+        # La papeleta ya está persistida: ahora sí cuenta para la ventana.
+        await fraud_detector.record_vote(request.voter_address)
+
         logger.info(
             f"Vote cast: {request.voter_address} -> {request.vote} "
             f"on {request.proposal_id} (weight {weight})"
         )
-        
+
         return VoteResponse(
             ok=True,
             message=f"Voto registrado: {request.vote} (peso {weight})",
             vote_hash=vote_hash,
             weight=weight,
         )
-        
+
     except HTTPException:
         raise
+    except MembershipVerificationUnavailable as exc:
+        # El cálculo del peso también consulta la fuente de membresía. Sin
+        # este caso explícito, el `except Exception` de abajo convertiría una
+        # caída del RPC en "Error al registrar el voto", que no dice nada.
+        raise HTTPException(
+            status_code=503, detail=MEMBERSHIP_UNAVAILABLE_DETAIL
+        ) from exc
     except Exception as e:
         logger.error(f"Error casting vote: {e}")
         return VoteResponse(ok=False, error="Error al registrar el voto")
@@ -402,27 +644,28 @@ async def get_governance_stats():
         total = await proposals_collection().count_documents({})
         active = await proposals_collection().count_documents({"status": "active"})
         passed = await proposals_collection().count_documents({"status": "passed"})
-        
+
         # Sum total votes
-        pipeline = [{"$group": {"_id": None, "total": {"$sum": "$total_votes"}}}]
-        result = await proposals_collection().aggregate(pipeline).to_list(1)
+        pipeline = [{"$group": {"_id": None, "total": {"$sum": "$weight"}}}]
+        result = await votes_collection().aggregate(pipeline).to_list(1)
         total_votes = result[0]["total"] if result else 0
-        
+
         # Participation rate = unique voters / active members.
         # Returns None when there are no members yet (avoids a fabricated figure).
         distinct_voters = await votes_collection().distinct("voter_address")
         total_members = await members_collection().count_documents({"status": "active"})
         participation_rate = (
             round(len(distinct_voters) / total_members, 4)
-            if total_members > 0 else None
+            if total_members > 0
+            else None
         )
-        
+
         return {
             "total_proposals": total,
             "active_proposals": active,
             "passed_proposals": passed,
             "total_votes_cast": total_votes,
-            "participation_rate": participation_rate
+            "participation_rate": participation_rate,
         }
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
@@ -431,11 +674,12 @@ async def get_governance_stats():
             "active_proposals": 0,
             "passed_proposals": 0,
             "total_votes_cast": 0,
-            "participation_rate": None
+            "participation_rate": None,
         }
 
 
 # === VOTE DELEGATION ===
+
 
 class DelegationRequest(BaseModel):
     delegator_address: str
@@ -443,11 +687,11 @@ class DelegationRequest(BaseModel):
 
     # Addresses were previously stored unvalidated and case-sensitive, which
     # silently broke lookups (see AUDIT, hallazgo N-4). Same rules as votes.
-    @field_validator('delegator_address', 'delegate_address')
+    @field_validator("delegator_address", "delegate_address")
     @classmethod
     def validate_address(cls, v):
         if not verify_eth_address(v):
-            raise ValueError('Invalid Ethereum address format')
+            raise ValueError("Invalid Ethereum address format")
         return v.lower()
 
 
@@ -469,7 +713,10 @@ async def delegate_vote(
     request: DelegationRequest = Depends(verified_delegator),
     authenticated: str = Depends(current_address),
 ):
-    """Delegate voting power to another address (active members only, sesión de wallet requerida)"""
+    """Delega el poder de voto en otra dirección.
+
+    Solo miembros activos y con sesión de wallet.
+    """
     ensure_acts_as_self(request.delegator_address, authenticated, "delegar el voto")
     try:
         if request.delegator_address == request.delegate_address:
@@ -477,11 +724,12 @@ async def delegate_vote(
 
         # The delegate must also be an active member: delegating to an address
         # that cannot vote would silently discard the delegator's weight.
-        delegate_member = await members_collection().find_one({
-            "wallet_address": request.delegate_address,
-            "status": "active",
-        })
-        if not delegate_member:
+        #
+        # This goes through the same MembershipVerifier as the delegator gate.
+        # A raw {status: "active"} query was weaker than the production gate,
+        # so a quarantined legacy/demo row could receive delegations it could
+        # never actually cast.
+        if not await is_active_member(request.delegate_address):
             return DelegationResponse(
                 ok=False,
                 error=(
@@ -490,38 +738,42 @@ async def delegate_vote(
                 ),
             )
 
-        # Authoritative cycle check against the stored delegation graph
-        # (catches a->b->c->a, not just the direct two-way cycle).
-        if await governance_service.find_delegation_cycle(
+        # Authoritative check against the stored delegation graph: detecta
+        # ciclos (a->b->c->a, no solo el de dos nodos) y cadenas demasiado
+        # profundas. Se responden distinto porque son problemas distintos y
+        # solo uno de ellos depende de a quién elegiste.
+        block_reason = await governance_service.delegation_block_reason(
             request.delegator_address, request.delegate_address
-        ):
+        )
+        if block_reason == "cycle":
             return DelegationResponse(ok=False, error="Delegación circular detectada")
+        if block_reason == "depth":
+            return DelegationResponse(
+                ok=False,
+                error=(
+                    f"{request.delegate_address} ya está al final de una cadena "
+                    f"de delegaciones de {MAX_DELEGATION_DEPTH} niveles. "
+                    "Elige a alguien que vote directamente."
+                ),
+            )
 
         # Cap on received delegations, enforced against the database
-        delegator_count = await delegations_collection().count_documents({
-            "delegate": request.delegate_address,
-            "delegator": {"$ne": request.delegator_address},
-        })
+        delegator_count = await delegations_collection().count_documents(
+            {
+                "delegate": request.delegate_address,
+                "delegator": {"$ne": request.delegator_address},
+            }
+        )
         if delegator_count >= MAX_DELEGATION_POWER:
             return DelegationResponse(
                 ok=False,
                 error=f"El delegado ya alcanzó el máximo de {MAX_DELEGATION_POWER} delegaciones",
             )
 
-        # Anti-fraud heuristics (A-4, wired per ROADMAP 3.4): chain depth and
-        # delegator count over the in-process history.
-        suspicious, reason = fraud_detector.check_delegation_chain(
-            request.delegator_address, request.delegate_address
-        )
-        if suspicious:
-            logger.warning(
-                f"Delegation blocked by fraud detector: "
-                f"{request.delegator_address} -> {request.delegate_address} ({reason})"
-            )
-            return DelegationResponse(
-                ok=False,
-                error="Delegación rechazada por el control antifraude: patrón de delegación sospechoso",
-            )
+        # La profundidad de cadena y el máximo de delegados ya se comprobaron
+        # arriba contra MongoDB (find_delegation_cycle y count_documents). El
+        # detector en memoria duplicaba ambas con una copia del grafo que se
+        # vaciaba al reiniciar; se eliminó en ROADMAP 3.8.
 
         # Upsert delegation
         await delegations_collection().update_one(
@@ -530,22 +782,21 @@ async def delegate_vote(
                 "$set": {
                     "delegator": request.delegator_address,
                     "delegate": request.delegate_address,
-                    "created_at": datetime.now(timezone.utc)
+                    "created_at": datetime.now(timezone.utc),
                 }
             },
-            upsert=True
+            upsert=True,
         )
-        fraud_detector.record_delegation(
-            request.delegator_address, request.delegate_address
+
+        logger.info(
+            f"Delegation: {request.delegator_address} -> {request.delegate_address}"
         )
-        
-        logger.info(f"Delegation: {request.delegator_address} -> {request.delegate_address}")
-        
+
         return DelegationResponse(
             ok=True,
             delegator=request.delegator_address,
             delegate=request.delegate_address,
-            message="Voto delegado exitosamente"
+            message="Voto delegado exitosamente",
         )
     except HTTPException:
         raise
@@ -555,12 +806,13 @@ async def delegate_vote(
 
 
 @router.delete("/delegate/{address}")
-async def revoke_delegation(address: str, authenticated: str = Depends(current_address)):
+async def revoke_delegation(
+    address: str, authenticated: str = Depends(current_address)
+):
     """Revoke vote delegation (sesión de wallet requerida)"""
     ensure_acts_as_self(address, authenticated, "revocar tu delegación")
     result = await delegations_collection().delete_one({"delegator": address.lower()})
     if result.deleted_count > 0:
-        fraud_detector.remove_delegation(address)
         return {"ok": True, "message": "Delegación revocada"}
     return {"ok": False, "error": "No hay delegación activa"}
 
@@ -570,10 +822,7 @@ async def get_delegation(address: str):
     """Get current delegation for an address"""
     delegation = await delegations_collection().find_one({"delegator": address.lower()})
     if delegation:
-        return {
-            "delegated": True,
-            "delegate": delegation["delegate"]
-        }
+        return {"delegated": True, "delegate": delegation["delegate"]}
     return {"delegated": False, "delegate": None}
 
 
@@ -594,11 +843,12 @@ async def get_delegators(delegate_address: str):
         "delegate": address,
         "delegators": delegators,
         "active_delegators": active_delegators,
-        "voting_power": 1 + len(active_delegators)
+        "voting_power": 1 + len(active_delegators),
     }
 
 
 # === TREASURY ===
+
 
 class TreasuryTransaction(BaseModel):
     id: str
@@ -614,58 +864,109 @@ class TreasuryTransaction(BaseModel):
     timestamp: datetime
 
 
-# NOTE: On-chain balance reading is not wired yet (see ROADMAP Fase 3.6).
-# Until a real Safe multisig / RPC source is connected, treasury balances
-# are reported as unconfigured instead of fabricated values.
-
-
 @router.get("/treasury")
 async def get_treasury():
-    """Get treasury overview.
+    """Overview de la tesorería leído de fuentes reales (ROADMAP 3.6).
 
-    Balances are read from real sources only. While no on-chain source is
-    configured, `balances` is null and `configured` is false — never mock data.
+    El balance sale de `eth_getBalance` sobre el Safe configurado y el precio
+    de una API pública; ningún número vive en el código. Los tres estados son
+    distintos y se distinguen en la respuesta:
+
+    * sin configurar -> `configured: false`, `balances: null`
+    * configurada pero el RPC no responde -> `configured: true`,
+      `balances: null` y `error` con el motivo
+    * leída -> `balances` con el valor real, que puede ser 0
+
+    `total_usd_value` es `null` fuera de mainnet: el ETH de una testnet no
+    tiene precio de mercado y ponerle uno sería fabricar dinero.
     """
+    snapshot = await treasury_service.snapshot()
     tx_count = await treasury_transactions_collection().count_documents({})
 
-    return {
-        "configured": False,
-        "balances": None,
-        "total_eth_value": None,
-        "total_usd_value": None,
-        "transaction_count": tx_count
-    }
+    return {**snapshot, "transaction_count": tx_count}
 
 
-@router.get("/treasury/transactions")
-async def get_treasury_transactions(limit: int = 20, category: Optional[str] = None):
+@router.get("/treasury/transactions", response_model=List[TreasuryTransaction])
+async def get_treasury_transactions(
+    limit: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
+    category: Optional[str] = None,
+):
     """Get treasury transaction history (real records only)."""
     query = {}
     if category:
         query["category"] = category
 
-    cursor = treasury_transactions_collection().find(query).sort("timestamp", -1).limit(limit)
+    # Project out `_id`: FastAPI cannot serialize a raw ObjectId, so the first
+    # real transaction stored would have turned this endpoint into a 500.
+    cursor = (
+        treasury_transactions_collection()
+        .find(query, {"_id": 0})
+        .sort("timestamp", -1)
+        .limit(limit)
+    )
     transactions = await cursor.to_list(length=limit)
 
     return transactions
+
+
+async def _runway_months(snapshot: dict) -> tuple[Optional[float], Optional[str]]:
+    """Meses de autonomía al ritmo de gasto observado, o `None` y el motivo.
+
+    Se calcula solo cuando se puede hacer sin suposiciones:
+
+    * hace falta un balance real leído de la cadena,
+    * y gastos registrados **en la misma moneda** que ese balance. Mezclar ETH
+      con otras monedas exigiría un precio por cada una; en vez de inventar la
+      conversión, se devuelve `null` diciendo por qué.
+
+    El ritmo es el gasto total dividido por los meses observados, con un suelo
+    de un mes: sin él, tres gastos del mismo día darían un "ritmo mensual"
+    enorme y un runway de casi cero que no describe nada.
+    """
+    balance_eth = snapshot.get("total_eth_value")
+    if balance_eth is None:
+        return None, "no hay un balance on-chain disponible"
+
+    cursor = treasury_transactions_collection().find(
+        {"type": "expense"}, {"_id": 0, "amount": 1, "currency": 1, "timestamp": 1}
+    )
+    expenses = await cursor.to_list(length=1000)
+    if not expenses:
+        return None, "no hay gastos registrados"
+
+    other_currency = {(e.get("currency") or "ETH").upper() for e in expenses} - {"ETH"}
+    if other_currency:
+        return None, (
+            "hay gastos en "
+            + ", ".join(sorted(other_currency))
+            + " y no se convierten sin un precio por moneda"
+        )
+
+    total_expense = sum(float(e.get("amount") or 0) for e in expenses)
+    if total_expense <= 0:
+        return None, "el gasto registrado es cero"
+
+    stamps = [e["timestamp"] for e in expenses if e.get("timestamp")]
+    span_days = 0.0
+    if len(stamps) >= 2:
+        oldest, newest = min(stamps), max(stamps)
+        span_days = (newest - oldest).total_seconds() / 86400
+
+    months_observed = max(1.0, span_days / 30.0)
+    monthly_burn = total_expense / months_observed
+    return round(balance_eth / monthly_burn, 1), None
 
 
 @router.get("/treasury/analytics")
 async def get_treasury_analytics():
     """Get treasury analytics computed from real recorded transactions.
 
-    Runway is null until a real balance source is configured (it cannot be
-    computed without a current balance).
+    `runway_months` ya no es `null` por definición: se calcula contra el
+    balance real cuando las monedas permiten hacerlo sin suponer nada, y
+    `runway_unavailable_reason` explica el caso contrario.
     """
     # Aggregate income/expenses from actual stored transactions
-    pipeline = [
-        {
-            "$group": {
-                "_id": "$type",
-                "total": {"$sum": "$amount"}
-            }
-        }
-    ]
+    pipeline = [{"$group": {"_id": "$type", "total": {"$sum": "$amount"}}}]
 
     result = await treasury_transactions_collection().aggregate(pipeline).to_list(10)
 
@@ -677,11 +978,15 @@ async def get_treasury_analytics():
         {
             "$group": {
                 "_id": {"category": "$category", "type": "$type"},
-                "total": {"$sum": "$amount"}
+                "total": {"$sum": "$amount"},
             }
         }
     ]
-    cat_result = await treasury_transactions_collection().aggregate(category_pipeline).to_list(50)
+    cat_result = (
+        await treasury_transactions_collection()
+        .aggregate(category_pipeline)
+        .to_list(50)
+    )
 
     categories = {}
     for r in cat_result:
@@ -691,10 +996,14 @@ async def get_treasury_analytics():
             categories[cat] = {"income": 0, "expense": 0}
         categories[cat][tx_type] = r["total"]
 
+    snapshot = await treasury_service.snapshot()
+    runway, runway_reason = await _runway_months(snapshot)
+
     return {
         "total_income": income,
         "total_expenses": expenses,
         "net_flow": income - expenses,
         "by_category": categories,
-        "runway_months": None  # Requires a configured on-chain balance source
+        "runway_months": runway,
+        "runway_unavailable_reason": runway_reason,
     }

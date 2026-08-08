@@ -22,6 +22,7 @@ Design decisions (documented here on purpose):
   be revoked after delegating, so this is enforced at vote time, not at
   delegation time.
 """
+
 import calendar
 from datetime import datetime, timezone
 import logging
@@ -29,12 +30,12 @@ from typing import Optional
 
 from ..core.database import (
     delegations_collection,
-    members_collection,
     elections_collection,
     candidacies_collection,
     election_votes_collection,
     representatives_collection,
 )
+from .membership_verifier import get_membership_verifier
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +52,16 @@ def add_months(dt: datetime, months: int) -> datetime:
     return dt.replace(year=year, month=month, day=day)
 
 
-# Depth guard for the DB cycle walk. Delegations are single-hop for weight,
-# but the stored graph could still contain a long cycle (a->b->c->a) that the
-# two-node check misses; walk it with a hard cap.
+# Profundidad máxima admitida de una cadena de delegación. Antes vivía en el
+# FraudDetector en memoria (MAX_CHAIN_DEPTH = 3) sobre una copia del grafo que
+# se vaciaba en cada reinicio; ahora se evalúa contra el grafo real (ROADMAP
+# 3.8). Las delegaciones no son transitivas para el peso, así que una cadena
+# larga no concentra poder — pero sí es una estructura anómala que conviene
+# frenar.
+MAX_DELEGATION_DEPTH = 3
+
+# Tope duro del recorrido, por si el grafo contuviera un ciclo largo que la
+# comprobación de dos nodos no detecta.
 MAX_DELEGATION_WALK = 10
 
 
@@ -76,6 +84,12 @@ class GovernanceService:
 
         Non-member (or revoked) delegators are excluded: delegating does not
         create voting rights that the delegator does not have.
+
+        La comprobación pasa por el MembershipVerifier configurado, igual que
+        el gate de votar. La consulta directa que había aquí (`status:
+        "active"` a secas) era más débil que ese gate: en producción sumaba
+        peso de filas demo/legacy que jamás habrían podido votar, y con
+        MEMBERSHIP_SOURCE=onchain habría sumado peso de direcciones sin SBT.
         """
         cursor = delegations_collection().find({"delegate": address.lower()})
         delegations = await cursor.to_list(length=1000)
@@ -83,39 +97,169 @@ class GovernanceService:
         if not delegators:
             return []
 
-        active_cursor = members_collection().find({
-            "wallet_address": {"$in": delegators},
-            "status": "active",
-        })
-        active_members = await active_cursor.to_list(length=1000)
-        active_set = {m["wallet_address"] for m in active_members}
+        verifier = get_membership_verifier()
+        active_set = await verifier.filter_members(delegators)
         return [d for d in delegators if d in active_set]
 
     @classmethod
     async def voting_power(cls, address: str) -> int:
-        """1 (own vote) + active-member delegators. No transitive chains."""
+        """Peso POTENCIAL: 1 (voto propio) + delegantes miembros activos.
+
+        Es lo que se muestra en `/delegations/{address}`. El peso realmente
+        aplicado a una papeleta lo calcula `contest_vote_weight`, que además
+        descuenta a quien ya votó por su cuenta en esa misma consulta.
+        """
         return 1 + len(await cls.get_active_delegators(address))
 
-    @staticmethod
-    async def find_delegation_cycle(delegator: str, delegate: str) -> bool:
-        """True if `delegator -> delegate` would close a cycle in the stored graph.
+    @classmethod
+    async def contest_vote_weight(
+        cls,
+        address: str,
+        collection,
+        contest_field: str,
+        contest_id: str,
+    ) -> tuple[int, list[str]]:
+        """Peso aplicable en UNA consulta y los delegantes que lo componen.
 
-        Walks the delegate's OUTGOING delegations in MongoDB (the direction a
-        vote would travel). This is the authoritative check: the in-memory
-        FraudDetector complements it but loses its state on restart (M-2).
+        Excluye a los delegantes que ya votaron por su cuenta en esa misma
+        consulta. Sin esta exclusión, delegar DESPUÉS de haber votado contaba
+        el mismo peso dos veces: una en la papeleta propia y otra dentro del
+        peso del delegado (P-61).
+
+        Devuelve también la lista de delegantes contados para persistirla en
+        la papeleta: sin ella el `weight` es un número que nadie puede
+        recomputar, y es la mitad de lo que hace falta para detectar el orden
+        inverso (el delegado vota, el delegante revoca y vota).
+        """
+        delegators = await cls.get_active_delegators(address)
+        if not delegators:
+            return 1, []
+
+        cursor = collection().find(
+            {
+                contest_field: contest_id,
+                "voter_address": {"$in": delegators},
+            }
+        )
+        already_voted = {
+            v["voter_address"] for v in await cursor.to_list(length=len(delegators))
+        }
+        counted = [d for d in delegators if d not in already_voted]
+        return 1 + len(counted), counted
+
+    @staticmethod
+    async def weight_already_delegated_away(
+        address: str,
+        collection,
+        contest_field: str,
+        contest_id: str,
+    ) -> Optional[str]:
+        """Delegado que ya emitió el peso de `address` en esta consulta, o None.
+
+        Cubre el orden que la comprobación de `get_delegate_of` no alcanza: el
+        delegado vota, el delegante revoca la delegación y vota por su cuenta.
+        Al revocar se borra el vínculo, así que la única evidencia que queda de
+        que ese peso ya se gastó es la propia papeleta del delegado.
+        """
+        ballot = await collection().find_one(
+            {
+                contest_field: contest_id,
+                "delegators": address.lower(),
+            }
+        )
+        return ballot["voter_address"] if ballot else None
+
+    @staticmethod
+    async def delegation_block_reason(delegator: str, delegate: str) -> Optional[str]:
+        """`None` si `delegator -> delegate` es admisible; si no, POR QUÉ no.
+
+        Devuelve `"cycle"` o `"depth"`. Son cosas distintas y el router lo dice
+        distinto: decirle "delegación circular" a quien solo eligió a alguien
+        con una cadena larga por detrás es una afirmación falsa sobre lo que
+        hizo, y quien la lee no puede corregir el problema real.
+
+        Recorre las delegaciones SALIENTES del delegado en MongoDB (la
+        dirección en la que viajaría el voto). Es la comprobación
+        autoritativa: sustituye a la copia en memoria del FraudDetector, que
+        se vaciaba en cada reinicio (M-2, ROADMAP 3.8).
         """
         seen = {delegator.lower()}
         current = delegate.lower()
-        for _ in range(MAX_DELEGATION_WALK):
+        for depth in range(MAX_DELEGATION_WALK):
             if current in seen:
-                return True
+                return "cycle"
             seen.add(current)
+            # Cadena demasiado profunda: sospechosa aunque no cierre ciclo.
+            # Esta es la heurística que antes aportaba el detector en memoria,
+            # ahora sobre el grafo real.
+            if depth >= MAX_DELEGATION_DEPTH:
+                return "depth"
             nxt = await delegations_collection().find_one({"delegator": current})
             if not nxt:
-                return False
+                return None
             current = nxt["delegate"]
-        # Chain longer than the cap: treat as suspicious rather than looping
-        return True
+        # Más larga que el tope del recorrido: se trata como sospechosa en vez
+        # de seguir caminando indefinidamente.
+        return "depth"
+
+    @classmethod
+    async def find_delegation_cycle(cls, delegator: str, delegate: str) -> bool:
+        """Compatibilidad: `True` si la delegación debe rechazarse."""
+        return (await cls.delegation_block_reason(delegator, delegate)) is not None
+
+    @classmethod
+    async def compute_proposals_tallies(
+        cls, proposal_ids: list[str], votes_collection
+    ) -> dict[str, dict[str, int]]:
+        """Dynamically compute vote tallies for a list of proposals.
+
+        This prevents divergence between individual ballots and the total tally
+        if a crash occurs between inserting the vote and updating the proposal (ROADMAP 3.10).
+        """
+        if not proposal_ids:
+            return {}
+
+        pipeline = [
+            {"$match": {"proposal_id": {"$in": proposal_ids}}},
+            {
+                "$group": {
+                    "_id": {"proposal_id": "$proposal_id", "vote": "$vote"},
+                    "total_weight": {"$sum": "$weight"},
+                }
+            },
+        ]
+
+        results = (
+            await votes_collection()
+            .aggregate(pipeline)
+            .to_list(length=len(proposal_ids) * 3)
+        )
+
+        tallies = {
+            pid: {
+                "votes_for": 0,
+                "votes_against": 0,
+                "votes_abstain": 0,
+                "total_votes": 0,
+            }
+            for pid in proposal_ids
+        }
+
+        for r in results:
+            pid = r["_id"]["proposal_id"]
+            vote_type = r["_id"]["vote"]
+            weight = r["total_weight"]
+
+            if vote_type == "for":
+                tallies[pid]["votes_for"] += weight
+            elif vote_type == "against":
+                tallies[pid]["votes_against"] += weight
+            elif vote_type == "abstain":
+                tallies[pid]["votes_abstain"] += weight
+
+            tallies[pid]["total_votes"] += weight
+
+        return tallies
 
     # === Elections ===
 
@@ -149,31 +293,45 @@ class GovernanceService:
         derived = cls.derive_election_status(election)
         if derived != election.get("status"):
             await elections_collection().update_one(
-                {"id": election["id"]},
-                {"$set": {"status": derived}}
+                {"id": election["id"]}, {"$set": {"status": derived}}
             )
             election["status"] = derived
-            if derived == "closed":
-                await cls.finalize_election(election)
+
+        # La finalización se reintenta hasta que deja su marca, no solo en la
+        # transición de estado. Antes se llamaba ÚNICAMENTE al pasar a
+        # `closed`: si el proceso moría a mitad de escribir los escaños, esa
+        # transición ya no volvía a ocurrir y el parlamento se quedaba
+        # incompleto para siempre. `finalized_at` se escribe al final, después
+        # de reconciliar, así que su ausencia significa exactamente "esto no
+        # terminó" (ROADMAP 3.10).
+        if derived == "closed" and not election.get("finalized_at"):
+            await cls.finalize_election(election)
+            election["finalized_at"] = datetime.now(timezone.utc)
         return election
 
     @classmethod
     async def compute_results(cls, election_id: str) -> list[dict]:
         """Per-candidate weighted totals, ordered by the documented criterion."""
-        candidacies = await candidacies_collection().find(
-            {"election_id": election_id}
-        ).to_list(length=1000)
+        candidacies = (
+            await candidacies_collection()
+            .find({"election_id": election_id})
+            .to_list(length=1000)
+        )
 
         totals_pipeline = [
             {"$match": {"election_id": election_id}},
-            {"$group": {
-                "_id": "$candidate_address",
-                "votes": {"$sum": "$weight"},
-            }},
+            {
+                "$group": {
+                    "_id": "$candidate_address",
+                    "votes": {"$sum": "$weight"},
+                }
+            },
         ]
-        totals_raw = await election_votes_collection().aggregate(
-            totals_pipeline
-        ).to_list(length=1000)
+        totals_raw = (
+            await election_votes_collection()
+            .aggregate(totals_pipeline)
+            .to_list(length=1000)
+        )
         totals = {t["_id"]: t["votes"] for t in totals_raw}
 
         results = [
@@ -186,52 +344,91 @@ class GovernanceService:
             for c in candidacies
         ]
         # Order: votes desc, earlier candidacy first (tie-break), address last
-        results.sort(key=lambda r: (
-            -r["votes"],
-            r["candidacy_created_at"],
-            r["candidate_address"],
-        ))
+        results.sort(
+            key=lambda r: (
+                -r["votes"],
+                r["candidacy_created_at"],
+                r["candidate_address"],
+            )
+        )
         return results
 
     @classmethod
     async def finalize_election(cls, election: dict) -> None:
-        """Write Representative records for the top `seats` candidates.
+        """Reconcilia los escaños con el resultado derivado de las papeletas.
 
-        Idempotent: skips if representatives for this election already exist.
-        Candidates with zero votes do not get a seat — an election nobody
-        voted in elects nobody (no fabricated legitimacy).
+        Antes: si ya existía CUALQUIER representante de esta elección, se
+        salía sin hacer nada. `insert_many` no es atómico entre documentos, así
+        que una caída a mitad de la escritura dejaba un parlamento incompleto
+        —tres escaños de cinco— y ese `return` temprano impedía completarlo
+        para siempre. Nadie lo habría notado: la lista de representantes se ve
+        perfectamente normal, solo que le faltan personas.
+
+        Ahora es una reconciliación idempotente contra el resultado calculado:
+        cada ganador se hace `upsert` por (election_id, address) y se borra
+        cualquier representante que ya no salga elegido. Reejecutarla no
+        cambia nada; ejecutarla tras una caída la termina. No hace falta una
+        transacción de MongoDB —que exigiría replica set y no existe en el
+        despliegue actual— porque el estado correcto se puede recalcular
+        entero desde las papeletas cuantas veces haga falta (ROADMAP 3.10).
         """
-        existing = await representatives_collection().count_documents(
-            {"election_id": election["id"]}
-        )
-        if existing > 0:
-            return
-
         results = await cls.compute_results(election["id"])
         winners = [r for r in results if r["votes"] > 0][: election["seats"]]
-        if not winners:
-            logger.info(f"Election {election['id']} closed with no votes; no seats filled")
-            return
 
         term_start = election["voting_end_at"]
         if term_start.tzinfo is None:
             term_start = term_start.replace(tzinfo=timezone.utc)
         term_end = add_months(term_start, election["term_months"])
 
-        docs = [
+        elected = []
+        for winner in winners:
+            address = winner["candidate_address"]
+            elected.append(address)
+            # Upsert por (election_id, address): con el índice único, dos
+            # finalizaciones simultáneas convergen al mismo estado en vez de
+            # duplicar escaños.
+            await representatives_collection().update_one(
+                {"election_id": election["id"], "address": address},
+                {
+                    "$set": {
+                        "election_id": election["id"],
+                        "address": address,
+                        "votes": winner["votes"],
+                        "term_start": term_start,
+                        "term_end": term_end,
+                    }
+                },
+                upsert=True,
+            )
+
+        # Cualquier representante que ya no salga elegido sobra: puede venir de
+        # una finalización previa interrumpida o de un recuento que cambió al
+        # anularse una papeleta. El estado publicado debe ser el derivado.
+        removed = await representatives_collection().delete_many(
             {
                 "election_id": election["id"],
-                "address": w["candidate_address"],
-                "votes": w["votes"],
-                "term_start": term_start,
-                "term_end": term_end,
+                "address": {"$nin": elected},
             }
-            for w in winners
-        ]
-        await representatives_collection().insert_many(docs)
-        logger.info(
-            f"Election {election['id']} finalized: {len(docs)} representative(s) seated"
         )
+
+        # ÚLTIMA escritura, y por eso es la que vale: si el proceso muere en
+        # cualquier punto anterior, la marca no está y la siguiente lectura
+        # vuelve a reconciliar. Escribirla antes convertiría una finalización
+        # a medias en una finalización "hecha".
+        await elections_collection().update_one(
+            {"id": election["id"]},
+            {"$set": {"finalized_at": datetime.now(timezone.utc)}},
+        )
+
+        if not elected:
+            logger.info(
+                f"Election {election['id']} closed with no votes; no seats filled"
+            )
+        else:
+            logger.info(
+                f"Election {election['id']} reconciled: {len(elected)} seat(s), "
+                f"{removed.deleted_count} stale record(s) removed"
+            )
 
 
 governance_service = GovernanceService()

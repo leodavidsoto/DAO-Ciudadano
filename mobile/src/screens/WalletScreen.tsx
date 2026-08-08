@@ -9,12 +9,10 @@
  * 2. Conectar billetera externa (MetaMask, WalletConnect) — próximamente,
  *    botón visible pero deshabilitado para no prometer algo que no existe.
  *
- * Si se llega desde el flujo NFC (Home -> Scan -> Success -> Wallet), los
- * datos del chip llegan en route.params. El minteo automático con esos datos
- * está DESHABILITADO hasta que exista lectura autenticada de la cédula: ver
- * el comentario en signInAndProceed. Si se llega directo desde "YA TENGO
- * MEMBRESÍA" en Home, route.params viene vacío y la pantalla se limita a
- * crear/cargar la wallet y mostrar el estado de membresía existente.
+ * A local NFC verification is never an issuance grant. This screen only
+ * creates/loads the wallet, establishes SIWE, and displays membership state.
+ * Issuance remains blocked until the backend defines and verifies a scoped,
+ * single-use grant or attestation.
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
@@ -32,7 +30,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Wallet as EthersWallet } from 'ethers';
 import apiService from '../services/apiService';
 import walletService, { GeneratedWallet } from '../services/walletService';
-import { ChileanIDData } from '../services/nfcService';
+import { theme } from '../styles/theme';
 
 interface MemberInfo {
     token_id: number;
@@ -44,12 +42,6 @@ interface MemberInfo {
 
 interface WalletScreenProps {
     navigation: any;
-    route?: {
-        params?: {
-            idData?: ChileanIDData;
-            serialNumber?: string;
-        };
-    };
 }
 
 type ScreenState =
@@ -57,16 +49,12 @@ type ScreenState =
     | 'choose'
     | 'backup'
     | 'signing-in'
-    | 'minting'
     | 'ready'
     | 'lookup';
 
 const ADDRESS_REGEX = /^0x[0-9a-fA-F]{40}$/;
 
-const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
-    const idData = route?.params?.idData;
-    const serialNumber = route?.params?.serialNumber;
-
+const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
     const [state, setState] = useState<ScreenState>('checking');
     const [pendingWallet, setPendingWallet] = useState<GeneratedWallet | null>(null);
     const [backupConfirmed, setBackupConfirmed] = useState(false);
@@ -97,23 +85,11 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                 return;
             }
 
-            // El minteo automático tras el escaneo NFC queda deshabilitado a
-            // propósito: la versión anterior usaba sha256(serial del tag)
-            // como doc_hash, con lo cual CUALQUIER tag NFC (tarjeta de bus,
-            // llave de hotel) servía para registrarse como ciudadano. El
-            // serial de un tag no prueba identidad.
-            //
-            // Se reactiva cuando nfcService.readChileanID() devuelva
-            // identityVerified: true, es decir cuando esté implementada la
-            // lectura autenticada BAC de DG1/EF.SOD (las llaves BAC ya están
-            // listas y verificadas en bacCrypto.ts).
-            if (idData && serialNumber) {
-                setError(
-                    'Registro con cédula todavía no disponible: la lectura autenticada del ' +
-                    'chip (BAC) está en desarrollo. Tu billetera quedó creada y guardada en ' +
-                    'este dispositivo.',
-                );
-            }
+            setError(
+                'Emisión bloqueada: una verificación NFC local no autoriza un alta. ' +
+                'El backend aún no entrega ni verifica una atestación de identidad de un solo uso. ' +
+                'No se solicitó una credencial ni un nivel de assurance.',
+            );
             setState('ready');
         } catch (e: any) {
             setError(
@@ -121,7 +97,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
             );
             setState('ready');
         }
-    }, [idData, serialNumber]);
+    }, []);
 
     // Al entrar, revisa si ya hay una billetera guardada en el dispositivo.
     useEffect(() => {
@@ -138,7 +114,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                     }
                 }
                 setState('choose');
-            } catch (e) {
+            } catch {
                 if (alive) setState('choose');
             }
         })();
@@ -183,7 +159,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
             const result = await apiService.getMembershipStatus(trimmed.toLowerCase());
             setLookupSearched(true);
             if (result.found) setLookupMember(result.member);
-        } catch (e) {
+        } catch {
             setError('No se pudo consultar el servidor. Verifica tu conexión.');
         } finally {
             setLookupLoading(false);
@@ -191,16 +167,14 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
     };
 
     // === Render: comprobando billetera existente ===
-    if (state === 'checking' || state === 'signing-in' || state === 'minting') {
+    if (state === 'checking' || state === 'signing-in') {
         const label = state === 'checking'
-            ? 'VERIFICANDO BILLETERA...'
-            : state === 'signing-in'
-                ? 'FIRMANDO SESIÓN DE WALLET...'
-                : 'REGISTRANDO MEMBRESÍA...';
+            ? 'SINCRONIZANDO MEMBRESÍA...'
+            : 'ESTABLECIENDO CONEXIÓN SEGURA SIWE...';
         return (
             <SafeAreaView style={styles.container}>
                 <View style={styles.centered}>
-                    <ActivityIndicator size="large" color="#00FFFF" />
+                    <ActivityIndicator size="large" color={theme.colors.primary} />
                     <Text style={styles.loadingText}>{label}</Text>
                 </View>
             </SafeAreaView>
@@ -212,17 +186,16 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
         return (
             <SafeAreaView style={styles.container}>
                 <ScrollView contentContainerStyle={styles.content}>
-                    <Text style={styles.title}>TU BILLETERA DIGITAL</Text>
+                    <Text style={styles.title}>BÓVEDA CRIPTOGRÁFICA</Text>
                     <Text style={styles.subtitle}>
-                        Necesitas una wallet Ethereum para obtener tu membresía DAO
+                        Genera un enclave local seguro en tu dispositivo. Tu identidad real nunca abandona el teléfono.
                     </Text>
 
                     <TouchableOpacity style={styles.button} onPress={handleCreateWallet}>
-                        <Text style={styles.buttonText}>CREAR BILLETERA NUEVA</Text>
+                        <Text style={styles.buttonText}>GENERAR LLAVES LOCALES</Text>
                     </TouchableOpacity>
                     <Text style={styles.hint}>
-                        Genera una wallet en este dispositivo. Vas a ver una frase de respaldo
-                        de 12 palabras una sola vez — guárdala en un lugar seguro.
+                        Esta billetera firma la sesión SIWE. No contiene ni sustituye una atestación de identidad.
                     </Text>
 
                     <TouchableOpacity style={styles.buttonDisabledOutline} disabled>
@@ -256,12 +229,11 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
         return (
             <SafeAreaView style={styles.container}>
                 <ScrollView contentContainerStyle={styles.content}>
-                    <Text style={styles.title}>TU FRASE DE RESPALDO</Text>
+                    <Text style={styles.title}>CLAVE DE RECUPERACIÓN</Text>
                     <View style={styles.warningBox}>
                         <Text style={styles.warningText}>
-                            Escribe estas 12 palabras en papel y guárdalas en un lugar seguro.
-                            Son la ÚNICA forma de recuperar tu billetera. Nadie de DAO Ciudadana
-                            puede recuperarlas por ti si las pierdes.
+                            Transcribe estos 12 mnemónicos a un soporte físico seguro.
+                            Esta frase controla la billetera local. El Estado no posee copia de esta llave.
                         </Text>
                     </View>
 
@@ -316,7 +288,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
         return (
             <SafeAreaView style={styles.container}>
                 <ScrollView contentContainerStyle={styles.content}>
-                    <Text style={styles.title}>BILLETERA CONECTADA</Text>
+                    <Text style={styles.title}>ENCLAVE ASEGURADO</Text>
                     {address && (
                         <View style={styles.dataRow}>
                             <Text style={styles.dataLabel}>Dirección:</Text>
@@ -332,13 +304,13 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
 
                     {member ? (
                         <View style={styles.resultCard}>
-                            <Text style={styles.resultTitle}>MEMBRESÍA ACTIVA</Text>
+                            <Text style={styles.resultTitle}>REGISTRO REPORTADO POR EL SERVIDOR</Text>
                             <View style={styles.dataRow}>
                                 <Text style={styles.dataLabel}>Token ID:</Text>
                                 <Text style={styles.dataValue}>#{member.token_id}</Text>
                             </View>
                             <View style={styles.dataRow}>
-                                <Text style={styles.dataLabel}>Nivel:</Text>
+                                <Text style={styles.dataLabel}>Nivel informado:</Text>
                                 <Text style={styles.dataValue}>{member.assurance_level}</Text>
                             </View>
                             <View style={styles.dataRow}>
@@ -354,18 +326,19 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                         </View>
                     ) : (
                         <View style={styles.emptyCard}>
-                            <Text style={styles.emptyTitle}>SIN MEMBRESÍA TODAVÍA</Text>
+                            <Text style={styles.emptyTitle}>EMISIÓN BLOQUEADA</Text>
                             <Text style={styles.emptyText}>
-                                {idData
-                                    ? 'No se pudo completar el registro automáticamente.'
-                                    : 'Escanea tu cédula para obtener tu membresía con esta wallet.'}
+                                La lectura NFC local no es un permiso de alta. Falta que el backend emita y verifique una atestación autorizada antes de solicitar cualquier credencial.
                             </Text>
                             <TouchableOpacity
                                 style={styles.secondaryButton}
                                 onPress={() => navigation.navigate('Scan')}
                             >
-                                <Text style={styles.secondaryButtonText}>ESCANEAR CÉDULA</Text>
+                                <Text style={styles.secondaryButtonText}>VERIFICAR CÉDULA LOCALMENTE</Text>
                             </TouchableOpacity>
+                            <Text style={styles.blockedHint}>
+                                La verificación local no crea una membresía.
+                            </Text>
                         </View>
                     )}
                 </ScrollView>
@@ -398,7 +371,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
                     disabled={lookupLoading}
                 >
                     {lookupLoading ? (
-                        <ActivityIndicator color="#000" />
+                        <ActivityIndicator color="#FFFFFF" />
                     ) : (
                         <Text style={styles.buttonText}>CONSULTAR</Text>
                     )}
@@ -412,13 +385,13 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
 
                 {lookupSearched && lookupMember && (
                     <View style={styles.resultCard}>
-                        <Text style={styles.resultTitle}>MEMBRESÍA ENCONTRADA</Text>
+                        <Text style={styles.resultTitle}>REGISTRO ENCONTRADO (PILOTO)</Text>
                         <View style={styles.dataRow}>
                             <Text style={styles.dataLabel}>Token ID:</Text>
                             <Text style={styles.dataValue}>#{lookupMember.token_id}</Text>
                         </View>
                         <View style={styles.dataRow}>
-                            <Text style={styles.dataLabel}>Nivel:</Text>
+                            <Text style={styles.dataLabel}>Nivel informado:</Text>
                             <Text style={styles.dataValue}>{lookupMember.assurance_level}</Text>
                         </View>
                         <View style={styles.dataRow}>
@@ -446,101 +419,100 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation, route }) => {
 };
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#0a0a1a' },
+    container: { flex: 1, backgroundColor: theme.colors.background },
     content: { padding: 20 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    loadingText: { color: '#00FFFF', marginTop: 16, fontSize: 13, letterSpacing: 1 },
+    loadingText: { color: theme.colors.primary, marginTop: 16, fontSize: 13, letterSpacing: 1 },
     title: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: '#00FFFF',
-        letterSpacing: 2,
+        ...theme.typography.title,
         textAlign: 'center',
         marginTop: 20,
     },
     subtitle: {
-        fontSize: 13,
-        color: '#888',
+        ...theme.typography.caption,
         textAlign: 'center',
         marginTop: 8,
         marginBottom: 24,
     },
     input: {
-        backgroundColor: '#0a0a2a',
-        borderRadius: 12,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.sm,
         borderWidth: 1,
-        borderColor: '#00FFFF30',
-        color: '#fff',
+        borderColor: theme.colors.borderDark,
+        color: theme.colors.ink,
         paddingHorizontal: 16,
         paddingVertical: 14,
         fontSize: 14,
         marginBottom: 16,
     },
     button: {
-        backgroundColor: '#00FFFF',
+        backgroundColor: theme.colors.primary,
         paddingVertical: 16,
-        borderRadius: 12,
+        borderRadius: theme.radius.md,
         alignItems: 'center',
         marginTop: 12,
+        ...theme.shadows.light,
     },
     buttonDisabled: { opacity: 0.4 },
     buttonDisabledOutline: {
         borderWidth: 1,
-        borderColor: '#ffffff20',
+        borderColor: theme.colors.borderLight,
+        backgroundColor: theme.colors.surface,
         paddingVertical: 16,
-        borderRadius: 12,
+        borderRadius: theme.radius.md,
         alignItems: 'center',
         marginTop: 12,
     },
     buttonDisabledText: {
-        color: '#666',
+        color: theme.colors.textSoft,
         fontSize: 15,
         fontWeight: 'bold',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
     buttonText: {
-        color: '#000',
+        color: '#FFFFFF',
         fontSize: 15,
         fontWeight: 'bold',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
     hint: {
+        ...theme.typography.caption,
         fontSize: 11,
-        color: '#666',
         marginTop: 8,
         marginBottom: 8,
         textAlign: 'center',
     },
     linkButton: { marginTop: 24, alignItems: 'center' },
-    linkButtonText: { color: '#00FFFF', fontSize: 13, textDecorationLine: 'underline' },
+    linkButtonText: { color: theme.colors.primary, fontSize: 13, textDecorationLine: 'underline' },
     errorBox: {
         marginTop: 16,
         padding: 12,
-        backgroundColor: '#FF073A15',
-        borderRadius: 8,
+        backgroundColor: theme.colors.dangerSoft,
+        borderRadius: theme.radius.sm,
         borderWidth: 1,
-        borderColor: '#FF073A50',
+        borderColor: theme.colors.danger,
     },
-    errorText: { color: '#FF6B81', fontSize: 13 },
+    errorText: { color: theme.colors.danger, fontSize: 13 },
     warningBox: {
-        backgroundColor: '#FFA50015',
+        backgroundColor: theme.colors.warningSoft,
         borderWidth: 1,
-        borderColor: '#FFA50050',
-        borderRadius: 12,
+        borderColor: theme.colors.warning,
+        borderRadius: theme.radius.md,
         padding: 16,
         marginBottom: 16,
     },
-    warningText: { color: '#FFCC80', fontSize: 13, lineHeight: 19 },
+    warningText: { color: theme.colors.warning, fontSize: 13, lineHeight: 19 },
     mnemonicBox: {
-        backgroundColor: '#0a0a2a',
-        borderRadius: 12,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.md,
         borderWidth: 1,
-        borderColor: '#00FFFF30',
+        borderColor: theme.colors.borderLight,
         padding: 20,
         marginBottom: 16,
+        ...theme.shadows.light,
     },
     mnemonicText: {
-        color: '#00FFFF',
+        color: theme.colors.ink,
         fontSize: 16,
         lineHeight: 26,
         fontWeight: '600',
@@ -557,40 +529,49 @@ const styles = StyleSheet.create({
         height: 22,
         borderRadius: 6,
         borderWidth: 2,
-        borderColor: '#00FFFF60',
+        borderColor: theme.colors.borderDark,
         marginRight: 12,
         justifyContent: 'center',
         alignItems: 'center',
     },
-    checkboxChecked: { backgroundColor: '#00FFFF', borderColor: '#00FFFF' },
-    checkboxMark: { color: '#000', fontWeight: 'bold', fontSize: 14 },
-    checkboxLabel: { color: '#ccc', fontSize: 13, flex: 1 },
+    checkboxChecked: { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
+    checkboxMark: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
+    checkboxLabel: { ...theme.typography.body, fontSize: 13, flex: 1 },
     resultCard: {
         marginTop: 24,
-        backgroundColor: '#0a0a2a',
-        borderRadius: 16,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.md,
         padding: 20,
         borderWidth: 1,
-        borderColor: '#00FF0030',
+        borderColor: theme.colors.success,
+        ...theme.shadows.light,
     },
     resultTitle: {
         fontSize: 13,
-        color: '#00FF00',
+        color: theme.colors.success,
         letterSpacing: 1,
         marginBottom: 12,
         textAlign: 'center',
+        fontWeight: 'bold',
     },
     dataRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         paddingVertical: 8,
         borderBottomWidth: 1,
-        borderBottomColor: '#ffffff10',
+        borderBottomColor: theme.colors.borderLight,
     },
-    dataLabel: { color: '#666', fontSize: 14 },
-    dataValue: { color: '#fff', fontSize: 14, fontWeight: '600' },
+    dataLabel: { color: theme.colors.textSoft, fontSize: 14 },
+    dataValue: {
+        color: theme.colors.ink,
+        fontSize: 14,
+        fontWeight: '600',
+        flex: 1,
+        textAlign: 'right',
+        marginLeft: 10,
+    },
     dataValueSmall: {
-        color: '#fff',
+        color: theme.colors.ink,
         fontSize: 11,
         fontWeight: '600',
         flexShrink: 1,
@@ -598,27 +579,35 @@ const styles = StyleSheet.create({
     },
     emptyCard: {
         marginTop: 24,
-        backgroundColor: '#0a0a2a',
-        borderRadius: 16,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.md,
         padding: 20,
         borderWidth: 1,
-        borderColor: '#ffffff15',
+        borderColor: theme.colors.borderLight,
         alignItems: 'center',
+        ...theme.shadows.light,
     },
-    emptyTitle: { fontSize: 13, color: '#888', letterSpacing: 1, marginBottom: 8 },
-    emptyText: { fontSize: 13, color: '#666', textAlign: 'center', marginBottom: 16 },
+    emptyTitle: { ...theme.typography.title, fontSize: 15, marginBottom: 8 },
+    emptyText: { ...theme.typography.caption, textAlign: 'center', marginBottom: 16 },
     secondaryButton: {
         borderWidth: 1,
-        borderColor: '#00FFFF50',
-        borderRadius: 12,
+        borderColor: theme.colors.borderDark,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.md,
         paddingVertical: 12,
         paddingHorizontal: 24,
     },
     secondaryButtonText: {
-        color: '#00FFFF',
+        color: theme.colors.primary,
         fontSize: 13,
         fontWeight: '600',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
+    },
+    blockedHint: {
+        color: theme.colors.textSoft,
+        fontSize: 11,
+        marginTop: 10,
+        textAlign: 'center',
     },
 });
 

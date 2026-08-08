@@ -8,9 +8,9 @@ import {
     Text,
     StyleSheet,
     TouchableOpacity,
-    Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { theme } from '../styles/theme';
 
 interface HomeScreenProps {
     navigation: any;
@@ -26,7 +26,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
                     <Text style={styles.logoSubtext}>CIUDADANA</Text>
                 </View>
                 <Text style={styles.tagline}>
-                    Identidad Digital Soberana en Blockchain
+                    Terminal de Autenticación Criptográfica Nacional
                 </Text>
             </View>
 
@@ -34,26 +34,32 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
             <View style={styles.content}>
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🪪</Text>
-                    <Text style={styles.featureTitle}>Verificación NFC</Text>
-                    <Text style={styles.featureDesc}>
-                        Lee el chip de tu cédula chilena para verificar tu identidad de forma segura
-                    </Text>
+                    <View style={styles.featureTextContainer}>
+                        <Text style={styles.featureTitle}>Autenticación eMRTD Segura</Text>
+                        <Text style={styles.featureDesc}>
+                            Verificación criptográfica del chip de tu cédula nacional (PACE + Autenticación Pasiva).
+                        </Text>
+                    </View>
                 </View>
 
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🔗</Text>
-                    <Text style={styles.featureTitle}>Blockchain</Text>
-                    <Text style={styles.featureDesc}>
-                        Tu identidad se almacena como un token Soulbound en Ethereum
-                    </Text>
+                    <View style={styles.featureTextContainer}>
+                        <Text style={styles.featureTitle}>Generación ZK Local</Text>
+                        <Text style={styles.featureDesc}>
+                            Las pruebas Zero-Knowledge se computan íntegramente en tu dispositivo. El Estado no rastrea tu actividad.
+                        </Text>
+                    </View>
                 </View>
 
                 <View style={styles.featureCard}>
                     <Text style={styles.featureIcon}>🗳️</Text>
-                    <Text style={styles.featureTitle}>Gobernanza</Text>
-                    <Text style={styles.featureDesc}>
-                        Participa en decisiones democráticas con voto verificado
-                    </Text>
+                    <View style={styles.featureTextContainer}>
+                        <Text style={styles.featureTitle}>Gobernanza Anónima</Text>
+                        <Text style={styles.featureDesc}>
+                            Voto electrónico inviolable con pruebas MACI integradas.
+                        </Text>
+                    </View>
                 </View>
             </View>
 
@@ -63,21 +69,21 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
                     style={styles.primaryButton}
                     onPress={() => navigation.navigate('Scan')}
                 >
-                    <Text style={styles.primaryButtonText}>ESCANEAR CÉDULA</Text>
+                    <Text style={styles.primaryButtonText}>INICIAR VERIFICACIÓN NFC</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                     style={styles.secondaryButton}
                     onPress={() => navigation.navigate('Wallet')}
                 >
-                    <Text style={styles.secondaryButtonText}>YA TENGO MEMBRESÍA</Text>
+                    <Text style={styles.secondaryButtonText}>ABRIR BÓVEDA DE CREDENCIALES</Text>
                 </TouchableOpacity>
             </View>
 
             {/* Footer */}
             <View style={styles.footer}>
                 <Text style={styles.footerText}>
-                    Powered by Ethereum • Sepolia Testnet
+                    VERIFICADO POR EL REGISTRO CIVIL DE CHILE
                 </Text>
             </View>
         </SafeAreaView>
@@ -87,7 +93,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#0a0a1a',
+        backgroundColor: theme.colors.background,
     },
     header: {
         alignItems: 'center',
@@ -99,20 +105,19 @@ const styles = StyleSheet.create({
         marginBottom: 16,
     },
     logoText: {
+        ...theme.typography.title,
         fontSize: 48,
-        fontWeight: 'bold',
-        color: '#00FFFF',
-        letterSpacing: 8,
+        letterSpacing: 2,
     },
     logoSubtext: {
+        ...theme.typography.title,
+        color: theme.colors.danger,
         fontSize: 18,
-        color: '#FF00FF',
-        letterSpacing: 6,
+        letterSpacing: 1,
         marginTop: -5,
     },
     tagline: {
-        fontSize: 12,
-        color: '#666',
+        ...theme.typography.caption,
         textAlign: 'center',
     },
     content: {
@@ -120,67 +125,68 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
     },
     featureCard: {
-        backgroundColor: '#0a0a2a',
-        borderRadius: 16,
-        padding: 20,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.radius.md,
+        padding: 16,
         marginBottom: 12,
         borderWidth: 1,
-        borderColor: '#ffffff10',
+        borderColor: theme.colors.borderLight,
         flexDirection: 'row',
         alignItems: 'center',
+        ...theme.shadows.light,
     },
     featureIcon: {
-        fontSize: 32,
-        marginRight: 16,
+        fontSize: 24,
+        marginRight: 12,
+    },
+    featureTextContainer: {
+        flex: 1,
     },
     featureTitle: {
-        flex: 1,
-        fontSize: 16,
+        ...theme.typography.body,
         fontWeight: 'bold',
-        color: '#fff',
+        marginBottom: 4,
     },
     featureDesc: {
-        flex: 2,
-        fontSize: 12,
-        color: '#888',
+        ...theme.typography.caption,
     },
     buttonContainer: {
         padding: 20,
         gap: 12,
     },
     primaryButton: {
-        backgroundColor: '#00FFFF',
+        backgroundColor: theme.colors.primary,
         paddingVertical: 18,
-        borderRadius: 14,
+        borderRadius: theme.radius.md,
         alignItems: 'center',
+        ...theme.shadows.light,
     },
     primaryButtonText: {
-        color: '#000',
+        color: '#FFFFFF',
         fontSize: 16,
         fontWeight: 'bold',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
     secondaryButton: {
-        backgroundColor: 'transparent',
+        backgroundColor: theme.colors.surface,
         paddingVertical: 16,
-        borderRadius: 14,
+        borderRadius: theme.radius.md,
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#00FFFF50',
+        borderColor: theme.colors.borderDark,
     },
     secondaryButtonText: {
-        color: '#00FFFF',
+        color: theme.colors.primary,
         fontSize: 14,
         fontWeight: '600',
-        letterSpacing: 1,
+        letterSpacing: 0.5,
     },
     footer: {
         padding: 20,
         alignItems: 'center',
     },
     footerText: {
-        fontSize: 10,
-        color: '#444',
+        ...theme.typography.caption,
     },
 });
 

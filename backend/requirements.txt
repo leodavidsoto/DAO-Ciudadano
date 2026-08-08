@@ -15,7 +15,7 @@ uvicorn[standard]==0.51.0
 # === Validación y configuración ===
 pydantic==2.13.4
 pydantic-settings==2.14.2
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 
 # === Base de datos ===
 motor==3.6.0
@@ -24,14 +24,20 @@ pymongo==4.9.2             # motor 3.6 exige >=4.9,<4.10; además se importa dir
 # === Formularios / archivos ===
 # NO aparece en ningún import, pero FastAPI lo exige para UploadFile/File(...)
 # en /api/auth/liveness. Quitarlo rompe ese endpoint en runtime.
-python-multipart==0.0.20
+python-multipart==0.0.32
 
 # === Procesamiento de imágenes ===
-pillow==11.0.0             # validación de imágenes en el flujo de liveness
+pillow==12.3.0             # validación de imágenes en el flujo de liveness
 
 # === Autenticación e identidad (tarea 1.1 del ROADMAP) ===
-cryptography==44.0.0       # Fernet: cifrado de PII en reposo (app/core/crypto.py)
-PyJWT==2.10.1               # JWT de sesión emitido tras verificar SIWE
+cryptography>=50.0.0       # Fernet (PII en reposo) + X.509/firmas de la Autenticación Pasiva
+# Parser ASN.1/CMS para el EF.SOD de la cédula (ROADMAP 5.8, app/services/passive_auth.py).
+# `cryptography` no expone verificación de CMS SignedData, y la alternativa era
+# escribir a mano el parser de la estructura sobre la que se decide si una
+# cédula es auténtica. asn1crypto es Python puro, ~400 KB, sin dependencias
+# compiladas: no cambia el perfil de build ni de RAM del plan free.
+asn1crypto==1.5.1
+PyJWT==2.13.0               # JWT de sesión emitido tras verificar SIWE
 eth-account==0.13.7        # recuperar firmante de personal_sign y de firmas EIP-712
 web3==7.16.0                # minteo real on-chain (app/services/chain_service.py)
 
@@ -40,3 +46,12 @@ web3==7.16.0                # minteo real on-chain (app/services/chain_service.p
 #   openai, aiohttp, prometheus-client, python-jose, passlib, bcrypt,
 #   email-validator, anyio.
 # httpx pasó a requirements-dev.txt: solo lo usa tests/conftest.py.
+
+# Rate limiter compartido entre workers (ROADMAP 3.8). Sin esto los
+# contadores viven en memoria de proceso y el limite deja de ser global.
+# ~250 KB, sin dependencias compiladas: cabe en el plan free de Render.
+redis==6.4.0
+
+# === Fase 5.4: Observabilidad (Producción) ===
+sentry-sdk[fastapi]==2.21.0
+prometheus-fastapi-instrumentator==8.1.0

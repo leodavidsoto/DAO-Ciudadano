@@ -5,18 +5,25 @@
  * Nothing here is fabricated: with no data we render an honest empty state.
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { Vote, Users, Clock, Trophy, UserPlus, Plus, Loader2 } from 'lucide-react';
-import { Button } from '../ui/button';
-import { Badge } from '../ui/badge';
-import { Input } from '../ui/input';
-import { Label } from '../ui/label';
-import { Textarea } from '../ui/textarea';
+import {
+    AlertCircle,
+    ArrowLeft,
+    Check,
+    Clock,
+    LockKeyhole,
+    Plus,
+    ShieldAlert,
+    Trophy,
+    UserPlus,
+    Users,
+    Vote,
+} from 'lucide-react';
 import { electionsAPI } from '@/lib/api';
 
 const STATUS_META = {
-    nominations: { label: 'CANDIDATURAS ABIERTAS', cls: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' },
-    voting: { label: 'VOTACIÓN EN CURSO', cls: 'bg-green-500/20 text-green-300 border-green-500/40' },
-    closed: { label: 'CERRADA', cls: 'bg-gray-500/20 text-gray-400 border-gray-500/40' },
+    nominations: { label: 'Candidaturas abiertas', cls: 'civic-tag-blue' },
+    voting: { label: 'Votación en curso', cls: 'civic-tag-green' },
+    closed: { label: 'Cerrada', cls: 'civic-tag-neutral' },
 };
 
 const formatDate = (iso) => {
@@ -25,7 +32,7 @@ const formatDate = (iso) => {
     return isNaN(d) ? '—' : d.toLocaleDateString('es-CL', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
-const shortAddr = (a) => (a ? a.slice(0, 6) + '...' + a.slice(-4) : '—');
+const shortAddr = (a) => (a ? a.slice(0, 6) + '…' + a.slice(-4) : '—');
 
 const errText = (err, fallback) => {
     const d = err?.response?.data?.detail;
@@ -35,6 +42,13 @@ const errText = (err, fallback) => {
 };
 
 // === Convocatoria ===
+
+const CAMPOS = [
+    ['seats', 'Escaños'],
+    ['nominations_days', 'Días de candidaturas'],
+    ['voting_days', 'Días de votación'],
+    ['term_months', 'Meses de mandato'],
+];
 
 const CreateElectionForm = ({ walletAddress, onCreated, onCancel }) => {
     const [form, setForm] = useState({
@@ -67,40 +81,69 @@ const CreateElectionForm = ({ walletAddress, onCreated, onCancel }) => {
     };
 
     return (
-        <form onSubmit={submit} className="glass-dark p-6 rounded-xl border border-cyan-500/30 space-y-4">
-            <h3 className="text-cyan-300 font-mono tracking-wide">CONVOCAR ELECCIÓN</h3>
+        <form onSubmit={submit} className="civic-card civic-card-pad space-y-4">
+            <h3 className="civic-section-title" style={{ fontSize: 17 }}>
+                <Plus className="w-4 h-4" />
+                Convocar elección
+            </h3>
 
             <div>
-                <Label className="cyber-label">TÍTULO</Label>
-                <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
-                       placeholder="Ej: Consejo Ciudadano 2026" required />
+                <label htmlFor="eleccion-titulo" className="civic-label">Título</label>
+                <input
+                    id="eleccion-titulo"
+                    className="civic-field"
+                    value={form.title}
+                    onChange={(e) => setForm({ ...form, title: e.target.value })}
+                    placeholder="Ej: Consejo Ciudadano 2026"
+                    required
+                />
             </div>
 
             <div>
-                <Label className="cyber-label">DESCRIPCIÓN</Label>
-                <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
-                          placeholder="Qué cargos se eligen, qué atribuciones tienen y por qué se convoca." rows={4} required />
+                <label htmlFor="eleccion-desc" className="civic-label">Descripción</label>
+                <textarea
+                    id="eleccion-desc"
+                    className="civic-field"
+                    value={form.description}
+                    onChange={(e) => setForm({ ...form, description: e.target.value })}
+                    placeholder="Qué cargos se eligen, qué atribuciones tienen y por qué se convoca."
+                    rows={4}
+                    required
+                />
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {[['seats', 'ESCAÑOS'], ['nominations_days', 'DÍAS CANDIDATURAS'],
-                  ['voting_days', 'DÍAS VOTACIÓN'], ['term_months', 'MESES MANDATO']].map(([key, label]) => (
+                {CAMPOS.map(([key, label]) => (
                     <div key={key}>
-                        <Label className="cyber-label text-[10px]">{label}</Label>
-                        <Input type="number" min={1} value={form[key]}
-                               onChange={(e) => setForm({ ...form, [key]: e.target.value })} required />
+                        <label htmlFor={`eleccion-${key}`} className="civic-label">{label}</label>
+                        <input
+                            id={`eleccion-${key}`}
+                            className="civic-field"
+                            type="number"
+                            min={1}
+                            value={form[key]}
+                            onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                            required
+                        />
                     </div>
                 ))}
             </div>
 
-            {error && <p className="text-red-400 text-sm font-mono">{error}</p>}
+            {error && (
+                <div className="civic-note civic-note-error">
+                    <AlertCircle className="w-4 h-4" />
+                    {error}
+                </div>
+            )}
 
-            <div className="flex gap-3">
-                <Button type="submit" disabled={submitting} className="cyber-button-premium">
-                    {submitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                    CONVOCAR
-                </Button>
-                <Button type="button" onClick={onCancel} className="cyber-button">CANCELAR</Button>
+            <div className="flex gap-3 flex-wrap">
+                <button type="submit" disabled={submitting} className="civic-btn civic-btn-primary">
+                    {submitting && <span className="civic-spinner" style={{ borderTopColor: '#fff', borderColor: 'rgba(255,255,255,.4)' }} />}
+                    Convocar
+                </button>
+                <button type="button" onClick={onCancel} className="civic-btn civic-btn-quiet">
+                    Cancelar
+                </button>
             </div>
         </form>
     );
@@ -154,70 +197,142 @@ const ElectionDetail = ({ election, walletAddress, onBack, onChanged }) => {
         (c) => (c.candidate_address || '').toLowerCase() === (walletAddress || '').toLowerCase()
     );
 
+    const DATOS = [
+        ['Escaños', election.seats],
+        ['Mandato', `${election.term_months} meses`],
+        ['Candidaturas hasta', formatDate(election.nominations_end_at)],
+        ['Votación hasta', formatDate(election.voting_end_at)],
+    ];
+
     return (
         <div className="space-y-5">
-            <Button onClick={onBack} className="cyber-button text-xs">← VOLVER</Button>
+            <button onClick={onBack} className="civic-btn civic-btn-sm civic-btn-quiet">
+                <ArrowLeft className="w-4 h-4" />
+                Volver
+            </button>
 
-            <div className="glass-dark p-6 rounded-xl border border-gray-700">
-                <div className="flex items-start justify-between gap-4 mb-3">
-                    <h2 className="text-xl font-bold text-white">{election.title}</h2>
-                    <Badge className={meta.cls}>{meta.label}</Badge>
+            <div className="civic-card civic-card-pad">
+                <div className="flex items-start justify-between gap-4 mb-3 flex-wrap">
+                    <h2 className="civic-section-title" style={{ fontSize: 19 }}>{election.title}</h2>
+                    <span className={`civic-tag ${meta.cls}`}>{meta.label}</span>
                 </div>
-                <p className="text-gray-400 text-sm mb-4 whitespace-pre-line">{election.description}</p>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
-                    <div><span className="text-gray-500">Escaños:</span> <span className="text-cyan-300">{election.seats}</span></div>
-                    <div><span className="text-gray-500">Mandato:</span> <span className="text-cyan-300">{election.term_months} meses</span></div>
-                    <div><span className="text-gray-500">Candidaturas hasta:</span> <span className="text-cyan-300">{formatDate(election.nominations_end_at)}</span></div>
-                    <div><span className="text-gray-500">Votación hasta:</span> <span className="text-cyan-300">{formatDate(election.voting_end_at)}</span></div>
+                <p className="civic-muted text-sm mb-4 whitespace-pre-line">{election.description}</p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                    {DATOS.map(([label, value]) => (
+                        <div key={label}>
+                            <div className="civic-faint text-xs">{label}</div>
+                            <div className="civic-ink font-semibold">{value}</div>
+                        </div>
+                    ))}
                 </div>
             </div>
 
-            {error && <p className="text-red-400 text-sm font-mono">{error}</p>}
-            {notice && <p className="text-green-400 text-sm font-mono">{notice}</p>}
-
-            {election.status === 'nominations' && !alreadyCandidate && (
-                <div className="glass-dark p-6 rounded-xl border border-cyan-500/30 space-y-3">
-                    <h3 className="text-cyan-300 font-mono flex items-center gap-2">
-                        <UserPlus className="w-4 h-4" /> POSTULARSE
-                    </h3>
-                    <Textarea value={statement} onChange={(e) => setStatement(e.target.value)}
-                              placeholder="Tu programa: qué propones y por qué deberían elegirte." rows={4} />
-                    <Button disabled={busy || !statement.trim() || !walletAddress}
-                            onClick={() => act(() => electionsAPI.runForOffice(election.id, walletAddress, statement),
-                                               'Candidatura registrada')}
-                            className="cyber-button-premium">
-                        PRESENTAR CANDIDATURA
-                    </Button>
+            {error && (
+                <div className="civic-note civic-note-error" role="alert">
+                    <AlertCircle className="w-4 h-4" />
+                    {error}
+                </div>
+            )}
+            {notice && (
+                <div className="civic-note civic-note-ok" role="status">
+                    <Check className="w-4 h-4" />
+                    {notice}
                 </div>
             )}
 
+            {election.status === 'nominations' && !alreadyCandidate && (
+                <div className="civic-card civic-card-pad space-y-3">
+                    <h3 className="civic-section-title" style={{ fontSize: 17 }}>
+                        <UserPlus className="w-4 h-4" />
+                        Postularse
+                    </h3>
+                    <textarea
+                        className="civic-field"
+                        value={statement}
+                        onChange={(e) => setStatement(e.target.value)}
+                        placeholder="Tu programa: qué propones y por qué deberían elegirte."
+                        rows={4}
+                        aria-label="Programa de candidatura"
+                    />
+                    <button
+                        disabled={busy || !statement.trim() || !walletAddress}
+                        aria-busy={busy}
+                        onClick={() => act(
+                            () => electionsAPI.runForOffice(election.id, walletAddress, statement),
+                            'Candidatura registrada'
+                        )}
+                        className="civic-btn civic-btn-primary"
+                    >
+                        Presentar candidatura
+                    </button>
+                </div>
+            )}
+
+            {election.status === 'voting' && (
+                <section
+                    className="civic-election-privacy-gate"
+                    aria-labelledby="election-private-vote-title"
+                    role="status"
+                >
+                    <span className="civic-election-privacy-seal" aria-hidden="true">
+                        <ShieldAlert />
+                    </span>
+                    <div>
+                        <p className="civic-eyebrow">Urna MACI obligatoria</p>
+                        <h3 id="election-private-vote-title">
+                            Votación detenida hasta disponer de cifrado verificable
+                        </h3>
+                        <p>
+                            Esta elección aún no publica un poll MACI ni el mapeo
+                            candidato–opción anclado. La interfaz no enviará tu wallet,
+                            candidato ni firma EIP-712 por el endpoint de voto en claro.
+                        </p>
+                        <span className="civic-tag civic-tag-amber">
+                            <LockKeyhole className="w-3 h-3" />
+                            Esperando parámetros MACI de la elección
+                        </span>
+                    </div>
+                </section>
+            )}
+
             <div>
-                <h3 className="text-gray-300 font-mono text-sm mb-3 flex items-center gap-2">
-                    <Users className="w-4 h-4" /> CANDIDATURAS ({candidacies.length})
+                <h3 className="civic-section-title mb-3" style={{ fontSize: 17 }}>
+                    <Users className="w-4 h-4" />
+                    Candidaturas ({candidacies.length})
                 </h3>
 
                 {loading ? (
-                    <div className="text-center py-8 text-gray-500 font-mono text-sm">Cargando...</div>
+                    <div className="civic-loading">
+                        <span className="civic-spinner" />
+                        Cargando…
+                    </div>
                 ) : candidacies.length === 0 ? (
-                    <div className="glass-dark p-8 rounded-xl text-center text-gray-500 font-mono text-sm">
-                        Todavía no hay candidaturas.
+                    <div className="civic-empty">
+                        <Users className="w-10 h-10" />
+                        <p className="civic-empty-title">Todavía no hay candidaturas</p>
+                        <p className="civic-empty-desc">
+                            Cualquier miembro activo puede postularse mientras el período siga abierto.
+                        </p>
                     </div>
                 ) : (
                     <div className="space-y-3">
                         {candidacies.map((c) => (
-                            <div key={c.id} className="glass-dark p-4 rounded-xl border border-gray-700">
-                                <div className="flex items-start justify-between gap-4">
-                                    <div className="flex-1">
-                                        <p className="font-mono text-cyan-300 text-sm mb-1">{shortAddr(c.candidate_address)}</p>
-                                        <p className="text-gray-400 text-sm whitespace-pre-line">{c.statement}</p>
+                            <div key={c.id} className="civic-card civic-card-pad">
+                                <div className="flex items-start justify-between gap-4 flex-wrap">
+                                    <div className="flex-1 min-w-0">
+                                        <p className="civic-mono civic-ink font-semibold mb-1">
+                                            {shortAddr(c.candidate_address)}
+                                        </p>
+                                        <p className="civic-muted text-sm whitespace-pre-line">{c.statement}</p>
                                     </div>
                                     {election.status === 'voting' && (
-                                        <Button disabled={busy || !walletAddress}
-                                                onClick={() => act(() => electionsAPI.vote(election.id, walletAddress, c.candidate_address),
-                                                                   'Voto registrado')}
-                                                className="cyber-button-premium shrink-0">
-                                            <Vote className="w-4 h-4 mr-1" /> VOTAR
-                                        </Button>
+                                        <span
+                                            className="civic-election-vote-locked"
+                                            aria-label="Voto bloqueado hasta habilitar MACI"
+                                        >
+                                            <LockKeyhole className="w-4 h-4" />
+                                            Urna privada pendiente
+                                        </span>
                                     )}
                                 </div>
                             </div>
@@ -228,30 +343,37 @@ const ElectionDetail = ({ election, walletAddress, onBack, onChanged }) => {
 
             {election.status === 'closed' && results && (
                 <div>
-                    <h3 className="text-gray-300 font-mono text-sm mb-3 flex items-center gap-2">
-                        <Trophy className="w-4 h-4" /> RESULTADOS
+                    <h3 className="civic-section-title mb-2" style={{ fontSize: 17 }}>
+                        <Trophy className="w-4 h-4" />
+                        Resultados
                     </h3>
-                    <p className="text-xs font-mono text-gray-500 mb-3">
+                    <p className="civic-muted text-xs mb-3">
                         {results.total_votes_cast} votantes · {results.total_weight_cast} de peso total
                     </p>
                     {(results.results || []).length === 0 ? (
-                        <div className="glass-dark p-8 rounded-xl text-center text-gray-500 font-mono text-sm">
-                            La elección cerró sin votos registrados.
+                        <div className="civic-empty">
+                            <Trophy className="w-10 h-10" />
+                            <p className="civic-empty-title">La elección cerró sin votos registrados</p>
+                            <p className="civic-empty-desc">Nadie ocupa un escaño: no se elige a quien no recibió votos.</p>
                         </div>
                     ) : (
                         <div className="space-y-2">
                             {results.results.map((r, i) => (
-                                <div key={r.candidate_address}
-                                     className={'glass-dark p-4 rounded-xl border flex items-center justify-between ' +
-                                                (r.elected ? 'border-green-500/40' : 'border-gray-700')}>
-                                    <div className="flex items-center gap-3">
-                                        <span className="text-gray-500 font-mono text-sm">#{i + 1}</span>
-                                        <span className="font-mono text-cyan-300 text-sm">{shortAddr(r.candidate_address)}</span>
-                                        {r.elected && (
-                                            <Badge className="bg-green-500/20 text-green-300 border-green-500/40">ELECTO</Badge>
-                                        )}
+                                <div
+                                    key={r.candidate_address}
+                                    className="civic-card civic-card-pad flex items-center justify-between gap-4 flex-wrap"
+                                    style={r.elected ? { borderColor: '#BFD9C9', background: '#F6FAF7' } : undefined}
+                                >
+                                    <div className="flex items-center gap-3 flex-wrap">
+                                        <span className="civic-faint civic-mono">#{i + 1}</span>
+                                        <span className="civic-mono civic-ink font-semibold">
+                                            {shortAddr(r.candidate_address)}
+                                        </span>
+                                        {r.elected && <span className="civic-tag civic-tag-green">Electo</span>}
                                     </div>
-                                    <span className="font-mono text-white">{r.votes} votos</span>
+                                    <span className="civic-ink font-semibold" style={{ fontFamily: 'Poppins, sans-serif' }}>
+                                        {r.votes} votos
+                                    </span>
                                 </div>
                             ))}
                         </div>
@@ -294,15 +416,17 @@ const ElectionsList = ({ walletAddress }) => {
     }
 
     return (
-        <div className="space-y-5">
-            <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                    <Vote className="w-5 h-5 text-cyan-400" /> ELECCIONES DE REPRESENTANTES
+        <section className="space-y-5">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+                <h2 className="civic-section-title">
+                    <Vote className="w-5 h-5" />
+                    Elecciones de representantes
                 </h2>
                 {walletAddress && !creating && (
-                    <Button onClick={() => setCreating(true)} className="cyber-button-premium">
-                        <Plus className="w-4 h-4 mr-1" /> CONVOCAR
-                    </Button>
+                    <button onClick={() => setCreating(true)} className="civic-btn civic-btn-primary civic-btn-sm">
+                        <Plus className="w-4 h-4" />
+                        Convocar
+                    </button>
                 )}
             </div>
 
@@ -313,28 +437,36 @@ const ElectionsList = ({ walletAddress }) => {
             )}
 
             {loading ? (
-                <div className="text-center py-12 glass-dark rounded-xl">
-                    <Loader2 className="animate-spin w-8 h-8 text-cyan-500 mx-auto mb-3" />
-                    <p className="text-gray-400 font-mono text-sm">Cargando elecciones...</p>
+                <div className="civic-loading">
+                    <span className="civic-spinner" />
+                    Cargando elecciones…
                 </div>
             ) : elections.length === 0 ? (
-                <div className="glass-dark p-10 rounded-xl text-center">
-                    <Vote className="w-10 h-10 text-gray-600 mx-auto mb-3" />
-                    <p className="text-gray-400 font-mono text-sm">No hay elecciones convocadas.</p>
+                <div className="civic-empty">
+                    <Vote className="w-10 h-10" />
+                    <p className="civic-empty-title">No hay elecciones convocadas</p>
+                    <p className="civic-empty-desc">
+                        Cualquier miembro activo puede convocar una desde este panel.
+                    </p>
                 </div>
             ) : (
                 <div className="space-y-3">
                     {elections.map((e) => {
                         const meta = STATUS_META[e.status] || STATUS_META.closed;
                         return (
-                            <button key={e.id} onClick={() => setSelected(e)}
-                                    className="w-full text-left glass-dark p-5 rounded-xl border border-gray-700 hover:border-cyan-500/40 transition-colors">
-                                <div className="flex items-start justify-between gap-4 mb-2">
-                                    <h3 className="font-bold text-white">{e.title}</h3>
-                                    <Badge className={meta.cls}>{meta.label}</Badge>
+                            <button
+                                key={e.id}
+                                onClick={() => setSelected(e)}
+                                className="w-full text-left civic-card civic-card-pad civic-card-hover"
+                            >
+                                <div className="flex items-start justify-between gap-4 mb-2 flex-wrap">
+                                    <h3 className="civic-ink font-semibold" style={{ fontFamily: 'Poppins, sans-serif' }}>
+                                        {e.title}
+                                    </h3>
+                                    <span className={`civic-tag ${meta.cls}`}>{meta.label}</span>
                                 </div>
-                                <p className="text-gray-400 text-sm mb-3">{e.description}</p>
-                                <div className="flex flex-wrap gap-4 text-xs font-mono text-gray-500">
+                                <p className="civic-muted text-sm mb-3">{e.description}</p>
+                                <div className="flex flex-wrap gap-4 civic-faint text-xs">
                                     <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {e.candidacy_count || 0} candidaturas</span>
                                     <span className="flex items-center gap-1"><Trophy className="w-3 h-3" /> {e.seats} escaños</span>
                                     <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> hasta {formatDate(e.voting_end_at)}</span>
@@ -344,7 +476,7 @@ const ElectionsList = ({ walletAddress }) => {
                     })}
                 </div>
             )}
-        </div>
+        </section>
     );
 };
 

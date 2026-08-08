@@ -1,7 +1,7 @@
 /**
- * Liveness Detection Step
+ * Simulated image-analysis step
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { ScanFace, Upload, Database, Code } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -12,17 +12,32 @@ import { useOnboarding } from '@/context';
 
 const LivenessStep = () => {
     const { loading, selectedFile, handleFileSelect, selfie, analyzeLiveness } = useOnboarding();
+    const [processingAccepted, setProcessingAccepted] = useState(false);
 
     return (
         <CyberPanel
-            title="ANÁLISIS BIOMÉTRICO CON IA"
-            description="Sistema de detección de vida avanzado. Procesamiento local seguro."
+            title="DEMOSTRACIÓN CON IMAGEN"
+            description="Resultado simulado: no es biometría certificada, prueba de vida ni verificación de identidad."
             icon={<ScanFace className="h-8 w-8" />}
         >
-            <DemoBadge label="MODO DEMO — detección de vida simulada sin proveedor real" />
+            <DemoBadge label="MODO DEMO — sin proveedor de liveness certificado" />
             <div className="space-y-6">
+                <label className="flex items-start gap-3 rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-4 text-left">
+                    <input
+                        type="checkbox"
+                        checked={processingAccepted}
+                        onChange={(event) => setProcessingAccepted(event.target.checked)}
+                        className="mt-1"
+                    />
+                    <span className="text-sm text-gray-300">
+                        Confirmo que deseo enviar la imagen al backend para una demostración no biométrica.
+                        Si el entorno tiene una integración configurada, la imagen puede ser procesada por ese
+                        proveedor. No constituye prueba de vida ni verificación de identidad.
+                    </span>
+                </label>
+
                 <div>
-                    <Label className="cyber-label">SUBIR IMAGEN BIOMÉTRICA</Label>
+                    <Label className="cyber-label">SUBIR IMAGEN PARA LA DEMOSTRACIÓN</Label>
                     <Input
                         type="file"
                         accept="image/*"
@@ -39,27 +54,37 @@ const LivenessStep = () => {
 
                 <div className="flex flex-col items-center gap-4">
                     {!loading && selectedFile && (
-                        <Button onClick={analyzeLiveness} className="cyber-button">
+                        <Button
+                            onClick={() => analyzeLiveness(processingAccepted)}
+                            className="cyber-button"
+                            disabled={!processingAccepted}
+                        >
                             <Upload className="w-4 h-4 mr-2" />
-                            PROCESAR CON IA
+                            EJECUTAR SIMULACIÓN
                         </Button>
                     )}
 
-                    {loading && <CyberLoader text="ANALIZANDO BIOMETRÍA..." />}
+                    {loading && <CyberLoader text="GENERANDO RESULTADO DE DEMO..." />}
 
-                    {selfie.score && (
+                    {/* El backend devuelve score=null cuando no hay proveedor
+                        configurado: en ese caso no se inventa un puntaje, pero
+                        el análisis textual sí debe verse. Comparar contra null
+                        además evita ocultar un puntaje legítimo de 0. */}
+                    {(selfie.score != null || selfie.analysis) && (
                         <div className="cyber-success p-4 rounded-lg w-full">
                             <div className="flex items-center justify-between mb-3">
-                                <span className="font-mono">ANÁLISIS COMPLETADO</span>
-                                <Badge className={`cyber-badge ${selfie.score >= 0.7 ? 'success' : 'warning'}`}>
-                                    SCORE: {Math.round(selfie.score * 100)}%
+                                <span className="font-mono">RESULTADO SIMULADO</span>
+                                <Badge className={`cyber-badge ${selfie.score != null && selfie.score >= 0.7 ? 'success' : 'warning'}`}>
+                                    {selfie.score != null
+                                        ? `PUNTAJE DEMO: ${Math.round(selfie.score * 100)}%`
+                                        : 'SIN PUNTAJE — PROVEEDOR NO CONFIGURADO'}
                                 </Badge>
                             </div>
                             {selfie.analysis && (
                                 <div className="bg-black/50 p-3 rounded border border-cyan-500/30">
                                     <p className="text-xs font-mono text-gray-300">
                                         <Code className="inline w-3 h-3 mr-1" />
-                                        {selfie.analysis}
+                                        Salida demostrativa, no dictamen biométrico: {selfie.analysis}
                                     </p>
                                 </div>
                             )}

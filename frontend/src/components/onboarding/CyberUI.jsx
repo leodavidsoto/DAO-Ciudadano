@@ -1,12 +1,16 @@
 /**
- * Shared Cyber UI Components
- * Reusable cyberpunk-styled components
+ * Primitivas de interfaz compartidas por el flujo de alta.
+ *
+ * El nombre del archivo y de los componentes es histórico (venían del tema
+ * cyberpunk). El aspecto ya es el cívico de la landing: fondo claro, azul
+ * #003897 y rojo #CB2C27 (ver styles/civic.css). Se conservan los nombres
+ * exportados para no tocar los once pasos que los importan, donde vive la
+ * lógica delicada de NFC, liveness, wallet y minteo.
  */
 import React from 'react';
-import { CheckCircle2, Terminal, Loader2, AlertTriangle } from 'lucide-react';
-import { Card, CardContent } from '../ui/card';
+import { CheckCircle2, Loader2, AlertTriangle } from 'lucide-react';
 
-// Cyberpunk Step Indicator
+// Indicador de paso
 export const CyberStep = ({ n, title, active = false, done = false }) => (
     <div className="cyber-step">
         <div className={`cyber-step-number ${done ? 'completed' : active ? 'active' : 'pending'}`}>
@@ -18,83 +22,97 @@ export const CyberStep = ({ n, title, active = false, done = false }) => (
     </div>
 );
 
-// Cyberpunk Panel
+// Panel de contenido
 export const CyberPanel = ({ title, icon, description, children, className = "" }) => (
-    <Card className={`cyber-card ${className}`}>
-        <CardContent className="p-6">
+    <section className={`civic-card ${className}`}>
+        <div className="civic-card-pad" style={{ padding: 24 }}>
             <div className="flex items-start gap-4 mb-6">
-                <div className="text-cyan-400 cyber-icon">
-                    {icon}
-                </div>
-                <div className="flex-1">
-                    <h2 className="cyber-title text-xl font-bold tracking-wider mb-2" data-text={title}>
+                {icon && (
+                    <span
+                        className="flex items-center justify-center rounded-lg shrink-0"
+                        style={{ width: 46, height: 46, background: '#EAF0FB', color: '#003897' }}
+                    >
+                        {icon}
+                    </span>
+                )}
+                <div className="flex-1 min-w-0">
+                    <h2
+                        className="civic-ink font-bold mb-1"
+                        style={{ fontFamily: 'Poppins, sans-serif', fontSize: 19 }}
+                    >
                         {title}
                     </h2>
                     {description && (
-                        <p className="text-gray-400 text-sm font-mono">
-                            <Terminal className="inline w-3 h-3 mr-2" />
-                            {description}
-                        </p>
+                        <p className="civic-muted text-sm">{description}</p>
                     )}
                 </div>
             </div>
             {children}
-        </CardContent>
-    </Card>
+        </div>
+    </section>
 );
 
-// Cyberpunk Loader
-export const CyberLoader = ({ text = "PROCESANDO..." }) => (
-    <div className="flex items-center gap-3">
-        <div className="cyber-spinner"></div>
-        <span className="font-mono text-cyan-400 text-sm animate-pulse">
-            {text}
+// Indicador de carga
+export const CyberLoader = ({ text = "Procesando…", detail = "", className = "" }) => (
+    <div
+        className={`flex items-center gap-3 ${className}`.trim()}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-busy="true"
+    >
+        <Loader2
+            aria-hidden="true"
+            className="w-4 h-4 shrink-0 animate-spin"
+            style={{ color: '#003897' }}
+        />
+        <span className="civic-loading-copy">
+            <span className="civic-loading-title">{text}</span>
+            {detail && (
+                <span className="civic-loading-detail">{detail}</span>
+            )}
         </span>
     </div>
 );
 
-// Progress Bar
+// Barra de progreso del flujo
 export const ProgressBar = ({ progress }) => (
     <div className="mb-8">
-        <div className="cyber-progress">
-            <div className="cyber-progress-fill" style={{ width: `${progress}%` }}></div>
+        <div className="civic-bar">
+            <div className="civic-bar-blue" style={{ width: `${progress}%` }} />
         </div>
-        <p className="text-center text-cyan-400 font-mono text-xs mt-2">
-            PROGRESO: {progress}% COMPLETADO
+        <p className="civic-muted text-xs mt-2 text-center">
+            Progreso: {progress}% completado
         </p>
     </div>
 );
 
-// Error Display
+// Error
 export const ErrorDisplay = ({ error }) => {
     if (!error) return null;
 
     return (
-        <div className="cyber-error mb-6">
-            <strong>ERROR:</strong> {error}
+        <div className="civic-note civic-note-error mb-6" role="alert">
+            <AlertTriangle className="w-4 h-4" />
+            <span>{error}</span>
         </div>
     );
 };
 
-// Success Display
+// Éxito
 export const SuccessDisplay = ({ children }) => (
-    <div className="cyber-success text-center p-4 rounded-lg">
+    <div className="civic-note civic-note-ok" style={{ display: 'block', textAlign: 'center' }}>
         <CheckCircle2 className="w-8 h-8 mx-auto mb-2" />
         {children}
     </div>
 );
 
-// Demo Mode Badge — marca visiblemente los pasos cuya verificación aún es simulada.
-// Retirar cada uso cuando el flujo real correspondiente entre en producción (ver ROADMAP Fase 1/4).
-export const DemoBadge = ({ label = "MODO DEMO — verificación simulada" }) => (
-    <div
-        className="flex items-center gap-2 mb-6 px-3 py-2 rounded-md border border-yellow-500/40 bg-yellow-500/10"
-        role="status"
-    >
-        <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0" />
-        <span className="text-yellow-300 text-xs font-mono tracking-wide">
-            {label}
-        </span>
+// Marca visible de los pasos cuya verificación aún es simulada.
+// Retirar cada uso cuando el flujo real correspondiente entre en producción
+// (ver ROADMAP Fase 1/4).
+export const DemoBadge = ({ label = "Modo demo — verificación simulada" }) => (
+    <div className="civic-note civic-note-warn mb-6" role="status">
+        <AlertTriangle className="w-4 h-4" />
+        <span>{label}</span>
     </div>
 );
-

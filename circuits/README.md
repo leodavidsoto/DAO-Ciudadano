@@ -1,104 +1,102 @@
-# Circuitos ZKP — identidad soberana
+# Membresía ZK ligada a wallet
 
-Estado: **andamiaje. No desplegar.** Este directorio existe para que la capa
-ZKP tenga una forma concreta y discutible, no porque el flujo funcione.
+`verify_identity.circom` implementa la prueba Groth16 que autoriza el mint del
+SBT sin publicar identidad civil, secreto ni ruta Merkle. Compila a **6.658
+restricciones no lineales** y usa un árbol de 25 niveles (hasta 33.554.432
+compromisos).
 
-## Qué hay implementado
+## Garantía criptográfica
 
-`verify_identity.circom` calcula un **nullifier** = `Poseidon(documentIdHash, secret)`.
+El emisor valida unicidad civil fuera de cadena e inserta como máximo una hoja
+por ciudadano:
 
-Eso resuelve la mitad *unicidad* del problema: la misma cédula produce siempre
-el mismo nullifier, así que un contrato puede rechazar el segundo registro
-(anti-Sybil), y el nullifier no revela el RUT.
+```text
+leaf = Poseidon(identitySecret, recipient, scope)
+nullifierHash = Poseidon(identitySecret, scope)
+```
 
-`compile.sh` compila el circuito, corre el setup Groth16 y exporta
-`contracts/contracts/Verifier.sol` con snarkjs.
+La hoja ata la credencial a la wallet receptora. Copiar una prueba desde el
+mempool no permite redirigir el SBT: como máximo, un tercero puede pagar el gas
+para mintear el mismo token a la wallet prevista. El nullifier excluye la
+wallet deliberadamente, por lo que la misma identidad no obtiene otro SBT al
+cambiar de dirección.
 
-## Qué falta (y por qué el circuito no sirve todavía)
+Las señales públicas tienen este orden fijo, compartido por circuito,
+`Verifier.sol` y `DAOCiudadanaSBT.sol`:
 
-El circuito **no verifica que los datos vengan del Registro Civil**. Hoy
-cualquiera puede pasar un `documentIdHash` inventado y obtener una prueba
-aritméticamente válida. Prueba unicidad de un dato no autenticado, que es
-casi inútil por sí solo.
+```text
+[identityRoot, nullifierHash, recipient, scope]
+```
 
-Para cerrarlo hacen falta dos cosas, en este orden:
+El contrato construye ese array internamente, solo acepta raíces aprobadas y
+consume cada nullifier para siempre, incluso si el SBT se revoca.
 
-### 1. Lectura autenticada de la cédula (bloqueante, va primero)
+ZK no crea unicidad humana por sí solo. La resistencia Sybil depende de que el
+emisor autentique a cada persona, emita una sola credencial y gobierne las
+raíces con un Safe/multisig auditado.
 
-El circuito necesita como entrada privada el contenido real de **DG1** y la
-firma de **EF.SOD**. Ambos solo se pueden leer tras establecer el canal seguro
-BAC con el chip.
+## Entradas para generar una prueba
 
-Estado en la app móvil:
+Entradas privadas:
 
-- ✅ `mobile/src/services/bacCrypto.ts` — derivación de llaves BAC, Retail MAC
-  y secure messaging, **verificado contra los vectores publicados de ICAO 9303
-  Parte 11** (ver `__tests__/bacCrypto.test.ts`).
-- ❌ Falta el intercambio de APDUs: autenticación mutua (`GET CHALLENGE` +
-  `MUTUAL AUTHENTICATE`), y lectura de DG1/EF.SOD sobre el canal seguro.
+- `identitySecret`: secreto de campo no cero generado en el dispositivo.
+- `pathElements[25]`: hermanos de la ruta Merkle.
+- `pathIndices[25]`: bits de posición de la hoja.
 
-Sin esto no hay nada que probar. Es el prerrequisito real, no el circuito.
+Entradas públicas:
 
-### 2. Verificación de la firma dentro del circuito (caro)
+- `identityRoot`: raíz autorizada por el contrato.
+- `nullifierHash`: `Poseidon(identitySecret, scope)`.
+- `recipient`: dirección EVM expresada como entero `uint160`.
+- `scope`: dominio consultado desde `membershipScope()`; el contrato lo deriva
+  de versión, `chainId` y su propia dirección.
 
-Hay que verificar en el circuito que:
+El cliente genera `A/B/C` con:
 
-- el hash de DG1 aparece en EF.SOD, y
-- EF.SOD está firmado por un Document Signer Certificate válido del
-  Registro Civil de Chile.
+```javascript
+const { proof, publicSignals } = await snarkjs.groth16.fullProve(
+  input,
+  "circuits/build/verify_identity_js/verify_identity.wasm",
+  "circuits/build/verify_identity_final.zkey"
+);
+```
 
-Esto es lo pesado: RSA-2048 o ECDSA + SHA-256 dentro de un circuito
-aritmético cuesta del orden de cientos de miles de restricciones. Es lo que
-hacen proyectos como Anon Aadhaar o zkPassport, y es donde se va el 90 % del
-esfuerzo.
+Para Solidity, cada par Fq2 de `pi_b` debe adoptar el orden producido por
+`snarkjs groth16 export soliditycalldata`; no se deben invertir coordenadas a
+mano.
 
-Además hay una dependencia externa que no controlamos: **obtener y mantener
-la lista de certificados públicos del Registro Civil chileno** (la Master List
-del país). Sin esa clave pública no hay contra qué verificar.
+## Artefactos versionados
 
-## Costo de gas (por qué probablemente no vaya a mainnet)
+- `build/verify_identity_js/verify_identity.wasm`: generador de witness.
+- `build/verify_identity_final.zkey`: proving key que coincide con el verifier.
+- `build/verification_key.json`: verificación fuera de cadena.
+- `../contracts/contracts/Verifier.sol`: verifier generado por `snarkjs`.
+- `artifact-manifest.json`: hashes SHA-256, tamaños y frontera del protocolo.
 
-Verificar Groth16 on-chain cuesta del orden de ~250k gas (tres emparejamientos
-más la agregación de entradas públicas), y eso **no se optimiza desde
-Solidity**: el verificador lo genera snarkjs. Sumando el mint del SBT, un
-registro ronda las 300–400k de gas.
+Los `.ptau`, `.r1cs`, `.sym` y zkeys intermedios son regenerables y permanecen
+ignorados.
 
-La palanca real no es micro-optimizar el contrato, es **desplegar en un L2**
-(Base, Arbitrum, Optimism). Conviene decidirlo antes de la ceremonia de
-confianza, porque cambiar de red después obliga a redesplegar.
-
-Mídelo con `snarkjs r1cs info` (lo imprime `compile.sh`, paso 2): el número de
-restricciones es el que manda.
-
-## Conflicto con la arquitectura actual
-
-Ojo, esto no es aditivo. Hoy el backend **es** la parte confiable: ve el RUT,
-guarda el pepper, calcula `HMAC(pepper, doc_hash)`, tiene `MINTER_ROLE` y
-mintea *por* el usuario (`backend/app/services/chain_service.py`).
-
-El modelo ZKP invierte eso: el navegador prueba localmente, el backend queda
-como simple relayer, y el usuario mintea con su propio `msg.sender`.
-
-Adoptarlo implica **redesplegar el contrato** y reescribir la ruta de minteo.
-La decisión D-1 de `docs/ROADMAP.md` ya lo advertía: *"Si se elige B o C hay
-que redesplegar el contrato — decidirlo ahora evita hacerlo dos veces"*.
-
-## Uso
+## Reproducir y verificar
 
 ```bash
 cd circuits
-npm install
-npm run build     # requiere circom y snarkjs instalados globalmente
+npm ci
+npm run compile
+npm run fixture
+npm test
 ```
 
-Los artefactos pesados (`.ptau`, `.zkey`, `.r1cs`, `.wasm`) **no van al
-repositorio** — ver `.gitignore`. El `.wasm` y el `.zkey` finales sí hay que
-empaquetarlos en el bundle del frontend para que el navegador pueda armar la
-prueba; publícalos como assets del build, no como fuentes versionadas.
+`npm run build` recompila, ejecuta un setup local, exporta los artefactos y
+regenera el fixture. `circom2 --inspect`, `snarkjs powersoftau verify` y
+`snarkjs zkey verify` forman parte del pipeline.
 
-## Advertencia sobre la ceremonia de confianza
+## Ceremonia y producción
 
-`compile.sh` hace una contribución de **una sola parte**, en tu máquina. Quien
-haya corrido ese comando conoce el *toxic waste* y **puede fabricar pruebas
-falsas**. Sirve para desarrollo y nada más. Producción exige una ceremonia
-multi-parte con participantes independientes.
+El `.zkey` versionado permite integración end-to-end y **no es una ceremonia
+de producción**: sus contribuciones ocurrieron en un solo host. Antes de un
+despliegue público hay que ejecutar y documentar una ceremonia multipartita
+con participantes independientes, auditar el circuito y reemplazar en el mismo
+cambio el `.zkey`, `verification_key.json`, `Verifier.sol`, fixture y hashes.
+El script de despliegue rechaza redes públicas mientras el manifiesto siga en
+modo desarrollo, exige una dirección explícita y compara el hash del bytecode
+desplegado con el `Verifier.sol` exacto del repositorio.

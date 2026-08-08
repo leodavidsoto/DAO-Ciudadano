@@ -20,6 +20,7 @@ const RegistrationStep = () => {
     });
     const [error, setError] = useState('');
     const [isLogin, setIsLogin] = useState(false);
+    const [processingAccepted, setProcessingAccepted] = useState(false);
 
     const formatRut = (value) => {
         // Remove all non-alphanumeric characters
@@ -62,6 +63,10 @@ const RegistrationStep = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
+        if (!processingAccepted) {
+            setError('Confirma la advertencia de tratamiento antes de enviar tus datos al backend.');
+            return;
+        }
         setLoading(true);
 
         try {
@@ -93,7 +98,16 @@ const RegistrationStep = () => {
                 setError(response.data.error || 'Error en el proceso');
             }
         } catch (err) {
-            setError(err.response?.data?.error || 'Error de conexión');
+            const backendError = err.response?.data?.detail || err.response?.data?.error;
+            setError(
+                typeof backendError === 'string'
+                    ? backendError
+                    : backendError
+                        ? JSON.stringify(backendError)
+                        : err.response
+                            ? `El servidor rechazó la solicitud (${err.response.status})`
+                            : 'No fue posible conectar con el servidor'
+            );
         } finally {
             setLoading(false);
         }
@@ -101,8 +115,10 @@ const RegistrationStep = () => {
 
     return (
         <CyberPanel
-            title={isLogin ? "INICIAR SESIÓN" : "REGISTRO CIUDADANO"}
-            description={isLogin ? "Ingresa con tu RUT y correo registrado" : "Crea tu cuenta con RUT y correo electrónico"}
+            title={isLogin ? "INICIAR SESIÓN DEL PILOTO" : "CREAR CUENTA PILOTO"}
+            description={isLogin
+                ? "Ingresa a tu cuenta piloto; esto no acredita tu identidad"
+                : "RUT y correo son datos declarados y no se contrastan con una fuente oficial"}
             icon={isLogin ? <CreditCard className="h-8 w-8" /> : <UserPlus className="h-8 w-8" />}
         >
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -177,6 +193,22 @@ const RegistrationStep = () => {
                     </>
                 )}
 
+                <label className="flex items-start gap-3 rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-4 text-left">
+                    <input
+                        type="checkbox"
+                        checked={processingAccepted}
+                        onChange={(event) => setProcessingAccepted(event.target.checked)}
+                        className="mt-1"
+                    />
+                    <span className="text-sm text-gray-300">
+                        {isLogin
+                            ? 'Confirmo que deseo enviar mi RUT y correo al backend para buscar una cuenta piloto existente.'
+                            : 'Confirmo que deseo enviar RUT, correo, nombre y apellido al backend para crear una cuenta piloto cifrada.'}
+                        {' '}Estos datos son declarados, no acreditan identidad y el proyecto aún no tiene una
+                        política legal y de retención definitiva.
+                    </span>
+                </label>
+
                 {/* Error display */}
                 {error && (
                     <div className="cyber-error">
@@ -189,7 +221,11 @@ const RegistrationStep = () => {
 
                 {/* Submit button */}
                 {!loading && (
-                    <Button type="submit" className="cyber-button-premium mt-4">
+                    <Button
+                        type="submit"
+                        className="cyber-button-premium mt-4"
+                        disabled={!processingAccepted}
+                    >
                         {isLogin ? (
                             <>
                                 <CreditCard className="w-4 h-4 mr-2" />
@@ -198,7 +234,7 @@ const RegistrationStep = () => {
                         ) : (
                             <>
                                 <UserPlus className="w-4 h-4 mr-2" />
-                                REGISTRARSE
+                                CREAR CUENTA PILOTO
                             </>
                         )}
                     </Button>
@@ -211,6 +247,7 @@ const RegistrationStep = () => {
                         onClick={() => {
                             setIsLogin(!isLogin);
                             setError('');
+                            setProcessingAccepted(false);
                         }}
                         className="text-cyan-400 hover:text-cyan-300 text-sm font-mono underline"
                     >
@@ -221,7 +258,7 @@ const RegistrationStep = () => {
                 {/* Info badge */}
                 <div className="text-center mt-2">
                     <Badge className="cyber-badge text-xs">
-                        Nivel de seguridad: AL1 • Registro simplificado
+                        Registro de cuenta • No acredita identidad
                     </Badge>
                 </div>
             </form>

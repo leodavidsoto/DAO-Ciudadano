@@ -1,0 +1,40 @@
+# Configuración de black y mypy (P-45).
+#
+# flake8 NO lee pyproject.toml (issue abierto desde hace años en su
+# repositorio), así que su configuración vive en `setup.cfg`. Son dos archivos
+# porque las herramientas son así, no por gusto.
+
+[tool.black]
+# 88 es el valor por defecto de black. Se deja explícito porque `setup.cfg`
+# tiene que declarar el MISMO para flake8: si divergen, cada herramienta pide
+# lo contrario que la otra y el formateo se vuelve una discusión sin fin.
+line-length = 88
+target-version = ["py311"]
+extend-exclude = '''
+/(
+    \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.11"
+# Pragmático a propósito: el objetivo de activarlo ahora es que CI detecte
+# errores REALES de tipos, no convertir la suite en una migración de anotaciones
+# de varias semanas. Endurecerlo (disallow_untyped_defs, strict) es un paso
+# posterior y deliberado, no un efecto colateral de esta tarea.
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+# Casi ninguna dependencia publica stubs (motor, web3, jmrtd…). Sin esto, el
+# 90% de la salida serían avisos de "falta el stub de X", que no dicen nada
+# sobre este código.
+ignore_missing_imports = true
+exclude = '(^|/)(\.venv|build|dist)/'
+
+[[tool.mypy.overrides]]
+# Los tests usan monkeypatch y dobles a propósito; comprobarlos con el mismo
+# rasero produce ruido sin encontrar defectos del producto.
+module = "tests.*"
+ignore_errors = true

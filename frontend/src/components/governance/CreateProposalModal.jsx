@@ -1,17 +1,22 @@
 /**
  * Create Proposal Modal Component
  * Modal form for creating new governance proposals
+ *
+ * Las opciones de categoría/duración se marcaban con clases Tailwind armadas
+ * por interpolación (`bg-${cat.color}-500/20`). Tailwind purga lo que no
+ * aparece literal en el código, así que esas clases nunca se generaban y la
+ * opción elegida no se distinguía de las demás. Ahora el estado activo usa
+ * clases reales del sistema cívico.
  */
-import React, { useState } from 'react';
-import { X, FileText, Clock, Tag, Send, AlertCircle } from 'lucide-react';
-import { Button } from '../ui/button';
+import React, { useState, useEffect } from 'react';
+import { X, FileText, Clock, Tag, Send, AlertCircle, Info } from 'lucide-react';
 import { governanceAPI } from '@/lib/api';
 
 const CATEGORIES = [
-    { value: 'general', label: 'General', color: 'cyan' },
-    { value: 'treasury', label: 'Tesorería', color: 'green' },
-    { value: 'membership', label: 'Membresía', color: 'purple' },
-    { value: 'technical', label: 'Técnico', color: 'orange' },
+    { value: 'general', label: 'General' },
+    { value: 'treasury', label: 'Tesorería' },
+    { value: 'membership', label: 'Membresía' },
+    { value: 'technical', label: 'Técnico' },
 ];
 
 const DURATIONS = [
@@ -28,6 +33,14 @@ const CreateProposalModal = ({ isOpen, onClose, walletAddress, onSuccess }) => {
     const [durationDays, setDurationDays] = useState(7);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+
+    // Cerrar con Escape: el diálogo se abría sin ninguna salida de teclado.
+    useEffect(() => {
+        if (!isOpen) return;
+        const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [isOpen, onClose]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -81,152 +94,159 @@ const CreateProposalModal = ({ isOpen, onClose, walletAddress, onSuccess }) => {
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            {/* Backdrop */}
+        <div className="civic-app fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'transparent', minHeight: 0 }}>
             <div
-                className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+                className="absolute inset-0"
+                style={{ background: 'rgba(11, 37, 69, 0.45)', backdropFilter: 'blur(2px)' }}
                 onClick={onClose}
             />
 
-            {/* Modal */}
-            <div className="relative w-full max-w-lg glass-dark rounded-xl border border-cyan-500/30 p-6 animate-in fade-in zoom-in-95 duration-200">
-                {/* Header */}
-                <div className="flex items-center justify-between mb-6">
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="nueva-propuesta-titulo"
+                className="civic-dialog relative w-full max-w-lg p-6 overflow-y-auto"
+                style={{ maxHeight: '90vh' }}
+            >
+                <div className="flex items-center justify-between gap-4 mb-5">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-cyan-500/20 flex items-center justify-center">
-                            <FileText className="w-5 h-5 text-cyan-400" />
-                        </div>
-                        <h2 className="text-xl font-bold text-white">Nueva Propuesta</h2>
+                        <span
+                            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                            style={{ background: '#EAF0FB' }}
+                        >
+                            <FileText className="w-5 h-5" style={{ color: '#003897' }} />
+                        </span>
+                        <h2 id="nueva-propuesta-titulo" className="civic-ink text-lg font-bold" style={{ fontFamily: 'Poppins, sans-serif' }}>
+                            Nueva propuesta
+                        </h2>
                     </div>
                     <button
                         onClick={onClose}
-                        className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors"
+                        aria-label="Cerrar"
+                        className="w-8 h-8 rounded-full flex items-center justify-center civic-muted"
+                        style={{ border: '1px solid #E5EBF5', background: '#fff' }}
                     >
-                        <X className="w-5 h-5 text-gray-400" />
+                        <X className="w-4 h-4" />
                     </button>
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
-                    {/* Title */}
                     <div>
-                        <label className="block text-sm text-gray-400 mb-2">
+                        <label htmlFor="propuesta-titulo" className="civic-label">
                             Título de la propuesta
                         </label>
                         <input
+                            id="propuesta-titulo"
                             type="text"
                             value={title}
                             onChange={(e) => setTitle(e.target.value)}
                             placeholder="Ej: Implementar sistema de recompensas"
-                            className="cyber-input w-full"
+                            className="civic-field"
                             maxLength={100}
                         />
-                        <div className="text-xs text-gray-500 mt-1 text-right">
-                            {title.length}/100
-                        </div>
+                        <div className="civic-help text-right">{title.length}/100</div>
                     </div>
 
-                    {/* Description */}
                     <div>
-                        <label className="block text-sm text-gray-400 mb-2">
+                        <label htmlFor="propuesta-desc" className="civic-label">
                             Descripción detallada
                         </label>
                         <textarea
+                            id="propuesta-desc"
                             value={description}
                             onChange={(e) => setDescription(e.target.value)}
-                            placeholder="Describe tu propuesta en detalle. Incluye objetivos, beneficios y plan de implementación..."
-                            className="cyber-input w-full h-32 resize-none"
+                            placeholder="Describe tu propuesta en detalle: objetivos, beneficios y plan de implementación."
+                            className="civic-field resize-none"
+                            style={{ height: 128 }}
                             maxLength={2000}
                         />
-                        <div className="text-xs text-gray-500 mt-1 text-right">
-                            {description.length}/2000
-                        </div>
+                        <div className="civic-help text-right">{description.length}/2000</div>
                     </div>
 
-                    {/* Category */}
-                    <div>
-                        <label className="block text-sm text-gray-400 mb-2">
+                    <fieldset>
+                        <legend className="civic-label">
                             <Tag className="w-4 h-4 inline mr-1" />
                             Categoría
-                        </label>
+                        </legend>
                         <div className="grid grid-cols-2 gap-2">
                             {CATEGORIES.map((cat) => (
                                 <button
                                     key={cat.value}
                                     type="button"
                                     onClick={() => setCategory(cat.value)}
-                                    className={`p-3 rounded-lg border transition-all ${category === cat.value
-                                            ? `bg-${cat.color}-500/20 border-${cat.color}-500/50 text-${cat.color}-400`
-                                            : 'bg-black/30 border-gray-700 text-gray-400 hover:border-gray-500'
-                                        }`}
+                                    aria-pressed={category === cat.value}
+                                    className={
+                                        'civic-btn ' +
+                                        (category === cat.value ? 'civic-btn-ghost' : 'civic-btn-quiet')
+                                    }
                                 >
                                     {cat.label}
                                 </button>
                             ))}
                         </div>
-                    </div>
+                    </fieldset>
 
-                    {/* Duration */}
-                    <div>
-                        <label className="block text-sm text-gray-400 mb-2">
+                    <fieldset>
+                        <legend className="civic-label">
                             <Clock className="w-4 h-4 inline mr-1" />
                             Duración de la votación
-                        </label>
+                        </legend>
                         <div className="grid grid-cols-4 gap-2">
                             {DURATIONS.map((d) => (
                                 <button
                                     key={d.days}
                                     type="button"
                                     onClick={() => setDurationDays(d.days)}
-                                    className={`p-2 rounded-lg border text-sm transition-all ${durationDays === d.days
-                                            ? 'bg-purple-500/20 border-purple-500/50 text-purple-400'
-                                            : 'bg-black/30 border-gray-700 text-gray-400 hover:border-gray-500'
-                                        }`}
+                                    aria-pressed={durationDays === d.days}
+                                    className={
+                                        'civic-btn civic-btn-sm ' +
+                                        (durationDays === d.days ? 'civic-btn-ghost' : 'civic-btn-quiet')
+                                    }
                                 >
                                     {d.label}
                                 </button>
                             ))}
                         </div>
-                    </div>
+                    </fieldset>
 
-                    {/* Error */}
                     {error && (
-                        <div className="flex items-center gap-2 text-red-400 text-sm p-3 bg-red-500/10 rounded-lg border border-red-500/30">
-                            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                        <div className="civic-note civic-note-error">
+                            <AlertCircle className="w-4 h-4" />
                             {error}
                         </div>
                     )}
 
-                    {/* Submit */}
-                    <div className="flex gap-3 pt-4">
-                        <Button
+                    <div className="flex gap-3 pt-2">
+                        <button
                             type="button"
                             onClick={onClose}
-                            variant="outline"
-                            className="flex-1 border-gray-600 text-gray-400"
+                            className="civic-btn civic-btn-quiet flex-1"
                         >
                             Cancelar
-                        </Button>
-                        <Button
+                        </button>
+                        <button
                             type="submit"
                             disabled={loading || !title || !description}
-                            className="flex-1 cyber-button-premium"
+                            className="civic-btn civic-btn-primary flex-1"
                         >
                             {loading ? (
-                                <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
+                                <span className="civic-spinner" style={{ borderTopColor: '#fff', borderColor: 'rgba(255,255,255,.4)' }} />
                             ) : (
                                 <>
-                                    <Send className="w-4 h-4 mr-2" />
-                                    Crear Propuesta
+                                    <Send className="w-4 h-4" />
+                                    Crear propuesta
                                 </>
                             )}
-                        </Button>
+                        </button>
                     </div>
                 </form>
 
-                {/* Info */}
-                <div className="mt-4 p-3 bg-black/30 rounded-lg text-xs text-gray-500">
-                    <p>💡 Una vez creada, la propuesta estará activa inmediatamente.</p>
-                    <p className="mt-1">Los miembros podrán votar durante el período establecido.</p>
+                <div className="civic-note civic-note-info mt-4">
+                    <Info className="w-4 h-4" />
+                    <span>
+                        La propuesta queda activa de inmediato y los miembros podrán votar
+                        durante el período que elijas.
+                    </span>
                 </div>
             </div>
         </div>

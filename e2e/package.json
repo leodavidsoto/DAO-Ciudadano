@@ -1,0 +1,23 @@
+{
+  "name": "dao-ciudadano-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "ethers": "6.13.4",
+    "maci-domainobjs": "2.5.0",
+    "poseidon-lite": "0.3.0",
+    "snarkjs": "0.7.6",
+    "viem": "2.45.0"
+  },
+  "overrides": {
+    "underscore": "1.13.8",
+    "ws": "8.21.1"
+  }
+}

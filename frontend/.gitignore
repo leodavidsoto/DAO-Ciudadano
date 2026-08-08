@@ -11,6 +11,9 @@
 # production
 /build
 
+# generated ZK assets (copied from the canonical circuits/build artifacts)
+/public/zk/
+
 # misc
 .DS_Store
 .env.local

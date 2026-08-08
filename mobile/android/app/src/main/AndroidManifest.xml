@@ -2,6 +2,18 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Lectura del chip de la cédula (ROADMAP 4.2).
+         `react-native-nfc-manager` ya aporta este permiso por manifest
+         merging, así que declararlo aquí no arregla nada hoy: lo hace
+         explícito. `PassportReaderModule` usa NfcAdapter directamente y
+         seguiría necesitándolo aunque esa librería se quitara del proyecto. -->
+    <uses-permission android:name="android.permission.NFC" />
+    <!-- required=false a propósito: la app sigue siendo instalable y útil en
+         teléfonos sin NFC (gobernanza, wallet); solo la verificación de
+         identidad queda fuera de alcance, y el módulo lo reporta con
+         E_NFC_UNAVAILABLE en vez de fallar de forma opaca. -->
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
+
     <application
       android:name=".MainApplication"
       android:label="@string/app_name"

@@ -3,19 +3,13 @@
  */
 import React, { useState, useEffect } from 'react';
 import { Cpu, Zap, Sparkles } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { CyberPanel, CyberLoader, SuccessDisplay, DemoBadge } from './CyberUI';
+import AccountAbstractionProgress from './AccountAbstractionProgress';
 import { HolographicCard } from '@/components/effects';
 import { useOnboarding } from '@/context';
-
-const MINT_STAGES = [
-    { text: 'VERIFICANDO IDENTIDAD...', progress: 20 },
-    { text: 'PREPARANDO TRANSACCIÓN...', progress: 40 },
-    { text: 'FIRMANDO CONTRATO...', progress: 60 },
-    { text: 'MINTEANDO SBT...', progress: 80 },
-    { text: 'CONFIRMANDO EN BLOCKCHAIN...', progress: 95 },
-];
 
 // Confetti burst effect
 const Confetti = ({ show }) => {
@@ -63,118 +57,141 @@ const Confetti = ({ show }) => {
     );
 };
 
-// Circular progress ring
-const MintProgressRing = ({ progress, stage }) => {
-    const radius = 52;
-    const circumference = 2 * Math.PI * radius;
-    const offset = circumference - (progress / 100) * circumference;
+const ZK_LOADING_STATES = Object.freeze({
+    enrolling: {
+        text: 'VALIDANDO CREDENCIAL ZK…',
+        detail: 'El grant de un solo uso se intercambia por una credencial ligada a esta wallet.',
+    },
+    generating: {
+        text: 'GENERANDO PRUEBA ZK LOCALMENTE…',
+        detail: 'El secreto de identidad y la ruta Merkle permanecen en este navegador.',
+    },
+    ready: {
+        text: 'PRUEBA ZK VERIFICADA LOCALMENTE…',
+        detail: 'Preparando la autorización subsidiada que firmarás en MetaMask.',
+    },
+});
 
-    return (
-        <div className="mint-animation-container">
-            <div className="mint-progress-ring">
-                <svg width="120" height="120" viewBox="0 0 120 120">
-                    <defs>
-                        <linearGradient id="mintGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                            <stop offset="0%" stopColor="#00FFFF" />
-                            <stop offset="50%" stopColor="#FF00FF" />
-                            <stop offset="100%" stopColor="#39FF14" />
-                        </linearGradient>
-                    </defs>
-                    <circle className="bg" cx="60" cy="60" r={radius} />
-                    <circle
-                        className="progress"
-                        cx="60"
-                        cy="60"
-                        r={radius}
-                        strokeDasharray={circumference}
-                        strokeDashoffset={offset}
-                    />
-                </svg>
-                <div className="absolute inset-0 flex items-center justify-center">
-                    <Cpu className="w-10 h-10 text-cyan-400 icon-pulse" />
-                </div>
-            </div>
-            <div className="mint-stage-text">{stage}</div>
-        </div>
-    );
-};
+const DEFAULT_LOADING_STATE = Object.freeze({
+    text: 'PROCESANDO EMISIÓN NO CUSTODIAL…',
+    detail: 'La operación solo continuará si todas las verificaciones locales son válidas.',
+});
 
 const MintStep = () => {
-    const { loading, mint, wallet, mintSBT } = useOnboarding();
-    const [mintProgress, setMintProgress] = useState(0);
-    const [currentStage, setCurrentStage] = useState('');
+    const navigate = useNavigate();
+    const {
+        loading,
+        mint,
+        wallet,
+        identity,
+        mintSBT,
+        setStep,
+        zk,
+        accountAbstraction,
+    } = useOnboarding();
     const [showConfetti, setShowConfetti] = useState(false);
-
-    // Simulate minting stages
-    useEffect(() => {
-        if (loading) {
-            let stageIndex = 0;
-            setMintProgress(MINT_STAGES[0].progress);
-            setCurrentStage(MINT_STAGES[0].text);
-
-            const interval = setInterval(() => {
-                stageIndex++;
-                if (stageIndex < MINT_STAGES.length) {
-                    setMintProgress(MINT_STAGES[stageIndex].progress);
-                    setCurrentStage(MINT_STAGES[stageIndex].text);
-                }
-            }, 600);
-
-            return () => clearInterval(interval);
-        }
-    }, [loading]);
+    const hasVerifiedIdentity = Boolean(identity);
+    const loadingState = ZK_LOADING_STATES[zk?.status] || DEFAULT_LOADING_STATE;
+    const accountAbstractionStatus = accountAbstraction?.status || 'idle';
+    const hasAccountAbstractionProgress = !['idle', 'error'].includes(
+        accountAbstractionStatus
+    );
+    const showAccountAbstractionProgress = hasAccountAbstractionProgress && (
+        !mint.token_id || loading || accountAbstractionStatus === 'bundler_pending'
+    );
 
     // Show confetti when mint succeeds
     useEffect(() => {
         if (mint.token_id && !loading) {
-            setMintProgress(100);
-            setCurrentStage('¡COMPLETADO!');
             setShowConfetti(true);
         }
     }, [mint.token_id, loading]);
 
     return (
         <CyberPanel
-            title="GENERACIÓN DE NFT CIUDADANO"
-            description="Minteando Soulbound Token • Contrato inteligente ejecutándose"
+            title={hasVerifiedIdentity ? 'CREACIÓN DE CREDENCIAL CIUDADANA' : 'LÍMITE DEL PILOTO ALCANZADO'}
+            description={hasVerifiedIdentity
+                ? 'El resultado indicará si existe una transacción on-chain verificable'
+                : 'Los recorridos disponibles no acreditan identidad y no habilitan una membresía nueva'}
             icon={<Cpu className="h-8 w-8" />}
         >
-            <DemoBadge label="MODO DEMO — el SBT aún no se mintea on-chain (registro solo en base de datos)" />
             <Confetti show={showConfetti} />
 
             <div className="flex flex-col items-center gap-6">
                 {/* Pre-mint state */}
-                {!loading && !mint.token_id && (
+                {!loading && !mint.token_id && !hasAccountAbstractionProgress && (
                     <div className="text-center">
                         <div className="w-40 h-40 mx-auto mb-6 border-2 border-yellow-500/50 rounded-2xl flex items-center justify-center bg-gradient-to-br from-yellow-500/10 to-orange-500/10 hover-glow transition-all duration-300">
                             <Zap className="w-16 h-16 text-yellow-400 animate-pulse" />
                         </div>
-                        <p className="text-gray-400 text-sm mb-6 font-mono">
-                            Tu SBT ciudadano será mintado en la blockchain
-                        </p>
-                        <Button
-                            onClick={mintSBT}
-                            className="cyber-button-premium group"
-                        >
-                            <Sparkles className="w-4 h-4 mr-2 group-hover:animate-spin" />
-                            MINTEAR SBT CIUDADANO
-                        </Button>
+                        {hasVerifiedIdentity ? (
+                            <>
+                                <p className="text-gray-400 text-sm mb-6 font-mono">
+                                    MetaMask te pedirá una autorización personal desde tu cuenta inteligente.
+                                    No es una transacción tradicional. Si el patrocinio estatal está disponible,
+                                    el costo de red se cubrirá y no necesitarás ETH.
+                                </p>
+                                <Button
+                                    onClick={mintSBT}
+                                    className="civic-btn civic-btn-primary civic-aa-authorize group"
+                                    aria-label="AUTORIZAR EMISIÓN (SUBSIDIADA POR EL ESTADO)"
+                                >
+                                    <Sparkles className="w-4 h-4 mr-2" />
+                                    <span aria-hidden="true">
+                                        Autorizar Emisión (Subsidiada por el Estado)
+                                    </span>
+                                </Button>
+                            </>
+                        ) : (
+                            <div className="max-w-xl rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-5">
+                                <p className="font-mono text-sm font-semibold text-yellow-300">
+                                    Demostración completada hasta el límite seguro disponible.
+                                </p>
+                                <p className="mt-3 text-sm text-gray-400">
+                                    No se creó una membresía, NFT ni transacción. Para continuar haría falta
+                                    una credencial identity firmada y su ruta Merkle emitidas por el servidor; este cliente no las simula.
+                                </p>
+                                <div className="mt-5 flex flex-wrap justify-center gap-3">
+                                    <Button
+                                        onClick={() => setStep('method')}
+                                        variant="outline"
+                                        className="border-yellow-500/40 text-yellow-200"
+                                    >
+                                        ELEGIR OTRO RECORRIDO
+                                    </Button>
+                                    <Button onClick={() => navigate('/')} className="cyber-button-premium">
+                                        FINALIZAR Y VOLVER AL INICIO
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
 
                 {/* Minting progress */}
-                {loading && (
-                    <MintProgressRing progress={mintProgress} stage={currentStage} />
+                {loading && !hasAccountAbstractionProgress && (
+                    <CyberLoader
+                        className="civic-loading"
+                        text={loadingState.text}
+                        detail={loadingState.detail}
+                    />
+                )}
+
+                {showAccountAbstractionProgress && (
+                    <AccountAbstractionProgress state={accountAbstraction} />
                 )}
 
                 {/* Success state with holographic card */}
                 {mint.token_id && !loading && (
                     <div className="flex flex-col items-center gap-6">
-                        <HolographicCard
-                            tokenId={mint.token_id}
-                            walletAddress={wallet.address}
-                            assuranceLevel="AL2"
-                        />
+                        {mint.tx_hash ? (
+                            <HolographicCard
+                                tokenId={mint.token_id}
+                                walletAddress={wallet.address}
+                            />
+                        ) : (
+                            <DemoBadge label="REGISTRO PILOTO OFF-CHAIN — no es un NFT ni un SBT en blockchain" />
+                        )}
 
                         <SuccessDisplay>
                             <div className="flex flex-wrap justify-center gap-2 mt-2">

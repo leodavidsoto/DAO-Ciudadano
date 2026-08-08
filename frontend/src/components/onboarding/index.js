@@ -9,6 +9,6 @@ export { default as LivenessStep } from './LivenessStep';
 export { default as ConsentStep } from './ConsentStep';
 export { default as WalletStep } from './WalletStep';
 export { default as MintStep } from './MintStep';
+export { default as AccountAbstractionProgress } from './AccountAbstractionProgress';
 export { default as SuccessStep } from './SuccessStep';
 export { default as DashboardStep } from './DashboardStep';
-

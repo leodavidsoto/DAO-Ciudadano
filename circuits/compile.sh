@@ -1,77 +1,105 @@
 #!/usr/bin/env bash
-#
-# Compila verify_identity.circom y genera las llaves Groth16.
-#
-# Requisitos (no se instalan solos):
-#   - circom 2.x   -> https://docs.circom.io/getting-started/installation/
-#   - snarkjs      -> npm install -g snarkjs
-#   - circomlib    -> npm install   (en este directorio)
-#
-# Uso:  bash circuits/compile.sh
-#
-# NO ejecuta despliegues. Solo produce artefactos locales.
 set -euo pipefail
 
+# Rebuilds the development Groth16 artifacts for verify_identity.circom.
+# This is an integration ceremony, not the production multi-party ceremony.
+
 CIRCUIT="verify_identity"
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD="$DIR/build"
-# Potencia del "powers of tau". 12 alcanza de sobra para este circuito
-# (unos pocos miles de restricciones). Súbelo si el circuito crece.
-PTAU_POWER=12
+CIRCUIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_DIR="$CIRCUIT_DIR/build"
+PTAU_POWER=15
+CEREMONY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dao-ciudadana-zk.XXXXXX")"
+COMPILED_DIR="$CEREMONY_DIR/compiled"
 
-command -v circom  >/dev/null || { echo "ERROR: falta circom. Ver https://docs.circom.io"; exit 1; }
-command -v snarkjs >/dev/null || { echo "ERROR: falta snarkjs. Corre: npm install -g snarkjs"; exit 1; }
-[ -d "$DIR/node_modules/circomlib" ] || { echo "ERROR: falta circomlib. Corre: (cd circuits && npm install)"; exit 1; }
+cleanup() {
+    rm -rf "$CEREMONY_DIR"
+}
+trap cleanup EXIT
 
-mkdir -p "$BUILD"
-cd "$DIR"
+cd "$CIRCUIT_DIR"
+mkdir -p "$BUILD_DIR"
+mkdir -p "$COMPILED_DIR"
 
-echo "==> 1/6 Compilando el circuito"
-circom "$CIRCUIT.circom" \
-    --r1cs --wasm --sym \
+echo "==> 1/10 Compile and inspect circuit"
+npx --no-install circom2 "$CIRCUIT.circom" \
+    --r1cs --wasm --sym --inspect \
     -l node_modules \
-    -o "$BUILD"
+    -o "$COMPILED_DIR"
 
-echo "==> 2/6 Información del circuito (mira el número de restricciones: define el costo de gas)"
-snarkjs r1cs info "$BUILD/$CIRCUIT.r1cs"
+echo "==> 2/10 Inspect R1CS"
+npx --no-install snarkjs r1cs info "$COMPILED_DIR/$CIRCUIT.r1cs"
 
-# El .ptau es la ceremonia universal (trusted setup fase 1). Es pesado y NO
-# va al repositorio: se descarga o se regenera. Ver .gitignore.
-PTAU="$BUILD/pot${PTAU_POWER}_final.ptau"
-if [ ! -f "$PTAU" ]; then
-    echo "==> 3/6 Generando powers of tau (solo la primera vez, tarda)"
-    snarkjs powersoftau new bn128 "$PTAU_POWER" "$BUILD/pot_0000.ptau" -v
-    snarkjs powersoftau contribute "$BUILD/pot_0000.ptau" "$BUILD/pot_0001.ptau" \
-        --name="contribucion local dao-ciudadana" -v -e="$(head -c 32 /dev/urandom | base64)"
-    snarkjs powersoftau prepare phase2 "$BUILD/pot_0001.ptau" "$PTAU" -v
-else
-    echo "==> 3/6 Reutilizando powers of tau existente"
-fi
+echo "==> 3/10 Create development Powers of Tau"
+npx --no-install snarkjs powersoftau new \
+    bn128 "$PTAU_POWER" "$CEREMONY_DIR/pot15_0000.ptau"
+npx --no-install snarkjs powersoftau contribute \
+    "$CEREMONY_DIR/pot15_0000.ptau" \
+    "$CEREMONY_DIR/pot15_0001.ptau" \
+    --name="dao-ciudadana-development-phase1" \
+    -e="$(openssl rand -hex 64)"
+npx --no-install snarkjs powersoftau prepare phase2 \
+    "$CEREMONY_DIR/pot15_0001.ptau" \
+    "$CEREMONY_DIR/pot15_final.ptau"
 
-echo "==> 4/6 Setup Groth16 (fase 2)"
-snarkjs groth16 setup "$BUILD/$CIRCUIT.r1cs" "$PTAU" "$BUILD/${CIRCUIT}_0000.zkey"
+echo "==> 4/10 Circuit-specific Groth16 setup"
+npx --no-install snarkjs groth16 setup \
+    "$COMPILED_DIR/$CIRCUIT.r1cs" \
+    "$CEREMONY_DIR/pot15_final.ptau" \
+    "$CEREMONY_DIR/${CIRCUIT}_0000.zkey"
 
-# ADVERTENCIA: esta contribución es de UNA sola parte, hecha en esta máquina.
-# Para producción hace falta una ceremonia multi-parte real: si una sola
-# persona conoce el "toxic waste", puede fabricar pruebas falsas.
-snarkjs zkey contribute "$BUILD/${CIRCUIT}_0000.zkey" "$BUILD/${CIRCUIT}_final.zkey" \
-    --name="contribucion local dao-ciudadana" -v -e="$(head -c 32 /dev/urandom | base64)"
+echo "==> 5/10 Add a development Phase 2 contribution"
+npx --no-install snarkjs zkey contribute \
+    "$CEREMONY_DIR/${CIRCUIT}_0000.zkey" \
+    "$CEREMONY_DIR/${CIRCUIT}_final.zkey" \
+    --name="dao-ciudadana-development-phase2" \
+    -e="$(openssl rand -hex 64)"
 
-echo "==> 5/6 Exportando la llave de verificación"
-snarkjs zkey export verificationkey "$BUILD/${CIRCUIT}_final.zkey" "$BUILD/verification_key.json"
+echo "==> 6/10 Verify ceremony artifacts"
+npx --no-install snarkjs powersoftau verify "$CEREMONY_DIR/pot15_final.ptau"
+npx --no-install snarkjs zkey verify \
+    "$COMPILED_DIR/$CIRCUIT.r1cs" \
+    "$CEREMONY_DIR/pot15_final.ptau" \
+    "$CEREMONY_DIR/${CIRCUIT}_final.zkey"
 
-echo "==> 6/6 Exportando el contrato verificador en Solidity"
-snarkjs zkey export solidityverifier "$BUILD/${CIRCUIT}_final.zkey" \
-    "$DIR/../contracts/contracts/Verifier.sol"
+echo "==> 7/10 Export verification key and Solidity verifier"
+npx --no-install snarkjs zkey export verificationkey \
+    "$CEREMONY_DIR/${CIRCUIT}_final.zkey" \
+    "$CEREMONY_DIR/verification_key.json"
+npx --no-install snarkjs zkey export solidityverifier \
+    "$CEREMONY_DIR/${CIRCUIT}_final.zkey" \
+    "$CEREMONY_DIR/Verifier.sol"
+# snarkjs' template emits whitespace-only padding on several lines. Removing
+# it is formatting-only and keeps repository whitespace checks reproducible.
+perl -pi -e 's/[ \t]+$//' "$CEREMONY_DIR/Verifier.sol"
 
-cat <<EOF
+cp "$CEREMONY_DIR/${CIRCUIT}_final.zkey" \
+    "$BUILD_DIR/${CIRCUIT}_final.zkey"
+cp "$CEREMONY_DIR/verification_key.json" \
+    "$BUILD_DIR/verification_key.json"
+cp "$CEREMONY_DIR/Verifier.sol" \
+    "$CIRCUIT_DIR/../contracts/contracts/Verifier.sol"
+mkdir -p "$BUILD_DIR/${CIRCUIT}_js"
+cp "$COMPILED_DIR/${CIRCUIT}.r1cs" \
+    "$BUILD_DIR/${CIRCUIT}.r1cs"
+cp "$COMPILED_DIR/${CIRCUIT}.sym" \
+    "$BUILD_DIR/${CIRCUIT}.sym"
+cp "$COMPILED_DIR/${CIRCUIT}_js/${CIRCUIT}.wasm" \
+    "$BUILD_DIR/${CIRCUIT}_js/${CIRCUIT}.wasm"
+cp "$COMPILED_DIR/${CIRCUIT}_js/generate_witness.js" \
+    "$BUILD_DIR/${CIRCUIT}_js/generate_witness.js"
+cp "$COMPILED_DIR/${CIRCUIT}_js/witness_calculator.js" \
+    "$BUILD_DIR/${CIRCUIT}_js/witness_calculator.js"
 
-Listo. Artefactos en circuits/build/:
-  - ${CIRCUIT}_js/${CIRCUIT}.wasm   -> va empaquetado en el frontend (el prover lo necesita)
-  - ${CIRCUIT}_final.zkey           -> va empaquetado en el frontend (llave de prueba)
-  - verification_key.json           -> para verificar off-chain
-  - contracts/contracts/Verifier.sol -> contrato verificador generado
+echo "==> 8/10 Generate a real integration proof fixture"
+node "$CIRCUIT_DIR/scripts/generate-test-fixture.js"
 
-RECORDATORIO: el .zkey de esta ceremonia local NO sirve para producción
-(un solo participante). Antes de mainnet hace falta una ceremonia multi-parte.
-EOF
+echo "==> 9/10 Hash the exact client/verifier artifacts"
+node "$CIRCUIT_DIR/scripts/generate-artifact-manifest.js"
+
+echo "==> 10/10 Done"
+echo "Development artifacts:"
+echo "  circuits/build/${CIRCUIT}_js/${CIRCUIT}.wasm"
+echo "  circuits/build/${CIRCUIT}_final.zkey"
+echo "  circuits/build/verification_key.json"
+echo "  contracts/contracts/Verifier.sol"
+echo "WARNING: run a documented independent multi-party ceremony before production."

@@ -7,6 +7,8 @@ interface IMembershipView {
     function hasMembership(address member) external view returns (bool);
 
     function getMembershipToken(address member) external view returns (uint256);
+
+    function isNullifierUsed(bytes32 nullifierHash) external view returns (bool);
 }
 
 /**
@@ -18,7 +20,13 @@ interface IMembershipView {
  */
 contract ReceiverProbe is IERC721Receiver {
     bool public sawMembershipDuringCallback;
+    bool public sawNullifierUsedDuringCallback;
     uint256 public tokenIdDuringCallback;
+    bytes32 public expectedNullifier;
+
+    function setExpectedNullifier(bytes32 nullifierHash) external {
+        expectedNullifier = nullifierHash;
+    }
 
     function onERC721Received(
         address,
@@ -28,6 +36,9 @@ contract ReceiverProbe is IERC721Receiver {
     ) external override returns (bytes4) {
         sawMembershipDuringCallback = IMembershipView(msg.sender).hasMembership(address(this));
         tokenIdDuringCallback = IMembershipView(msg.sender).getMembershipToken(address(this));
+        sawNullifierUsedDuringCallback = IMembershipView(msg.sender).isNullifierUsed(
+            expectedNullifier
+        );
         return IERC721Receiver.onERC721Received.selector;
     }
 }

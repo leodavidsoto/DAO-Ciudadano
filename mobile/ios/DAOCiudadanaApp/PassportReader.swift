@@ -1,0 +1,420 @@
+import CoreNFC
+import Foundation
+import NFCPassportReader
+import React
+
+/**
+ * Puente eMRTD de iOS.
+ *
+ * `NFCPassportReader` es el único dueño de la sesión CoreNFC. Antes este
+ * puente abría una sesión y, después de detectar el tag, pedía a la librería
+ * que abriera una segunda. CoreNFC solo admite una sesión activa, por lo que
+ * ese camino no podía completar una lectura real.
+ *
+ * La autenticación pasiva falla cerrada. Una lectura solo se considera una
+ * cédula chilena verificada cuando:
+ *
+ * 1. los hashes de los data groups coinciden con EF.SOD;
+ * 2. la firma de EF.SOD verifica con el Document Signer;
+ * 3. el Document Signer encadena con una CSCA empaquetada por la aplicación;
+ * 4. el documento declara a Chile como Estado emisor.
+ *
+ * La Master List nunca se obtiene desde el documento. El build de
+ * distribución la instala como `cscaMasterList.pem` después de verificar su
+ * huella SHA-256 (ver `scripts/install-csca-master-list.sh`). Si el recurso no
+ * existe, el lector ni siquiera inicia y devuelve un error explícito.
+ *
+ * Autenticación Activa (ICAO 9303-11 §6.1)
+ * ────────────────────────────────────────
+ * La Pasiva demuestra que Chile firmó esos datos; no demuestra que el chip
+ * esté aquí. Cuando el servidor manda un desafío se le pasa a la librería
+ * (`aaChallenge:`), que lo envía en INTERNAL AUTHENTICATE en vez de generar
+ * uno propio. Esa sustitución es el anti-replay entero: un desafío que elija
+ * el teléfono se captura junto a su firma y se reenvía.
+ *
+ * La firma NO se verifica aquí. `passport.activeAuthenticationPassed` existe y
+ * se ignora a propósito: viaja la firma en crudo y decide el backend, que es
+ * quien conserva el desafío original y quien comprueba que la clave de DG15
+ * esté declarada en el EF.SOD.
+ *
+ * Si el documento no declara DG15 en EF.COM, la librería no lo lee y el
+ * resultado dice `supported: false` con su motivo. No se finge una firma.
+ */
+@objc(PassportReader)
+final class PassportReaderBridge: NSObject {
+  private let scanLock = NSLock()
+  private var scanInFlight = false
+  private var activeReader: NFCPassportReader.PassportReader?
+
+  /// ICAO 9303-11 §6.1: el desafío de la Autenticación Activa son 8 bytes.
+  private static let activeAuthChallengeBytes = 8
+
+  @objc(startPACESession:dob:doe:aaChallenge:withResolver:withRejecter:)
+  func startPACESession(
+    _ can: String,
+    dob: String,
+    doe: String,
+    aaChallenge: String,
+    resolve: @escaping RCTPromiseResolveBlock,
+    reject: @escaping RCTPromiseRejectBlock
+  ) {
+    // Cadena vacía = esta lectura no lleva Autenticación Activa. El desafío
+    // NUNCA se genera aquí: uno elegido por el cliente no prueba presencia del
+    // chip, porque quien captura la lectura captura también el par.
+    var challenge: [UInt8]?
+    let trimmedChallenge = aaChallenge.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmedChallenge.isEmpty {
+      guard let decoded = Data(base64Encoded: trimmedChallenge),
+            decoded.count == Self.activeAuthChallengeBytes
+      else {
+        reject(
+          "E_INVALID_AA_CHALLENGE",
+          "El desafío de Autenticación Activa debe venir en base64 y medir "
+            + "\(Self.activeAuthChallengeBytes) bytes.",
+          nil
+        )
+        return
+      }
+      challenge = [UInt8](decoded)
+    }
+
+    let normalizedCan = can.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    let canLength = normalizedCan.utf8.count
+    let isAlphanumeric = normalizedCan.utf8.allSatisfy { byte in
+      (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+    }
+    guard canLength >= 6 && canLength <= 15 && isAlphanumeric else {
+      reject(
+        "E_INVALID_CAN",
+        "El CAN o Número de Documento debe tener entre 6 y 15 caracteres alfanuméricos.",
+        nil
+      )
+      return
+    }
+
+    guard let masterListURL = Self.bundledMasterListURL() else {
+      reject(
+        "E_CSCA_MASTER_LIST_MISSING",
+        "Esta versión no incluye una Master List CSCA autenticada; no puede verificar cédulas.",
+        nil
+      )
+      return
+    }
+
+    guard NFCTagReaderSession.readingAvailable else {
+      reject(
+        "E_NFC_UNAVAILABLE",
+        "Este dispositivo no puede leer chips NFC de documentos.",
+        nil
+      )
+      return
+    }
+
+    guard beginScan() else {
+      reject(
+        "E_SCAN_IN_PROGRESS",
+        "Ya hay una lectura de cédula en curso.",
+        nil
+      )
+      return
+    }
+
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.endScan() }
+
+      do {
+        // Inyectar el ancla ANTES de abrir CoreNFC hace que la propia lectura
+        // ejecute `verifyPassport(masterListURL:)` sobre el modelo resultante.
+        let reader = NFCPassportReader.PassportReader(masterListURL: masterListURL)
+        self.setActiveReader(reader)
+        // DG15 (clave del chip) y DG14 (que declara el hash cuando firma con
+        // ECDSA) solo se piden si hay Autenticación Activa: leer archivos que
+        // nadie va a usar alarga la lectura y da más ocasiones de que la
+        // cédula se despegue.
+        var tags: [DataGroupId] = [.DG1, .DG2, .SOD]
+        if challenge != nil {
+          tags.append(contentsOf: [.DG14, .DG15])
+        }
+        let passport = try await reader.readPassport(
+          mrzKey: normalizedCan,
+          tags: tags,
+          aaChallenge: challenge,
+          paceKeyReference: 0x02,
+          allowBACFallback: false
+        )
+
+        // Repetir la verificación de forma explícita mantiene esta frontera
+        // segura aunque una versión futura de la librería deje de hacerla al
+        // final de `readPassport`.
+        passport.verifyPassport(masterListURL: masterListURL)
+
+        let hashesMatch = passport.passportDataNotTampered
+        let sodSignatureValid = passport.documentSigningCertificateVerified
+        let certificateChainTrusted = passport.passportCorrectlySigned
+        let paceEstablished: Bool
+        switch passport.PACEStatus {
+        case .success:
+          paceEstablished = true
+        default:
+          paceEstablished = false
+        }
+        let requiredDataGroupsPresent = [DataGroupId.DG1, .DG2, .SOD]
+          .allSatisfy({ passport.dataGroupsRead[$0] != nil })
+        let issuingState = passport.issuingAuthority
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+          .uppercased()
+        let issuingStateIsChile = issuingState == "CHL"
+        let documentProfileIsIdentityCard = passport.documentType
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+          .uppercased()
+          .hasPrefix("I")
+        let trustAnchorsInstalled = Self.certificateCount(in: masterListURL)
+        let countrySigningCertificate = passport.countrySigningCertificate
+        let countrySigningCertificateSubject =
+          countrySigningCertificate?.getSubjectName() ?? ""
+        let countrySigningCertificateIsChile =
+          Self.isApprovedChileanCSCASubject(countrySigningCertificateSubject)
+        let documentNotExpired = Self.isUnexpiredMRZDate(passport.documentExpiryDate)
+
+        // `documentSigningCertificateVerified` forma parte obligatoria del
+        // veredicto. Una cadena válida no compensa una firma SOD inválida, ni
+        // una firma interna válida compensa una cadena sin CSCA propia.
+        let passed = hashesMatch
+          && sodSignatureValid
+          && certificateChainTrusted
+          && paceEstablished
+          && requiredDataGroupsPresent
+          && issuingStateIsChile
+          && documentProfileIsIdentityCard
+          && trustAnchorsInstalled > 0
+          && countrySigningCertificateIsChile
+          && documentNotExpired
+
+        var failures: [String] = []
+        if !hashesMatch {
+          failures.append(
+            "El contenido de algún data group no coincide con su hash firmado."
+          )
+        }
+        if !sodSignatureValid {
+          failures.append(
+            "La firma de EF.SOD no verifica con el certificado Document Signer."
+          )
+        }
+        if !certificateChainTrusted {
+          failures.append(
+            "El Document Signer no encadena con una CSCA instalada por la aplicación."
+          )
+        }
+        if !paceEstablished {
+          failures.append(
+            "PACE-CAN no se estableció; no se acepta el fallback BAC como acreditación de cédula."
+          )
+        }
+        if !requiredDataGroupsPresent {
+          failures.append(
+            "La lectura no contiene DG1, DG2 y EF.SOD completos."
+          )
+        }
+        if !issuingStateIsChile {
+          failures.append(
+            "El documento leído no declara a Chile como Estado emisor."
+          )
+        }
+        if !documentProfileIsIdentityCard {
+          failures.append(
+            "El chip no declara un perfil de documento de identidad admitido."
+          )
+        }
+        if trustAnchorsInstalled < 1 {
+          failures.append(
+            "La aplicación no tiene anclas CSCA instaladas."
+          )
+        }
+        if !countrySigningCertificateIsChile {
+          failures.append(
+            "La cadena no termina en una CSCA chilena aprobada del Registro Civil."
+          )
+        }
+        if !documentNotExpired {
+          failures.append(
+            "La cédula está vencida o su fecha de expiración no es válida."
+          )
+        }
+
+        var data: [String: Any] = [:]
+        if passed {
+          data = [
+            "documentNumber": passport.documentNumber,
+            "firstName": passport.firstName,
+            "lastName": passport.lastName,
+            "dateOfBirth": passport.dateOfBirth,
+            "dateOfExpiry": passport.documentExpiryDate,
+            "nationality": passport.nationality,
+            "issuingState": passport.issuingAuthority,
+            "sex": passport.gender,
+          ]
+          if let personalNumber = passport.personalNumber, !personalNumber.isEmpty {
+            data["personalNumber"] = personalNumber
+          }
+        }
+
+        let verification: [String: Any] = [
+          "passed": passed,
+          "dataGroupHashesMatch": hashesMatch,
+          "sodSignatureValid": sodSignatureValid,
+          "certificateChainTrusted": certificateChainTrusted,
+          "paceEstablished": paceEstablished,
+          "requiredDataGroupsPresent": requiredDataGroupsPresent,
+          "issuingStateIsChile": issuingStateIsChile,
+          "documentProfileIsIdentityCard": documentProfileIsIdentityCard,
+          "documentNotExpired": documentNotExpired,
+          "trustAnchorsInstalled": trustAnchorsInstalled,
+          "countrySigningCertificateIsChile": countrySigningCertificateIsChile,
+          "countrySigningCertificateSubject": countrySigningCertificateSubject,
+          "documentSigner": passport.documentSigningCertificate?.getSubjectName() ?? "",
+          "documentSignerIssuer": passport.documentSigningCertificate?.getIssuerName() ?? "",
+          "failures": failures,
+        ]
+
+        // Archivos EN CRUDO para que el backend repita la Autenticación Pasiva
+        // por su cuenta: no acepta veredictos del cliente. Se usa `.data` y no
+        // `.body` porque el hash del SOD cubre el data group completo, con su
+        // cabecera. Solo viajan si la verificación local pasó.
+        var files: [String: String] = [:]
+        if passed {
+          // DG15/DG14 solo aparecen si de verdad se leyeron. Un DG15 ausente
+          // tiene que llegar al backend como ausente, no como cadena vacía: su
+          // decodificador estricto la tomaría por un archivo corrupto.
+          let candidates: [(String, DataGroupId)] = [
+            ("sod", .SOD), ("dg1", .DG1), ("dg2", .DG2), ("dg14", .DG14), ("dg15", .DG15),
+          ]
+          for (key, tag) in candidates {
+            if let raw = passport.dataGroupsRead[tag]?.data {
+              files[key] = Data(raw).base64EncodedString()
+            }
+          }
+        }
+
+        // `activeAuthenticationPassed` de la librería se ignora a propósito:
+        // el veredicto lo da el backend sobre estos bytes. Lo que se informa
+        // aquí es qué ocurrió, no si estuvo bien.
+        let aaSupported = passport.activeAuthenticationSupported
+        let aaSignature = passport.activeAuthenticationSignature
+        let aaPerformed = challenge != nil && !aaSignature.isEmpty
+        var activeAuthentication: [String: Any] = [
+          "requested": challenge != nil,
+          "supported": aaSupported,
+          "performed": aaPerformed,
+        ]
+        if aaPerformed && passed {
+          activeAuthentication["signature"] = Data(aaSignature).base64EncodedString()
+        }
+        if challenge == nil {
+          activeAuthentication["reason"] =
+            "El servidor no pidió Autenticación Activa en esta lectura."
+        } else if !aaSupported {
+          activeAuthentication["reason"] =
+            "El documento no incluye EF.DG15: no admite Autenticación Activa."
+        } else if !aaPerformed {
+          activeAuthentication["reason"] =
+            "El chip no respondió a INTERNAL AUTHENTICATE."
+        }
+
+        resolve([
+          "identityVerified": passed,
+          "data": data,
+          "files": files,
+          "verification": verification,
+          "activeAuthentication": activeAuthentication,
+        ])
+      } catch {
+        reject(
+          "E_DOCUMENT_READ_FAILED",
+          "No se pudo leer y verificar la cédula. Revisa el CAN y mantén el documento apoyado.",
+          error
+        )
+      }
+    }
+  }
+
+  @objc(cancelPACESession)
+  func cancelPACESession() {
+    scanLock.lock()
+    let reader = activeReader
+    scanLock.unlock()
+    Task { @MainActor in
+      reader?.cancelPassportRead()
+    }
+  }
+
+  @objc
+  static func requiresMainQueueSetup() -> Bool {
+    return false
+  }
+
+  static func bundledMasterListURL() -> URL? {
+    return Bundle.main.url(forResource: "cscaMasterList", withExtension: "pem")
+  }
+
+  private static func certificateCount(in url: URL) -> Int {
+    guard let contents = try? String(contentsOf: url, encoding: .utf8) else {
+      return 0
+    }
+    return max(0, contents.components(separatedBy: "-----BEGIN CERTIFICATE-----").count - 1)
+  }
+
+  private static func isApprovedChileanCSCASubject(_ subject: String) -> Bool {
+    let fields = subject.split(separator: ",").map {
+      $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: " ", with: "")
+        .uppercased()
+    }
+    let normalized = subject
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .uppercased()
+    return fields.contains("C=CL")
+      && normalized.contains("SERVICIO DE REGISTRO CIVIL")
+  }
+
+  private static func isUnexpiredMRZDate(_ value: String, now: Date = Date()) -> Bool {
+    guard value.utf8.count == 6,
+          value.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 })
+    else { return false }
+    let components = Array(value)
+    guard
+      let year = Int(String(components[0...1])),
+      let month = Int(String(components[2...3])),
+      let day = Int(String(components[4...5]))
+    else { return false }
+
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+    guard let expiry = calendar.date(
+      from: DateComponents(year: 2000 + year, month: month, day: day)
+    ) else { return false }
+    return expiry >= calendar.startOfDay(for: now)
+  }
+
+  private func beginScan() -> Bool {
+    scanLock.lock()
+    defer { scanLock.unlock() }
+    guard !scanInFlight else { return false }
+    scanInFlight = true
+    return true
+  }
+
+  private func setActiveReader(_ reader: NFCPassportReader.PassportReader) {
+    scanLock.lock()
+    activeReader = reader
+    scanLock.unlock()
+  }
+
+  private func endScan() {
+    scanLock.lock()
+    activeReader = nil
+    scanInFlight = false
+    scanLock.unlock()
+  }
+}

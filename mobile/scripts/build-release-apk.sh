@@ -1,35 +1,7 @@
 #!/usr/bin/env bash
-# Recompila el APK de release de DAO Ciudadana y lo copia al Escritorio.
-# Uso: bash mobile/scripts/build-release-apk.sh
+# Backwards-compatible entry point. It no longer mutates Git state, installs
+# floating dependencies or copies artifacts to a user-specific directory.
 set -euo pipefail
 
-REPO="$HOME/.gemini/antigravity/scratch/DAO-Ciudadano"
-MOBILE_DIR="$REPO/mobile"
-OUT_APK="$MOBILE_DIR/android/app/build/outputs/apk/release/app-release.apk"
-DEST="$HOME/Desktop/DAO-Ciudadano-Release.apk"
-
-echo "==> Actualizando repo"
-cd "$REPO"
-git pull --ff-only origin main
-
-echo "==> Instalando dependencias de mobile (con el fix de MetaMask ya aplicado)"
-cd "$MOBILE_DIR"
-npm install
-
-echo "==> Limpiando build anterior, incluida la caché nativa de CMake (.cxx)"
-echo "    (newArchEnabled ha cambiado varias veces entre intentos; .cxx puede quedar en un estado mezclado)"
-cd android
-./gradlew clean
-rm -rf app/.cxx
-
-echo "==> Compilando release (puede tardar varios minutos la primera vez)"
-./gradlew assembleRelease
-
-if [ ! -f "$OUT_APK" ]; then
-  echo "ERROR: no se generó $OUT_APK. Revisa el log de arriba." >&2
-  exit 1
-fi
-
-cp "$OUT_APK" "$DEST"
-echo ""
-echo "✅ Listo: $DEST"
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+exec "$SCRIPT_DIR/build-release-android.sh" "$@"

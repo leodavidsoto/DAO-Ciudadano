@@ -2,6 +2,7 @@
 Unit tests for security helpers: address/nonce validation, vote hashing,
 RUT validation and the fraud detector.
 """
+
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.routers.auth import format_rut, validate_rut  # noqa: E402
 
 # === Ethereum address validation ===
 
+
 def test_verify_eth_address_accepts_valid():
     assert verify_eth_address("0x" + "ab" * 20) is True
 
@@ -31,6 +33,7 @@ def test_verify_eth_address_rejects_bad_input():
 
 
 # === Nonces ===
+
 
 def test_generate_nonce_is_valid_and_unique():
     first, second = generate_nonce(), generate_nonce()
@@ -46,6 +49,7 @@ def test_verify_nonce_rejects_bad_format():
 
 # === Vote hashing ===
 
+
 def test_hash_vote_data_is_deterministic_and_case_insensitive():
     args = ("prop-1", "0x" + "AB" * 20, "for", "0" * 64)
     lower = ("prop-1", "0x" + "ab" * 20, "for", "0" * 64)
@@ -54,6 +58,7 @@ def test_hash_vote_data_is_deterministic_and_case_insensitive():
 
 
 # === Chilean RUT validation ===
+
 
 def test_validate_rut_accepts_valid_check_digits():
     assert validate_rut("11111111-1") is True
@@ -75,22 +80,81 @@ def test_format_rut():
 
 # === Fraud detector ===
 
-def test_fraud_detector_flags_rapid_voting():
-    detector = FraudDetector()
-    flagged = False
-    for i in range(15):
-        suspicious, reason = detector.check_rapid_voting("0xabc", f"prop-{i}")
-        if suspicious:
-            flagged = True
-            assert "Too many votes" in reason
-            break
-    assert flagged is True
 
+async def test_fraud_detector_flags_rapid_voting():
+    """El historial de votos vive en el almacén compartido (ROADMAP 3.8)."""
+    from app.core.rate_limit_store import InMemoryRateLimitStore
 
-def test_fraud_detector_flags_delegate_with_too_many_delegators():
-    detector = FraudDetector()
-    for i in range(10):
-        detector.record_delegation(f"0xdelegator{i}", "0xpopular")
-    suspicious, reason = detector.check_delegation_chain("0xnew", "0xpopular")
+    detector = FraudDetector(store=InMemoryRateLimitStore())
+
+    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW):
+        suspicious, _ = await detector.check_rapid_voting("0xabc")
+        assert suspicious is False
+        await detector.record_vote("0xabc")
+
+    suspicious, reason = await detector.check_rapid_voting("0xabc")
+
     assert suspicious is True
-    assert "too many delegators" in reason.lower()
+    assert "Too many votes" in reason
+
+
+async def test_checking_does_not_consume_quota():
+    """P-46: comprobar es leer. Antes, comprobar apuntaba.
+
+    Diez peticiones inválidas —propuesta inexistente, ya votada, plazo
+    vencido— agotaban la cuota y bloqueaban con 429 a quien no había emitido
+    ni un voto.
+    """
+    from app.core.rate_limit_store import InMemoryRateLimitStore
+
+    detector = FraudDetector(store=InMemoryRateLimitStore())
+
+    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW * 3):
+        suspicious, _ = await detector.check_rapid_voting("0xabc")
+        assert suspicious is False, "comprobar gastó cuota"
+
+    # Y la cuota sigue entera para votos de verdad.
+    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW):
+        await detector.record_vote("0xabc")
+    suspicious, _ = await detector.check_rapid_voting("0xabc")
+    assert suspicious is True
+
+
+async def test_rapid_voting_cannot_be_evaded_by_rotating_the_proposal():
+    """El límite es por votante, no por propuesta.
+
+    La propuesta ya no está ni en la firma: si formara parte de la clave,
+    bastaría rotar el identificador para emitir la cuota entera contra cada
+    una.
+    """
+    from app.core.rate_limit_store import InMemoryRateLimitStore
+
+    detector = FraudDetector(store=InMemoryRateLimitStore())
+    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW):
+        await detector.record_vote("0xabc")
+
+    suspicious, _ = await detector.check_rapid_voting("0xabc")
+
+    assert suspicious is True
+
+
+async def test_another_voter_keeps_their_own_quota():
+    from app.core.rate_limit_store import InMemoryRateLimitStore
+
+    detector = FraudDetector(store=InMemoryRateLimitStore())
+    for _ in range(FraudDetector.MAX_VOTES_PER_WINDOW):
+        await detector.record_vote("0xabc")
+
+    suspicious, _ = await detector.check_rapid_voting("0xdef")
+
+    assert suspicious is False
+
+
+async def test_without_a_store_it_fails_closed():
+    """Sin almacén no se inventa un veredicto."""
+    detector = FraudDetector(store=None)
+
+    suspicious, reason = await detector.check_rapid_voting("0xabc")
+
+    assert suspicious is True
+    assert "no disponible" in reason

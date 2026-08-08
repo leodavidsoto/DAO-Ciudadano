@@ -13,6 +13,7 @@
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { OnboardingProvider } from "./context";
+import { WalletSessionProvider } from "./hooks";
 import { LandingPage, OnboardingPage } from "./pages";
 import {
   DashboardLayout,
@@ -25,35 +26,56 @@ import {
 import "./App.css";
 import "./styles/premium.css";
 
+import { usePageTracking } from "./hooks/usePageTracking";
+import { AnalyticsDashboard } from "./pages/AnalyticsDashboard";
+
+const TrackingWrapper = ({ children }) => {
+  usePageTracking();
+  return children;
+};
+
 const App = () => {
   return (
     <BrowserRouter>
-      <div className="App">
-        <Routes>
-          <Route path="/" element={<LandingPage />} />
+      <WalletSessionProvider>
+        <TrackingWrapper>
+          <div className="App">
+            <Routes>
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/admin/analytics" element={<AnalyticsDashboard />} />
 
-          {/* Onboarding keeps its own provider: the dashboard does not need
-              the onboarding state machine and should not re-mount it. */}
-          <Route
-            path="/unete"
-            element={
-              <OnboardingProvider>
-                <OnboardingPage appearance="civic" />
-              </OnboardingProvider>
-            }
-          />
+              {/* Onboarding keeps its own provider: the dashboard does not need
+                  the onboarding state machine and should not re-mount it. */}
+              <Route
+                path="/unete"
+                element={
+                  <OnboardingProvider>
+                    <OnboardingPage appearance="civic" />
+                  </OnboardingProvider>
+                }
+              />
+              <Route
+                path="/unete/clave-unica/callback"
+                element={
+                  <OnboardingProvider>
+                    <OnboardingPage appearance="civic" />
+                  </OnboardingProvider>
+                }
+              />
 
-          <Route path="/dashboard" element={<DashboardLayout />}>
-            <Route index element={<OverviewSection />} />
-            <Route path="propuestas" element={<ProposalsSection />} />
-            <Route path="elecciones" element={<ElectionsSection />} />
-            <Route path="delegacion" element={<DelegationSection />} />
-            <Route path="tesoreria" element={<TreasurySection />} />
-          </Route>
+              <Route path="/dashboard" element={<DashboardLayout />}>
+                <Route index element={<OverviewSection />} />
+                <Route path="propuestas" element={<ProposalsSection />} />
+                <Route path="elecciones" element={<ElectionsSection />} />
+                <Route path="delegacion" element={<DelegationSection />} />
+                <Route path="tesoreria" element={<TreasurySection />} />
+              </Route>
 
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </div>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </div>
+        </TrackingWrapper>
+      </WalletSessionProvider>
     </BrowserRouter>
   );
 };
