@@ -18,7 +18,7 @@
         "@openzeppelin/hardhat-upgrades": "^3.6.0",
         "dotenv": "^16.4.7",
         "hardhat": "^2.22.17",
-        "hardhat-gas-reporter": "^1.0.10",
+        "hardhat-gas-reporter": "^2.3.0",
         "solidity-coverage": "^0.8.14"
     },
     "dependencies": {
