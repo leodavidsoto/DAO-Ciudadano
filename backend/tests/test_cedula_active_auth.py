@@ -226,7 +226,9 @@ async def test_a_captured_signature_does_not_fit_a_fresh_challenge(
     el nuevo exige la clave privada del chip, que no se puede extraer.
     """
     captured = await _read_with_active_auth(client, sod_with_dg15, dg15, chip_key)
-    assert (await client.post("/api/auth/cedula/verify", json=captured)).status_code == 200
+    assert (
+        await client.post("/api/auth/cedula/verify", json=captured)
+    ).status_code == 200
 
     fresh_id, _ = await _request_challenge(client)
     forged = {**captured}
@@ -270,9 +272,7 @@ async def test_the_attackers_own_key_in_dg15_is_rejected(
             "active_authentication": {
                 "challenge_id": challenge_id,
                 # Firma impecable... con la clave equivocada.
-                "signature": _b64(
-                    fx.iso9796_2_ds1_signature(attacker_key, challenge)
-                ),
+                "signature": _b64(fx.iso9796_2_ds1_signature(attacker_key, challenge)),
             },
         },
     )

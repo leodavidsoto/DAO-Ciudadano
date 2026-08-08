@@ -77,9 +77,7 @@ def kat_public_key() -> rsa.RSAPublicKey:
 def test_the_verifier_accepts_a_signature_it_did_not_produce():
     """El ancla: una firma real de INTERNAL AUTHENTICATE, verificada aquí."""
     assert (
-        active_auth.verify_iso9796_2_ds1(
-            kat_public_key(), KAT_CHALLENGE, KAT_SIGNATURE
-        )
+        active_auth.verify_iso9796_2_ds1(kat_public_key(), KAT_CHALLENGE, KAT_SIGNATURE)
         == "sha1"
     )
 
@@ -176,9 +174,7 @@ def test_a_signature_of_the_wrong_length_is_rejected(aa_key):
     challenge = b"\x42" * 8
     signature = fx.iso9796_2_ds1_signature(aa_key, challenge)
     with pytest.raises(active_auth.ActiveAuthError):
-        active_auth.verify_iso9796_2_ds1(
-            aa_key.public_key(), challenge, signature[:-1]
-        )
+        active_auth.verify_iso9796_2_ds1(aa_key.public_key(), challenge, signature[:-1])
 
 
 def test_sha256_in_an_explicit_trailer_verifies(aa_key):

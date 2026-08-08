@@ -84,8 +84,10 @@ def test_issued_grant_certifies_subject_and_level_with_a_short_ttl():
     # 15 minutos por defecto: suficiente para conectar la wallet, corto para
     # que un token filtrado no sea una autorización de alta indefinida.
     remaining = claims.expires_at - datetime.now(timezone.utc)
-    assert timedelta(seconds=0) < remaining <= timedelta(
-        seconds=settings.MEMBERSHIP_GRANT_TTL_SECONDS
+    assert (
+        timedelta(seconds=0)
+        < remaining
+        <= timedelta(seconds=settings.MEMBERSHIP_GRANT_TTL_SECONDS)
     )
     assert settings.MEMBERSHIP_GRANT_TTL_SECONDS == 900
 
@@ -244,7 +246,9 @@ async def test_an_invalid_grant_never_reaches_the_ledger(client):
     response = await _mint(client, CITIZEN, "esto-no-es-un-jwt")
 
     assert response.status_code == 403
-    assert await membership_grant.membership_grants_collection().count_documents({}) == 0
+    assert (
+        await membership_grant.membership_grants_collection().count_documents({}) == 0
+    )
 
 
 # === 3. Reconciliación: un fallo transitorio no cuesta la identidad ===========
@@ -295,7 +299,9 @@ async def test_an_unavailable_deployment_does_not_spend_the_grant(client, monkey
     response = await _mint(client, CITIZEN, grant)
     assert response.status_code == 503
 
-    assert await membership_grant.membership_grants_collection().count_documents({}) == 0
+    assert (
+        await membership_grant.membership_grants_collection().count_documents({}) == 0
+    )
 
     monkeypatch.setattr(settings, "MINT_MODE", "demo")
     assert (await _mint(client, CITIZEN, grant)).json()["ok"] is True

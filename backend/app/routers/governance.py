@@ -520,7 +520,7 @@ async def cast_vote(
         if proposal.get("private_voting"):
             return VoteResponse(
                 ok=False,
-                error="This proposal uses private voting via MACI. Cannot cast public vote."
+                error="This proposal uses private voting via MACI. Cannot cast public vote.",
             )
 
         # Enforce the deadline here. Relying on GET /proposals to update status

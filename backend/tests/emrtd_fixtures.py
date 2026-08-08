@@ -338,11 +338,7 @@ def td1_mrz(
     # la cédula chilena lleva el RUN.
     run_field = run.ljust(11, "<")
     line2 = (
-        composite_birth
-        + "M"
-        + composite_expiry
-        + nationality.ljust(3, "<")
-        + run_field
+        composite_birth + "M" + composite_expiry + nationality.ljust(3, "<") + run_field
     )
     line2 += _mrz_check_digit(
         number
@@ -487,9 +483,7 @@ def iso9796_2_ds1_signature(
     modulus = numbers.public_numbers.n
     block_length = (modulus.bit_length() + 7) // 8
 
-    block = iso9796_2_ds1_block(
-        block_length, challenge, digest=digest, m1=m1
-    )
+    block = iso9796_2_ds1_block(block_length, challenge, digest=digest, m1=m1)
     signature = pow(int.from_bytes(block, "big"), numbers.d, modulus)
     if least_absolute_residue:
         signature = modulus - signature

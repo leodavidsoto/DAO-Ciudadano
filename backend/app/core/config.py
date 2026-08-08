@@ -240,9 +240,7 @@ class Settings(BaseSettings):
     # otro. El precio es que una cédula sin EF.DG15 deja de poder darse de alta
     # en producción. "true"/"false" fuerza el comportamiento en cualquier
     # entorno; ningún valor lo desactiva a medias.
-    CEDULA_REQUIRE_ACTIVE_AUTH: str = os.environ.get(
-        "CEDULA_REQUIRE_ACTIVE_AUTH", ""
-    )
+    CEDULA_REQUIRE_ACTIVE_AUTH: str = os.environ.get("CEDULA_REQUIRE_ACTIVE_AUTH", "")
 
     # === ClaveÚnica / OIDC (ROADMAP 4.1) ===
     # NINGÚN valor por defecto, tampoco los endpoints: los entrega la División

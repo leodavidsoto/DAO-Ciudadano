@@ -179,7 +179,11 @@ def describe_field_shape(value: str) -> str:
     falta para saber qué trae el campo, sin que el RUN llegue a ningún log.
     """
     mask = "".join(
-        "D" if char.isdigit() else "A" if char.isalpha() else "<" if char == "<" else "?"
+        (
+            "D"
+            if char.isdigit()
+            else "A" if char.isalpha() else "<" if char == "<" else "?"
+        )
         for char in value or ""
     )
     return f"len={len(value or '')} {mask}"

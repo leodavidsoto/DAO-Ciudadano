@@ -47,7 +47,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Dict, Optional
 
 from asn1crypto import core
 from cryptography.exceptions import InvalidSignature
@@ -95,7 +95,9 @@ _ECDSA_PLAIN_HASHES = {
     "0.4.0.127.0.7.1.1.4.1.5": "sha512",
 }
 
-_CRYPTO_HASHES = {
+#: Anotado como factoría y no como `type[HashAlgorithm]` porque el join de las
+#: clases concretas es la base abstracta, y mypy rechaza instanciarla.
+_CRYPTO_HASHES: Dict[str, Callable[[], crypto_hashes.HashAlgorithm]] = {
     "sha1": crypto_hashes.SHA1,
     "sha224": crypto_hashes.SHA224,
     "sha256": crypto_hashes.SHA256,
@@ -172,9 +174,7 @@ def _unwrap(raw: bytes, tag: int, label: str) -> bytes:
     else:
         length = length_byte
     if offset + length > len(raw):
-        raise ActiveAuthError(
-            f"{label} está truncado: la longitud excede el archivo."
-        )
+        raise ActiveAuthError(f"{label} está truncado: la longitud excede el archivo.")
     return raw[offset : offset + length]
 
 
@@ -387,9 +387,7 @@ def verify_ecdsa_plain(
         raise ActiveAuthError("La firma ECDSA de Autenticación Activa es degenerada.")
 
     try:
-        public_key.verify(
-            encode_dss_signature(r, s), challenge, ec.ECDSA(algorithm())
-        )
+        public_key.verify(encode_dss_signature(r, s), challenge, ec.ECDSA(algorithm()))
     except InvalidSignature:
         raise ActiveAuthError(
             "La firma de Autenticación Activa no verifica con la clave de "
